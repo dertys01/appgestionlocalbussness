@@ -44,6 +44,27 @@ export interface StockLog {
   created_at: string;
 }
 
+export interface BusinessMember {
+  id: string;
+  owner_id: string;
+  member_id: string;
+  member_name: string;
+  role: string;
+  created_at: string;
+}
+
+export interface ActivityLog {
+  id: string;
+  business_owner_id: string;
+  actor_id: string;
+  actor_email: string;
+  actor_name: string | null;
+  action: string;
+  description: string;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+}
+
 // Panier POS
 export interface CartItem {
   product: Product;

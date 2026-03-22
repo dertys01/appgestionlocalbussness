@@ -5,6 +5,7 @@ import { X, Plus, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
+import { logActivity } from '@/lib/utils/activity';
 import { formatCFA } from '@/lib/utils/currency';
 import type { Product } from '@/types';
 
@@ -15,7 +16,7 @@ interface RestockModalProps {
 }
 
 export function RestockModal({ product, onClose, onSaved }: RestockModalProps) {
-  const { supabase } = useSupabase();
+  const { supabase, ownerId, actorName } = useSupabase();
   const [qty, setQty] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -27,7 +28,7 @@ export function RestockModal({ product, onClose, onSaved }: RestockModalProps) {
 
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setLoading(false); return; }
+    if (!user || !ownerId) { setLoading(false); return; }
 
     const newQty = product.stock_qty + added;
 
@@ -39,13 +40,22 @@ export function RestockModal({ product, onClose, onSaved }: RestockModalProps) {
     if (err) { setError(err.message); setLoading(false); return; }
 
     await supabase.from('stock_logs').insert({
-      user_id: user.id,
+      user_id: ownerId,
       product_id: product.id,
       product_name: product.name,
       movement_type: 'restock',
       quantity_change: added,
       stock_before: product.stock_qty,
       stock_after: newQty,
+    });
+
+    await logActivity({
+      ownerId,
+      actorId: user.id,
+      actorEmail: user.email ?? '',
+      actorName,
+      action: 'restock',
+      description: `Réappro. ${product.name} : +${added} unités (stock ${product.stock_qty} → ${newQty})`,
     });
 
     setLoading(false);

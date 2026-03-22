@@ -19,6 +19,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { formatCFA } from '@/lib/utils/currency';
 import { generateWhatsAppReceiptLink } from '@/lib/utils/whatsapp';
+import { logActivity } from '@/lib/utils/activity';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import type { Product, CartItem } from '@/types';
 
@@ -30,7 +31,7 @@ interface POSModuleProps {
 type PaymentMethod = 'cash' | 'momo';
 
 export function POSModule({ products, onSaleComplete }: POSModuleProps) {
-  const { supabase } = useSupabase();
+  const { supabase, ownerId, actorName } = useSupabase();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [search, setSearch] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
@@ -87,12 +88,12 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('Non authentifié');
+      if (!user || !ownerId) throw new Error('Non authentifié');
 
-      // 1. Créer la vente
+      // 1. Créer la vente (user_id = ownerId pour isoler les données par business)
       const { data: sale, error: saleErr } = await supabase
         .from('sales')
-        .insert({ user_id: user.id, total_amount: total, payment_method: paymentMethod })
+        .insert({ user_id: ownerId, total_amount: total, payment_method: paymentMethod })
         .select()
         .single();
 
@@ -121,7 +122,7 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
           .eq('id', item.product.id);
 
         await supabase.from('stock_logs').insert({
-          user_id: user.id,
+          user_id: ownerId,
           product_id: item.product.id,
           product_name: item.product.name,
           movement_type: 'sale',
@@ -132,7 +133,19 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
         });
       }
 
-      // 4. Générer le lien WhatsApp
+      // 4. Journal d'activité
+      const itemsDesc = cart.map((i) => `${i.quantity}x ${i.product.name}`).join(', ');
+      await logActivity({
+        ownerId,
+        actorId: user.id,
+        actorEmail: user.email ?? '',
+        actorName,
+        action: 'sale',
+        description: `Vente ${formatCFA(total)} (${paymentMethod === 'cash' ? 'Espèces' : 'MoMo'}) — ${itemsDesc}`,
+        metadata: { sale_id: sale.id, total, payment_method: paymentMethod },
+      });
+
+      // 5. Générer le lien WhatsApp
       const waLink = generateWhatsAppReceiptLink({
         items: items.map((i) => ({
           product_name: i.product_name,
