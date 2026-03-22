@@ -257,6 +257,8 @@ function LoginPage() {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [mode, setMode] = useState<'login' | 'signup'>('login');
+  const [success, setSuccess] = useState('');
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -267,16 +269,26 @@ function LoginPage() {
     setLoading(false);
   };
 
+  const handleSignup = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    const { error } = await supabase.auth.signUp({ email, password });
+    if (error) setError(error.message);
+    else setSuccess('Compte créé ! Vous pouvez vous connecter.');
+    setLoading(false);
+  };
+
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 to-slate-100">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-indigo-600">GestionLocal</h1>
-          <p className="text-slate-500 mt-1">Connectez-vous à votre espace</p>
+          <p className="text-slate-500 mt-1">{mode === 'login' ? 'Connectez-vous à votre espace' : 'Créer un compte'}</p>
         </div>
         <Card className="border-slate-200 shadow-md">
           <CardContent className="p-6">
-            <form onSubmit={handleLogin} className="space-y-4">
+            <form onSubmit={mode === 'login' ? handleLogin : handleSignup} className="space-y-4">
               <div className="space-y-1">
                 <label className="text-sm font-medium text-slate-700">Email</label>
                 <input
@@ -300,9 +312,17 @@ function LoginPage() {
                 />
               </div>
               {error && <p className="text-red-500 text-sm">{error}</p>}
+              {success && <p className="text-emerald-600 text-sm">{success}</p>}
               <Button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 font-semibold">
-                {loading ? 'Connexion...' : 'Se connecter'}
+                {loading ? '...' : mode === 'login' ? 'Se connecter' : 'Créer le compte'}
               </Button>
+              <button
+                type="button"
+                onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setError(''); setSuccess(''); }}
+                className="w-full text-sm text-slate-500 hover:text-indigo-600 text-center"
+              >
+                {mode === 'login' ? 'Créer un compte' : 'Déjà un compte ? Se connecter'}
+              </button>
             </form>
           </CardContent>
         </Card>
