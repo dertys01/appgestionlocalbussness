@@ -6,6 +6,7 @@ import {
   ShoppingCart,
   Package,
   History,
+  BarChart2,
   TrendingUp,
   AlertTriangle,
   RefreshCw,
@@ -17,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { InventoryTable } from '@/components/inventory/InventoryTable';
 import { POSModule } from '@/components/pos/POSModule';
 import { SalesHistory } from '@/components/sales/SalesHistory';
+import { ReportsModule } from '@/components/reports/ReportsModule';
 import { ProductForm } from '@/components/products/ProductForm';
 import { RestockModal } from '@/components/products/RestockModal';
 import { BarcodeScanner } from '@/components/scanner/BarcodeScanner';
@@ -24,7 +26,7 @@ import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
 import type { Product } from '@/types';
 
-type Tab = 'dashboard' | 'pos' | 'inventory' | 'sales';
+type Tab = 'dashboard' | 'pos' | 'inventory' | 'sales' | 'reports';
 
 export default function HomePage() {
   const { supabase, user, loading } = useSupabase();
@@ -201,16 +203,25 @@ export default function HomePage() {
             <SalesHistory />
           </div>
         )}
+
+        {/* ── Rapports ── */}
+        {tab === 'reports' && (
+          <div className="space-y-4">
+            <h2 className="text-xl font-bold text-slate-800">Rapports & Analyses</h2>
+            <ReportsModule />
+          </div>
+        )}
       </main>
 
       {/* Navigation mobile */}
       <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex z-40">
         {(
           [
-            { key: 'dashboard', label: 'Accueil', icon: LayoutDashboard },
-            { key: 'pos',       label: 'Vente',   icon: ShoppingCart },
-            { key: 'inventory', label: 'Stock',   icon: Package },
-            { key: 'sales',     label: 'Ventes',  icon: History },
+            { key: 'dashboard', label: 'Accueil',  icon: LayoutDashboard },
+            { key: 'pos',       label: 'Vente',    icon: ShoppingCart },
+            { key: 'inventory', label: 'Stock',    icon: Package },
+            { key: 'sales',     label: 'Ventes',   icon: History },
+            { key: 'reports',   label: 'Rapports', icon: BarChart2 },
           ] as { key: Tab; label: string; icon: React.ElementType }[]
         ).map(({ key, label, icon: Icon }) => (
           <button
