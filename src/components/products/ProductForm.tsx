@@ -8,17 +8,27 @@ import { useSupabase } from '@/components/providers/SupabaseProvider';
 import type { Product } from '@/types';
 
 interface ProductFormProps {
-  product?: Product | null; // null = ajout, Product = édition
+  product?: Product | null;
   onClose: () => void;
   onSaved: () => void;
 }
-
-const CATEGORIES = ['smartphones', 'informatique', 'accessoires', 'bureautique', 'reconditionnes', 'autre'];
 
 export function ProductForm({ product, onClose, onSaved }: ProductFormProps) {
   const { supabase } = useSupabase();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [categories, setCategories] = useState<string[]>([]);
+
+  useEffect(() => {
+    supabase
+      .from('products')
+      .select('category')
+      .not('category', 'is', null)
+      .then(({ data }) => {
+        const unique = [...new Set((data ?? []).map((p) => p.category).filter(Boolean))] as string[];
+        setCategories(unique.sort());
+      });
+  }, [supabase]);
 
   const [form, setForm] = useState({
     name: '',
@@ -123,17 +133,40 @@ export function ProductForm({ product, onClose, onSaved }: ProductFormProps) {
 
           {/* Catégorie */}
           <div className="space-y-1">
-            <label className="text-sm font-medium text-slate-700">Catégorie</label>
-            <select
+            <label className="text-sm font-medium text-slate-700">
+              Catégorie
+              <span className="text-slate-400 font-normal ml-1">(existante ou nouvelle)</span>
+            </label>
+            <input
+              list="categories-list"
               value={form.category}
               onChange={(e) => set('category', e.target.value)}
-              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
-            >
-              <option value="">— Choisir —</option>
-              {CATEGORIES.map((c) => (
-                <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+              placeholder="Ex: smartphones, accessoires..."
+              className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            />
+            <datalist id="categories-list">
+              {categories.map((c) => (
+                <option key={c} value={c} />
               ))}
-            </select>
+            </datalist>
+            {categories.length > 0 && (
+              <div className="flex flex-wrap gap-1 pt-1">
+                {categories.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => set('category', c)}
+                    className={`text-xs px-2 py-1 rounded-full border transition-colors ${
+                      form.category === c
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'border-slate-200 text-slate-500 hover:border-indigo-400'
+                    }`}
+                  >
+                    {c}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Prix */}
