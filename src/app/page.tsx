@@ -12,6 +12,7 @@ import {
   RefreshCw,
   LogOut,
   ScanBarcode,
+  Brain,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -20,6 +21,7 @@ import { InventoryCount } from '@/components/inventory/InventoryCount';
 import { POSModule } from '@/components/pos/POSModule';
 import { SalesHistory } from '@/components/sales/SalesHistory';
 import { ReportsModule } from '@/components/reports/ReportsModule';
+import { ForecastModule } from '@/components/forecast/ForecastModule';
 import { ProductForm } from '@/components/products/ProductForm';
 import { RestockModal } from '@/components/products/RestockModal';
 import { BarcodeScanner } from '@/components/scanner/BarcodeScanner';
@@ -27,7 +29,7 @@ import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
 import type { Product } from '@/types';
 
-type Tab = 'dashboard' | 'pos' | 'inventory' | 'sales' | 'reports';
+type Tab = 'dashboard' | 'pos' | 'inventory' | 'sales' | 'reports' | 'forecast';
 
 export default function HomePage() {
   const { supabase, user, loading } = useSupabase();
@@ -232,17 +234,26 @@ export default function HomePage() {
             <ReportsModule />
           </div>
         )}
+
+        {/* ── Prévisions ── */}
+        {tab === 'forecast' && (
+          <div className="space-y-4">
+            <h2 className="text-xl font-bold text-slate-800">Prévisions & Planification</h2>
+            <ForecastModule onRestock={fetchProducts} />
+          </div>
+        )}
       </main>
 
       {/* Navigation mobile */}
       <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex z-40">
         {(
           [
-            { key: 'dashboard', label: 'Accueil',  icon: LayoutDashboard },
-            { key: 'pos',       label: 'Vente',    icon: ShoppingCart },
-            { key: 'inventory', label: 'Stock',    icon: Package },
-            { key: 'sales',     label: 'Ventes',   icon: History },
-            { key: 'reports',   label: 'Rapports', icon: BarChart2 },
+            { key: 'dashboard', label: 'Accueil',   icon: LayoutDashboard },
+            { key: 'pos',       label: 'Vente',     icon: ShoppingCart },
+            { key: 'inventory', label: 'Stock',     icon: Package },
+            { key: 'sales',     label: 'Ventes',    icon: History },
+            { key: 'reports',   label: 'Rapports',  icon: BarChart2 },
+            { key: 'forecast',  label: 'Prévisions', icon: Brain },
           ] as { key: Tab; label: string; icon: React.ElementType }[]
         ).map(({ key, label, icon: Icon }) => (
           <button
