@@ -1,0 +1,256 @@
+'use client';
+
+import { useState, useMemo } from 'react';
+import { Search, CheckCircle, AlertTriangle, RotateCcw, Save, Loader2, ScanBarcode } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
+import { Card, CardContent } from '@/components/ui/card';
+import { BarcodeScanner } from '@/components/scanner/BarcodeScanner';
+import { useSupabase } from '@/components/providers/SupabaseProvider';
+import { formatCFA } from '@/lib/utils/currency';
+import type { Product } from '@/types';
+
+interface InventoryCountProps {
+  products: Product[];
+  onComplete: () => void;
+}
+
+interface CountEntry {
+  product: Product;
+  counted: number | '';
+}
+
+export function InventoryCount({ products, onComplete }: InventoryCountProps) {
+  const { supabase } = useSupabase();
+  const [entries, setEntries] = useState<CountEntry[]>(
+    products.map((p) => ({ product: p, counted: '' }))
+  );
+  const [search, setSearch] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+
+  const filtered = useMemo(() => {
+    const q = search.toLowerCase();
+    return entries.filter(
+      (e) =>
+        e.product.name.toLowerCase().includes(q) ||
+        (e.product.sku ?? '').toLowerCase().includes(q) ||
+        (e.product.category ?? '').toLowerCase().includes(q)
+    );
+  }, [entries, search]);
+
+  const setCount = (productId: string, value: string) => {
+    setEntries((prev) =>
+      prev.map((e) =>
+        e.product.id === productId
+          ? { ...e, counted: value === '' ? '' : Math.max(0, parseInt(value) || 0) }
+          : e
+      )
+    );
+  };
+
+  // Entrées avec une valeur saisie
+  const filled = entries.filter((e) => e.counted !== '');
+  const differences = filled.filter((e) => e.counted !== '' && Number(e.counted) !== e.product.stock_qty);
+  const surplus = differences.filter((e) => Number(e.counted) > e.product.stock_qty);
+  const deficit = differences.filter((e) => Number(e.counted) < e.product.stock_qty);
+
+  const handleScan = (sku: string) => {
+    setShowScanner(false);
+    const found = entries.find((e) => e.product.sku === sku);
+    if (found) {
+      setSearch(found.product.name);
+    } else {
+      alert(`Aucun produit trouvé pour le SKU : ${sku}`);
+    }
+  };
+
+  const handleSave = async () => {
+    if (differences.length === 0) return;
+    setSaving(true);
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { setSaving(false); return; }
+
+    for (const entry of differences) {
+      const newQty = Number(entry.counted);
+      await supabase
+        .from('products')
+        .update({ stock_qty: newQty })
+        .eq('id', entry.product.id);
+
+      await supabase.from('stock_logs').insert({
+        user_id: user.id,
+        product_id: entry.product.id,
+        product_name: entry.product.name,
+        movement_type: 'adjustment',
+        quantity_change: newQty - entry.product.stock_qty,
+        stock_before: entry.product.stock_qty,
+        stock_after: newQty,
+      });
+    }
+
+    setSaving(false);
+    setSaved(true);
+    setTimeout(() => {
+      onComplete();
+    }, 1500);
+  };
+
+  if (saved) {
+    return (
+      <div className="flex flex-col items-center justify-center py-16 gap-3">
+        <CheckCircle className="h-12 w-12 text-emerald-500" />
+        <p className="text-lg font-semibold text-slate-700">Inventaire enregistré !</p>
+        <p className="text-slate-400 text-sm">{differences.length} produit{differences.length > 1 ? 's' : ''} mis à jour</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Instructions */}
+      <div className="rounded-lg bg-indigo-50 border border-indigo-100 px-4 py-3 text-sm text-indigo-700">
+        Entrez la quantité <strong>réelle comptée</strong> pour chaque produit. Laissez vide si non compté.
+      </div>
+
+      {/* Barre recherche + scanner */}
+      <div className="flex gap-2">
+        <div className="relative flex-1">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          <Input
+            placeholder="Rechercher un produit..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9"
+          />
+        </div>
+        <button
+          onClick={() => setShowScanner(true)}
+          className="p-2.5 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50"
+        >
+          <ScanBarcode className="h-5 w-5" />
+        </button>
+      </div>
+
+      {/* Résumé différences */}
+      {filled.length > 0 && (
+        <div className="grid grid-cols-3 gap-2 text-center text-sm">
+          <div className="rounded-lg bg-slate-50 border border-slate-200 p-2">
+            <div className="font-bold text-slate-700">{filled.length}</div>
+            <div className="text-xs text-slate-400">Comptés</div>
+          </div>
+          <div className={`rounded-lg border p-2 ${surplus.length > 0 ? 'bg-emerald-50 border-emerald-200' : 'bg-slate-50 border-slate-200'}`}>
+            <div className={`font-bold ${surplus.length > 0 ? 'text-emerald-600' : 'text-slate-700'}`}>+{surplus.length}</div>
+            <div className="text-xs text-slate-400">Surplus</div>
+          </div>
+          <div className={`rounded-lg border p-2 ${deficit.length > 0 ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`}>
+            <div className={`font-bold ${deficit.length > 0 ? 'text-red-600' : 'text-slate-700'}`}>-{deficit.length}</div>
+            <div className="text-xs text-slate-400">Manques</div>
+          </div>
+        </div>
+      )}
+
+      {/* Liste produits */}
+      <div className="space-y-2">
+        {filtered.map((entry) => {
+          const counted = entry.counted;
+          const diff = counted !== '' ? Number(counted) - entry.product.stock_qty : null;
+          const hasDiff = diff !== null && diff !== 0;
+
+          return (
+            <Card
+              key={entry.product.id}
+              className={`border transition-colors ${
+                hasDiff && diff! > 0 ? 'border-emerald-200 bg-emerald-50' :
+                hasDiff && diff! < 0 ? 'border-red-200 bg-red-50' :
+                counted !== '' ? 'border-indigo-200 bg-indigo-50' :
+                'border-slate-200'
+              }`}
+            >
+              <CardContent className="p-3 flex items-center gap-3">
+                <div className="flex-1 min-w-0">
+                  <div className="font-medium text-slate-800 text-sm truncate">{entry.product.name}</div>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-xs text-slate-400">{entry.product.category ?? '—'}</span>
+                    <span className="text-xs text-slate-500">Stock système : <strong>{entry.product.stock_qty}</strong></span>
+                    {hasDiff && (
+                      <Badge className={`text-xs py-0 ${diff! > 0 ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100' : 'bg-red-100 text-red-700 hover:bg-red-100'}`}>
+                        {diff! > 0 ? `+${diff}` : diff}
+                      </Badge>
+                    )}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs text-slate-400">Compté :</span>
+                  <input
+                    type="number"
+                    min="0"
+                    value={counted}
+                    onChange={(e) => setCount(entry.product.id, e.target.value)}
+                    placeholder="—"
+                    className="w-16 text-center rounded-lg border border-slate-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
+      </div>
+
+      {/* Boutons action */}
+      {differences.length > 0 && (
+        <div className="sticky bottom-20 pt-2">
+          {!confirmed ? (
+            <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-lg space-y-3">
+              <div className="flex items-center gap-2 text-sm text-slate-600">
+                <AlertTriangle className="h-4 w-4 text-amber-500" />
+                <span><strong>{differences.length}</strong> différence{differences.length > 1 ? 's' : ''} détectée{differences.length > 1 ? 's' : ''}. Confirmer les ajustements ?</span>
+              </div>
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  onClick={() => setEntries(products.map((p) => ({ product: p, counted: '' })))}
+                  className="flex-1 gap-2"
+                >
+                  <RotateCcw className="h-4 w-4" /> Réinitialiser
+                </Button>
+                <Button
+                  onClick={() => setConfirmed(true)}
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-700 gap-2"
+                >
+                  Confirmer
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white border border-emerald-200 rounded-xl p-4 shadow-lg space-y-3">
+              <p className="text-sm text-slate-600 text-center">
+                Les stocks seront mis à jour et tracés dans les logs. Cette action est irréversible.
+              </p>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => setConfirmed(false)} className="flex-1">
+                  Annuler
+                </Button>
+                <Button
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="flex-1 bg-emerald-600 hover:bg-emerald-700 gap-2"
+                >
+                  {saving ? <><Loader2 className="h-4 w-4 animate-spin" /> Enregistrement...</> : <><Save className="h-4 w-4" /> Enregistrer</>}
+                </Button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {showScanner && (
+        <BarcodeScanner onScan={handleScan} onClose={() => setShowScanner(false)} />
+      )}
+    </div>
+  );
+}

@@ -16,6 +16,7 @@ import {
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { InventoryTable } from '@/components/inventory/InventoryTable';
+import { InventoryCount } from '@/components/inventory/InventoryCount';
 import { POSModule } from '@/components/pos/POSModule';
 import { SalesHistory } from '@/components/sales/SalesHistory';
 import { ReportsModule } from '@/components/reports/ReportsModule';
@@ -34,6 +35,7 @@ export default function HomePage() {
   const [products, setProducts] = useState<Product[]>([]);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
+  const [showInventoryCount, setShowInventoryCount] = useState(false);
 
   // Modals produits
   const [showProductForm, setShowProductForm] = useState(false);
@@ -185,14 +187,33 @@ export default function HomePage() {
         {/* ── Inventaire ── */}
         {tab === 'inventory' && (
           <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Inventaire</h2>
-            <InventoryTable
-              products={products}
-              onEdit={openEdit}
-              onRestock={(p) => setRestockProduct(p)}
-              onAdd={openAdd}
-              onRefresh={fetchProducts}
-            />
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-bold text-slate-800">Inventaire</h2>
+              <button
+                onClick={() => setShowInventoryCount(!showInventoryCount)}
+                className={`text-sm font-medium px-3 py-1.5 rounded-lg border transition-colors ${
+                  showInventoryCount
+                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                {showInventoryCount ? 'Voir le catalogue' : '📋 Faire un inventaire'}
+              </button>
+            </div>
+            {showInventoryCount ? (
+              <InventoryCount
+                products={products}
+                onComplete={() => { setShowInventoryCount(false); fetchProducts(); }}
+              />
+            ) : (
+              <InventoryTable
+                products={products}
+                onEdit={openEdit}
+                onRestock={(p) => setRestockProduct(p)}
+                onAdd={openAdd}
+                onRefresh={fetchProducts}
+              />
+            )}
           </div>
         )}
 
