@@ -23,7 +23,7 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
   const [isEmployee, setIsEmployee] = useState(false);
   const [actorName, setActorName] = useState<string | null>(null);
 
-  const resolveMembership = async (u: User) => {
+  const resolveMembership = async (u: User) => { try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data } = await (supabase as any)
       .from('business_members')
@@ -58,21 +58,21 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
         description: `Connexion patron`,
       });
     }
-  };
+  } catch { /* silencieux — ne jamais bloquer l'app */ } };
 
   useEffect(() => {
-    supabase.auth.getUser().then(async ({ data }) => {
+    supabase.auth.getUser().then(({ data }) => {
       const u = data.user ?? null;
       setUser(u);
-      if (u) await resolveMembership(u);
-      setLoading(false);
+      setLoading(false); // ne jamais bloquer le chargement
+      if (u) resolveMembership(u); // async, en arrière-plan
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       const u = session?.user ?? null;
       setUser(u);
       if (u && event === 'SIGNED_IN') {
-        await resolveMembership(u);
+        resolveMembership(u); // async, en arrière-plan
       }
       if (!u) {
         setOwnerId(null);
