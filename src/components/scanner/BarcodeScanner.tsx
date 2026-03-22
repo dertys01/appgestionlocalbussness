@@ -18,6 +18,7 @@ export function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
   useEffect(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let scanner: any = null;
+    let started = false;
 
     async function init() {
       try {
@@ -31,11 +32,12 @@ export function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
           { fps: 10, qrbox: { width: 250, height: 150 } },
           (decodedText: string) => {
             onScan(decodedText);
-            scanner?.clear();
+            scanner?.stop().catch(() => {}).finally(() => scanner?.clear().catch(() => {}));
             onClose();
           },
           () => { /* scan en cours, ignorer */ }
         );
+        started = true;
       } catch (err) {
         setError("Impossible d'accéder à la caméra. Vérifiez les permissions.");
         console.error(err);
@@ -45,8 +47,12 @@ export function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
     init();
 
     return () => {
-      if (scanner) {
-        Promise.resolve(scanner.clear()).catch(() => {});
+      if (scanner && started) {
+        scanner.stop().catch(() => {}).finally(() => {
+          scanner.clear().catch(() => {});
+        });
+      } else if (scanner) {
+        scanner.clear().catch(() => {});
       }
     };
   }, [onScan, onClose]);
