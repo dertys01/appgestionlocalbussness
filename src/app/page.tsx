@@ -13,6 +13,7 @@ import {
   LogOut,
   ScanBarcode,
   Brain,
+  Users,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -22,6 +23,7 @@ import { POSModule } from '@/components/pos/POSModule';
 import { SalesHistory } from '@/components/sales/SalesHistory';
 import { ReportsModule } from '@/components/reports/ReportsModule';
 import { ForecastModule } from '@/components/forecast/ForecastModule';
+import { TeamModule } from '@/components/team/TeamModule';
 import { ProductForm } from '@/components/products/ProductForm';
 import { RestockModal } from '@/components/products/RestockModal';
 import { BarcodeScanner } from '@/components/scanner/BarcodeScanner';
@@ -29,10 +31,10 @@ import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
 import type { Product } from '@/types';
 
-type Tab = 'dashboard' | 'pos' | 'inventory' | 'sales' | 'reports' | 'forecast';
+type Tab = 'dashboard' | 'pos' | 'inventory' | 'sales' | 'reports' | 'forecast' | 'team';
 
 export default function HomePage() {
-  const { supabase, user, loading } = useSupabase();
+  const { supabase, user, loading, isEmployee } = useSupabase();
   const [tab, setTab] = useState<Tab>('dashboard');
   const [products, setProducts] = useState<Product[]>([]);
   const [loadingProducts, setLoadingProducts] = useState(false);
@@ -86,6 +88,7 @@ export default function HomePage() {
     { key: 'sales',     label: 'Ventes',     icon: History },
     { key: 'reports',   label: 'Rapports',   icon: BarChart2 },
     { key: 'forecast',  label: 'Prévisions', icon: Brain },
+    { key: 'team',      label: 'Équipe',     icon: Users },
   ] as { key: Tab; label: string; icon: React.ElementType }[];
 
   return (
@@ -278,6 +281,15 @@ export default function HomePage() {
             <div className="space-y-4">
               <h2 className="text-xl font-bold text-slate-800">Prévisions & Planification</h2>
               <ForecastModule onRestock={fetchProducts} />
+            </div>
+          )}
+
+          {tab === 'team' && (
+            <div className="space-y-4">
+              <h2 className="text-xl font-bold text-slate-800">
+                {isEmployee ? 'Journal d\'activité' : 'Équipe & Journal'}
+              </h2>
+              <TeamModule />
             </div>
           )}
         </div>

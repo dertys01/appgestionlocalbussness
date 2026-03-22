@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { BarcodeScanner } from '@/components/scanner/BarcodeScanner';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
+import { logActivity } from '@/lib/utils/activity';
 import { formatCFA } from '@/lib/utils/currency';
 import type { Product } from '@/types';
 
@@ -22,7 +23,7 @@ interface CountEntry {
 }
 
 export function InventoryCount({ products, onComplete }: InventoryCountProps) {
-  const { supabase } = useSupabase();
+  const { supabase, ownerId, actorName } = useSupabase();
   const [entries, setEntries] = useState<CountEntry[]>(
     products.map((p) => ({ product: p, counted: '' }))
   );
@@ -73,7 +74,7 @@ export function InventoryCount({ products, onComplete }: InventoryCountProps) {
     setSaving(true);
 
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setSaving(false); return; }
+    if (!user || !ownerId) { setSaving(false); return; }
 
     for (const entry of differences) {
       const newQty = Number(entry.counted);
@@ -83,7 +84,7 @@ export function InventoryCount({ products, onComplete }: InventoryCountProps) {
         .eq('id', entry.product.id);
 
       await supabase.from('stock_logs').insert({
-        user_id: user.id,
+        user_id: ownerId,
         product_id: entry.product.id,
         product_name: entry.product.name,
         movement_type: 'adjustment',
@@ -92,6 +93,16 @@ export function InventoryCount({ products, onComplete }: InventoryCountProps) {
         stock_after: newQty,
       });
     }
+
+    await logActivity({
+      ownerId,
+      actorId: user.id,
+      actorEmail: user.email ?? '',
+      actorName,
+      action: 'inventory_adjustment',
+      description: `Inventaire : ${differences.length} produit${differences.length > 1 ? 's' : ''} ajusté${differences.length > 1 ? 's' : ''}`,
+      metadata: { count: differences.length },
+    });
 
     setSaving(false);
     setSaved(true);

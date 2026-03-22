@@ -5,6 +5,7 @@ import { X, Save, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
+import { logActivity } from '@/lib/utils/activity';
 import type { Product } from '@/types';
 
 interface ProductFormProps {
@@ -14,7 +15,7 @@ interface ProductFormProps {
 }
 
 export function ProductForm({ product, onClose, onSaved }: ProductFormProps) {
-  const { supabase } = useSupabase();
+  const { supabase, ownerId, actorName } = useSupabase();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [categories, setCategories] = useState<string[]>([]);
@@ -69,7 +70,7 @@ export function ProductForm({ product, onClose, onSaved }: ProductFormProps) {
     setLoading(true);
 
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setLoading(false); return; }
+    if (!user || !ownerId) { setLoading(false); return; }
 
     const payload = {
       name: form.name.trim(),
@@ -85,11 +86,23 @@ export function ProductForm({ product, onClose, onSaved }: ProductFormProps) {
     if (product) {
       ({ error: err } = await supabase.from('products').update(payload).eq('id', product.id));
     } else {
-      ({ error: err } = await supabase.from('products').insert({ ...payload, user_id: user.id }));
+      ({ error: err } = await supabase.from('products').insert({ ...payload, user_id: ownerId }));
     }
 
     setLoading(false);
     if (err) { setError(err.message); return; }
+
+    await logActivity({
+      ownerId,
+      actorId: user.id,
+      actorEmail: user.email ?? '',
+      actorName,
+      action: product ? 'product_edit' : 'product_add',
+      description: product
+        ? `Produit modifié : ${payload.name}`
+        : `Nouveau produit : ${payload.name} — ${payload.price_sell} F`,
+    });
+
     onSaved();
     onClose();
   };
