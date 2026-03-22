@@ -79,213 +79,217 @@ export default function HomePage() {
 
   if (!user) return <LoginPage />;
 
+  const NAV_ITEMS = [
+    { key: 'dashboard', label: 'Accueil',    icon: LayoutDashboard },
+    { key: 'pos',       label: 'Vente',      icon: ShoppingCart },
+    { key: 'inventory', label: 'Stock',      icon: Package },
+    { key: 'sales',     label: 'Ventes',     icon: History },
+    { key: 'reports',   label: 'Rapports',   icon: BarChart2 },
+    { key: 'forecast',  label: 'Prévisions', icon: Brain },
+  ] as { key: Tab; label: string; icon: React.ElementType }[];
+
   return (
-    <div className="min-h-screen flex flex-col">
-      {/* Header */}
-      <header className="sticky top-0 z-40 bg-white border-b border-slate-200 px-4 py-3 flex items-center justify-between">
-        <div>
-          <h1 className="font-bold text-indigo-600 text-lg leading-none">GestionLocal</h1>
-          <p className="text-xs text-slate-400 truncate max-w-[180px]">{user.email}</p>
+    <div className="min-h-screen flex">
+
+      {/* ── Sidebar gauche ── */}
+      <aside className="fixed left-0 top-0 h-full z-40 flex flex-col bg-white border-r border-slate-200 w-16 lg:w-56 transition-all">
+        {/* Logo */}
+        <div className="px-3 lg:px-5 py-4 border-b border-slate-100">
+          <div className="flex items-center gap-3">
+            <div className="h-8 w-8 rounded-lg bg-indigo-600 flex items-center justify-center shrink-0">
+              <LayoutDashboard className="h-4 w-4 text-white" />
+            </div>
+            <span className="hidden lg:block font-bold text-indigo-600 text-sm leading-tight">GestionLocal</span>
+          </div>
         </div>
-        <div className="flex items-center gap-1">
-          <button onClick={() => setShowScanner(true)} className="p-2 rounded-lg text-slate-500 hover:bg-slate-100">
-            <ScanBarcode className="h-5 w-5" />
-          </button>
-          <button onClick={fetchProducts} disabled={loadingProducts} className="p-2 rounded-lg text-slate-500 hover:bg-slate-100 disabled:opacity-40">
-            <RefreshCw className={`h-5 w-5 ${loadingProducts ? 'animate-spin' : ''}`} />
-          </button>
-          <button onClick={() => supabase.auth.signOut()} className="p-2 rounded-lg text-slate-500 hover:bg-red-50 hover:text-red-500">
-            <LogOut className="h-5 w-5" />
-          </button>
-        </div>
-      </header>
 
-      {/* Contenu */}
-      <main className="flex-1 p-4 pb-24 max-w-5xl mx-auto w-full">
+        {/* Nav items */}
+        <nav className="flex-1 py-3 space-y-1 px-2">
+          {NAV_ITEMS.map(({ key, label, icon: Icon }) => (
+            <button
+              key={key}
+              onClick={() => setTab(key as Tab)}
+              title={label}
+              className={`w-full flex items-center gap-3 px-2 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                tab === key
+                  ? 'bg-indigo-50 text-indigo-600'
+                  : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'
+              }`}
+            >
+              <Icon className="h-5 w-5 shrink-0" />
+              <span className="hidden lg:block">{label}</span>
+            </button>
+          ))}
+        </nav>
 
-        {/* ── Dashboard ── */}
-        {tab === 'dashboard' && (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Tableau de bord</h2>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-              <Card className="border-slate-200">
-                <CardContent className="p-4">
-                  <div className="flex items-center gap-2 text-slate-500 text-sm mb-1">
-                    <Package className="h-4 w-4" /> Produits
-                  </div>
-                  <div className="text-2xl font-bold text-slate-800">{totalProducts}</div>
-                </CardContent>
-              </Card>
-
-              <Card className="border-slate-200">
-                <CardContent className="p-4">
-                  <div className="flex items-center gap-2 text-slate-500 text-sm mb-1">
-                    <TrendingUp className="h-4 w-4" /> Valeur stock
-                  </div>
-                  <div className="text-xl font-bold text-indigo-600">{formatCFA(totalStockValue)}</div>
-                </CardContent>
-              </Card>
-
-              <Card className={`col-span-2 sm:col-span-1 ${lowStockCount > 0 ? 'border-red-200 bg-red-50' : 'border-slate-200'}`}>
-                <CardContent className="p-4">
-                  <div className={`flex items-center gap-2 text-sm mb-1 ${lowStockCount > 0 ? 'text-red-500' : 'text-slate-500'}`}>
-                    <AlertTriangle className="h-4 w-4" /> Stock critique
-                  </div>
-                  <div className={`text-2xl font-bold ${lowStockCount > 0 ? 'text-red-600' : 'text-slate-800'}`}>
-                    {lowStockCount}
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            {/* Accès rapide */}
-            <div className="grid grid-cols-2 gap-3">
-              <Button onClick={() => setTab('pos')} className="h-20 flex flex-col gap-1 bg-indigo-600 hover:bg-indigo-700 rounded-xl">
-                <ShoppingCart className="h-6 w-6" />
-                <span>Nouvelle vente</span>
-              </Button>
-              <Button onClick={openAdd} variant="outline" className="h-20 flex flex-col gap-1 rounded-xl border-slate-200">
-                <Package className="h-6 w-6 text-indigo-600" />
-                <span>Ajouter produit</span>
-              </Button>
-            </div>
-
-            {/* Produits critiques */}
-            {lowStockCount > 0 && (
-              <div className="space-y-2">
-                <h3 className="font-semibold text-red-600 flex items-center gap-2 text-sm">
-                  <AlertTriangle className="h-4 w-4" /> À réapprovisionner
-                </h3>
-                {products.filter((p) => p.stock_qty < p.min_stock_level).map((p) => (
-                  <Card key={p.id} className="border-red-200 bg-red-50">
-                    <CardContent className="p-3 flex justify-between items-center">
-                      <div>
-                        <div className="font-medium text-slate-800 text-sm">{p.name}</div>
-                        <div className="text-xs text-red-500">Stock : {p.stock_qty} / min {p.min_stock_level}</div>
-                      </div>
-                      <button
-                        onClick={() => setRestockProduct(p)}
-                        className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-emerald-700"
-                      >
-                        Réappro.
-                      </button>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── POS ── */}
-        {tab === 'pos' && (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Point de vente</h2>
-            <POSModule products={products} onSaleComplete={fetchProducts} />
-          </div>
-        )}
-
-        {/* ── Inventaire ── */}
-        {tab === 'inventory' && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-xl font-bold text-slate-800">Inventaire</h2>
-              <button
-                onClick={() => setShowInventoryCount(!showInventoryCount)}
-                className={`text-sm font-medium px-3 py-1.5 rounded-lg border transition-colors ${
-                  showInventoryCount
-                    ? 'bg-indigo-600 text-white border-indigo-600'
-                    : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                }`}
-              >
-                {showInventoryCount ? 'Voir le catalogue' : '📋 Faire un inventaire'}
-              </button>
-            </div>
-            {showInventoryCount ? (
-              <InventoryCount
-                products={products}
-                onComplete={() => { setShowInventoryCount(false); fetchProducts(); }}
-              />
-            ) : (
-              <InventoryTable
-                products={products}
-                onEdit={openEdit}
-                onRestock={(p) => setRestockProduct(p)}
-                onAdd={openAdd}
-                onRefresh={fetchProducts}
-              />
-            )}
-          </div>
-        )}
-
-        {/* ── Historique ventes ── */}
-        {tab === 'sales' && (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Historique des ventes</h2>
-            <SalesHistory />
-          </div>
-        )}
-
-        {/* ── Rapports ── */}
-        {tab === 'reports' && (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Rapports & Analyses</h2>
-            <ReportsModule />
-          </div>
-        )}
-
-        {/* ── Prévisions ── */}
-        {tab === 'forecast' && (
-          <div className="space-y-4">
-            <h2 className="text-xl font-bold text-slate-800">Prévisions & Planification</h2>
-            <ForecastModule onRestock={fetchProducts} />
-          </div>
-        )}
-      </main>
-
-      {/* Navigation mobile */}
-      <nav className="fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 flex z-40">
-        {(
-          [
-            { key: 'dashboard', label: 'Accueil',   icon: LayoutDashboard },
-            { key: 'pos',       label: 'Vente',     icon: ShoppingCart },
-            { key: 'inventory', label: 'Stock',     icon: Package },
-            { key: 'sales',     label: 'Ventes',    icon: History },
-            { key: 'reports',   label: 'Rapports',  icon: BarChart2 },
-            { key: 'forecast',  label: 'Prévisions', icon: Brain },
-          ] as { key: Tab; label: string; icon: React.ElementType }[]
-        ).map(({ key, label, icon: Icon }) => (
+        {/* Footer sidebar */}
+        <div className="border-t border-slate-100 p-2 space-y-1">
           <button
-            key={key}
-            onClick={() => setTab(key)}
-            className={`flex-1 flex flex-col items-center justify-center py-3 text-xs font-medium transition-colors ${
-              tab === key ? 'text-indigo-600' : 'text-slate-400 hover:text-slate-600'
-            }`}
+            onClick={() => setShowScanner(true)}
+            title="Scanner"
+            className="w-full flex items-center gap-3 px-2 py-2.5 rounded-lg text-sm text-slate-500 hover:bg-slate-50"
           >
-            <Icon className="h-5 w-5 mb-0.5" />
-            {label}
+            <ScanBarcode className="h-5 w-5 shrink-0" />
+            <span className="hidden lg:block">Scanner</span>
           </button>
-        ))}
-      </nav>
+          <button
+            onClick={fetchProducts}
+            disabled={loadingProducts}
+            title="Actualiser"
+            className="w-full flex items-center gap-3 px-2 py-2.5 rounded-lg text-sm text-slate-500 hover:bg-slate-50 disabled:opacity-40"
+          >
+            <RefreshCw className={`h-5 w-5 shrink-0 ${loadingProducts ? 'animate-spin' : ''}`} />
+            <span className="hidden lg:block">Actualiser</span>
+          </button>
+          <div className="hidden lg:block px-2 py-1">
+            <p className="text-xs text-slate-400 truncate">{user.email}</p>
+          </div>
+          <button
+            onClick={() => supabase.auth.signOut()}
+            title="Déconnexion"
+            className="w-full flex items-center gap-3 px-2 py-2.5 rounded-lg text-sm text-red-400 hover:bg-red-50 hover:text-red-600"
+          >
+            <LogOut className="h-5 w-5 shrink-0" />
+            <span className="hidden lg:block">Déconnexion</span>
+          </button>
+        </div>
+      </aside>
+
+      {/* ── Contenu principal ── */}
+      <main className="flex-1 ml-16 lg:ml-56 min-h-screen bg-slate-50">
+        <div className="p-4 max-w-5xl mx-auto">
+
+          {/* ── Dashboard ── */}
+          {tab === 'dashboard' && (
+            <div className="space-y-4">
+              <h2 className="text-xl font-bold text-slate-800">Tableau de bord</h2>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+                <Card className="border-slate-200">
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-2 text-slate-500 text-sm mb-1">
+                      <Package className="h-4 w-4" /> Produits
+                    </div>
+                    <div className="text-2xl font-bold text-slate-800">{totalProducts}</div>
+                  </CardContent>
+                </Card>
+                <Card className="border-slate-200">
+                  <CardContent className="p-4">
+                    <div className="flex items-center gap-2 text-slate-500 text-sm mb-1">
+                      <TrendingUp className="h-4 w-4" /> Valeur stock
+                    </div>
+                    <div className="text-xl font-bold text-indigo-600">{formatCFA(totalStockValue)}</div>
+                  </CardContent>
+                </Card>
+                <Card className={`col-span-2 sm:col-span-1 ${lowStockCount > 0 ? 'border-red-200 bg-red-50' : 'border-slate-200'}`}>
+                  <CardContent className="p-4">
+                    <div className={`flex items-center gap-2 text-sm mb-1 ${lowStockCount > 0 ? 'text-red-500' : 'text-slate-500'}`}>
+                      <AlertTriangle className="h-4 w-4" /> Stock critique
+                    </div>
+                    <div className={`text-2xl font-bold ${lowStockCount > 0 ? 'text-red-600' : 'text-slate-800'}`}>
+                      {lowStockCount}
+                    </div>
+                  </CardContent>
+                </Card>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Button onClick={() => setTab('pos')} className="h-20 flex flex-col gap-1 bg-indigo-600 hover:bg-indigo-700 rounded-xl">
+                  <ShoppingCart className="h-6 w-6" />
+                  <span>Nouvelle vente</span>
+                </Button>
+                <Button onClick={openAdd} variant="outline" className="h-20 flex flex-col gap-1 rounded-xl border-slate-200">
+                  <Package className="h-6 w-6 text-indigo-600" />
+                  <span>Ajouter produit</span>
+                </Button>
+              </div>
+
+              {lowStockCount > 0 && (
+                <div className="space-y-2">
+                  <h3 className="font-semibold text-red-600 flex items-center gap-2 text-sm">
+                    <AlertTriangle className="h-4 w-4" /> À réapprovisionner
+                  </h3>
+                  {products.filter((p) => p.stock_qty < p.min_stock_level).map((p) => (
+                    <Card key={p.id} className="border-red-200 bg-red-50">
+                      <CardContent className="p-3 flex justify-between items-center">
+                        <div>
+                          <div className="font-medium text-slate-800 text-sm">{p.name}</div>
+                          <div className="text-xs text-red-500">Stock : {p.stock_qty} / min {p.min_stock_level}</div>
+                        </div>
+                        <button
+                          onClick={() => setRestockProduct(p)}
+                          className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-emerald-700"
+                        >
+                          Réappro.
+                        </button>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === 'pos' && (
+            <div className="space-y-4">
+              <h2 className="text-xl font-bold text-slate-800">Point de vente</h2>
+              <POSModule products={products} onSaleComplete={fetchProducts} />
+            </div>
+          )}
+
+          {tab === 'inventory' && (
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <h2 className="text-xl font-bold text-slate-800">Inventaire</h2>
+                <button
+                  onClick={() => setShowInventoryCount(!showInventoryCount)}
+                  className={`text-sm font-medium px-3 py-1.5 rounded-lg border transition-colors ${
+                    showInventoryCount
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  {showInventoryCount ? 'Voir le catalogue' : '📋 Faire un inventaire'}
+                </button>
+              </div>
+              {showInventoryCount ? (
+                <InventoryCount products={products} onComplete={() => { setShowInventoryCount(false); fetchProducts(); }} />
+              ) : (
+                <InventoryTable products={products} onEdit={openEdit} onRestock={(p) => setRestockProduct(p)} onAdd={openAdd} onRefresh={fetchProducts} />
+              )}
+            </div>
+          )}
+
+          {tab === 'sales' && (
+            <div className="space-y-4">
+              <h2 className="text-xl font-bold text-slate-800">Historique des ventes</h2>
+              <SalesHistory />
+            </div>
+          )}
+
+          {tab === 'reports' && (
+            <div className="space-y-4">
+              <h2 className="text-xl font-bold text-slate-800">Rapports & Analyses</h2>
+              <ReportsModule />
+            </div>
+          )}
+
+          {tab === 'forecast' && (
+            <div className="space-y-4">
+              <h2 className="text-xl font-bold text-slate-800">Prévisions & Planification</h2>
+              <ForecastModule onRestock={fetchProducts} />
+            </div>
+          )}
+        </div>
+      </main>
 
       {/* Modals */}
       {showProductForm && (
-        <ProductForm
-          product={editingProduct}
-          onClose={() => setShowProductForm(false)}
-          onSaved={fetchProducts}
-        />
+        <ProductForm product={editingProduct} onClose={() => setShowProductForm(false)} onSaved={fetchProducts} />
       )}
-
       {restockProduct && (
-        <RestockModal
-          product={restockProduct}
-          onClose={() => setRestockProduct(null)}
-          onSaved={fetchProducts}
-        />
+        <RestockModal product={restockProduct} onClose={() => setRestockProduct(null)} onSaved={fetchProducts} />
       )}
-
       {showScanner && (
         <BarcodeScanner onScan={handleScan} onClose={() => setShowScanner(false)} />
       )}
