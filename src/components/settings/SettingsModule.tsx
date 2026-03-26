@@ -34,6 +34,8 @@ export function SettingsModule() {
 
   // Org form
   const [orgName, setOrgName] = useState(org?.name ?? '');
+  const [orgAddress, setOrgAddress] = useState(org?.address ?? '');
+  const [orgIfu, setOrgIfu] = useState(org?.ifu ?? '');
   const [savingOrg, setSavingOrg] = useState(false);
   const [orgSuccess, setOrgSuccess] = useState('');
   const [orgError, setOrgError] = useState('');
@@ -52,7 +54,11 @@ export function SettingsModule() {
 
     const { error } = await supabase
       .from('organizations')
-      .update({ name: orgName.trim() } as Record<string, unknown>)
+      .update({
+        name: orgName.trim(),
+        address: orgAddress.trim() || null,
+        ifu: orgIfu.trim() || null,
+      } as Record<string, unknown>)
       .eq('id', org?.id);
 
     if (error) {
@@ -138,6 +144,17 @@ export function SettingsModule() {
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-slate-700">Nom de la boutique</label>
                   <Input value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="Nom affiché" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-slate-700">Adresse</label>
+                  <Input value={orgAddress} onChange={(e) => setOrgAddress(e.target.value)} placeholder="Ex: Cotonou, Bénin" />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-slate-700">
+                    IFU
+                    <span className="ml-1 text-xs text-slate-400 font-normal">(pour factures normalisées — Plan Pro)</span>
+                  </label>
+                  <Input value={orgIfu} onChange={(e) => setOrgIfu(e.target.value)} placeholder="Ex: 1234567890123" />
                 </div>
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-slate-700">Email du compte</label>

@@ -18,6 +18,7 @@ export interface Sale {
   total_amount: number;
   payment_method: 'cash' | 'momo';
   note: string | null;
+  client_name: string | null;
   created_at: string;
 }
 
@@ -78,6 +79,9 @@ export interface Organization {
   timezone: string;
   currency: string;
   onboarding_done: boolean;
+  ifu: string | null;
+  address: string | null;
+  invoice_counter: number;
   created_at: string;
   updated_at: string;
 }
