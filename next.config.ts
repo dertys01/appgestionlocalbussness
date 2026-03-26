@@ -5,7 +5,6 @@ const nextConfig: NextConfig = {};
 
 export default withSentryConfig(nextConfig, {
   silent: true,
-  disableLogger: true,
   telemetry: false,
   org: process.env.SENTRY_ORG,
   project: process.env.SENTRY_PROJECT,
