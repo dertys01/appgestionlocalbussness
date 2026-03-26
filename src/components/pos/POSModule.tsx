@@ -11,6 +11,8 @@ import {
   Search,
   Share2,
   X,
+  Printer,
+  FileText,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,6 +22,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { formatCFA } from '@/lib/utils/currency';
 import { generateWhatsAppReceiptLink } from '@/lib/utils/whatsapp';
 import { logActivity } from '@/lib/utils/activity';
+import { printReceipt, buildInvoiceNumber } from '@/lib/utils/print';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import type { Product, CartItem } from '@/types';
 
@@ -30,14 +33,25 @@ interface POSModuleProps {
 
 type PaymentMethod = 'cash' | 'momo';
 
+interface ReceiptState {
+  saleId: string;
+  waLink: string;
+  items: CartItem[];
+  total: number;
+  paymentMethod: PaymentMethod;
+  clientName: string;
+  date: Date;
+}
+
 export function POSModule({ products, onSaleComplete }: POSModuleProps) {
-  const { supabase, ownerId, actorName } = useSupabase();
+  const { supabase, ownerId, actorName, org, plan } = useSupabase();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [search, setSearch] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
+  const [clientName, setClientName] = useState('');
   const [loading, setLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState('');
-  const [receipt, setReceipt] = useState<{ saleId: string; waLink: string } | null>(null);
+  const [receipt, setReceipt] = useState<ReceiptState | null>(null);
 
   // Recherche produits avec debounce minimal (useMemo suffit pour ce cas)
   const filtered = useMemo(() => {
@@ -97,7 +111,12 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
       // 1. Créer la vente (user_id = ownerId pour isoler les données par business)
       const { data: sale, error: saleErr } = await supabase
         .from('sales')
-        .insert({ user_id: ownerId, total_amount: total, payment_method: paymentMethod })
+        .insert({
+          user_id: ownerId,
+          total_amount: total,
+          payment_method: paymentMethod,
+          client_name: clientName.trim() || null,
+        })
         .select()
         .single();
 
@@ -168,8 +187,18 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
         date: new Date(),
       });
 
-      setReceipt({ saleId: sale.id, waLink });
+      const saleDate = new Date();
+      setReceipt({
+        saleId: sale.id,
+        waLink,
+        items: [...cart],
+        total,
+        paymentMethod,
+        clientName: clientName.trim(),
+        date: saleDate,
+      });
       setCart([]);
+      setClientName('');
       onSaleComplete?.();
     } catch (err) {
       setCheckoutError('Erreur : ' + (err as Error).message);
@@ -280,6 +309,16 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
           )}
         </div>
 
+        {/* Nom client (optionnel) */}
+        <div className="border-t border-slate-200 pt-3">
+          <Input
+            placeholder="Nom du client (optionnel)"
+            value={clientName}
+            onChange={(e) => setClientName(e.target.value)}
+            className="text-sm"
+          />
+        </div>
+
         {/* Total */}
         <div className="border-t border-slate-200 pt-3 space-y-3">
           <div className="flex justify-between text-lg font-bold text-slate-800">
@@ -336,11 +375,12 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
               ✅ Vente enregistrée !
             </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 py-2">
+          <div className="space-y-3 py-2">
             <p className="text-slate-600 text-sm text-center">
               La vente a été enregistrée avec succès.
             </p>
             <div className="flex flex-col gap-2">
+              {/* WhatsApp */}
               <a
                 href={receipt?.waLink}
                 target="_blank"
@@ -350,11 +390,50 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
                 <Share2 className="h-4 w-4" />
                 Partager le reçu WhatsApp
               </a>
+
+              {/* Reçu simple — tous les plans */}
               <Button
                 variant="outline"
-                onClick={() => setReceipt(null)}
                 className="w-full gap-2"
+                onClick={() => {
+                  if (!receipt || !org) return;
+                  printReceipt({ ...receipt, org });
+                }}
               >
+                <Printer className="h-4 w-4" />
+                Imprimer le reçu
+              </Button>
+
+              {/* Facture normalisée — Pro uniquement */}
+              {plan === 'pro' ? (
+                <Button
+                  variant="outline"
+                  className="w-full gap-2 border-amber-300 text-amber-700 hover:bg-amber-50"
+                  onClick={async () => {
+                    if (!receipt || !org) return;
+                    const invoiceNumber = buildInvoiceNumber(org);
+                    // Incrémenter le compteur dans la DB
+                    await supabase
+                      .from('organizations')
+                      .update({ invoice_counter: org.invoice_counter + 1 } as Record<string, unknown>)
+                      .eq('id', org.id);
+                    printReceipt({ ...receipt, org, invoiceNumber });
+                  }}
+                >
+                  <FileText className="h-4 w-4" />
+                  Facture normalisée
+                </Button>
+              ) : (
+                <button
+                  className="text-xs text-slate-400 flex items-center justify-center gap-1"
+                  onClick={() => setReceipt(null)}
+                >
+                  <FileText className="h-3 w-3" />
+                  Facture normalisée — Plan Pro uniquement
+                </button>
+              )}
+
+              <Button variant="ghost" onClick={() => setReceipt(null)} className="w-full gap-2 text-slate-500">
                 <X className="h-4 w-4" />
                 Fermer
               </Button>
