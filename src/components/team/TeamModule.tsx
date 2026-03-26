@@ -44,14 +44,24 @@ export function TeamModule() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [fetchError, setFetchError] = useState('');
 
+  const getToken = async () => {
+    let { data: { session } } = await supabase.auth.getSession();
+    if (!session?.access_token) {
+      const { data } = await supabase.auth.refreshSession();
+      session = data.session;
+    }
+    return session?.access_token ?? null;
+  };
+
   const fetchMembers = async () => {
     if (!user) return;
     setLoadingMembers(true);
     setFetchError('');
     try {
-      const { data: { session } } = await supabase.auth.getSession();
+      const token = await getToken();
+      if (!token) throw new Error('Session expirée. Veuillez vous reconnecter.');
       const res = await fetch('/api/employees', {
-        headers: { 'Authorization': `Bearer ${session?.access_token}` },
+        headers: { 'Authorization': `Bearer ${token}` },
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? 'Erreur serveur');
@@ -191,6 +201,7 @@ export function TeamModule() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="bg-white"
+                  autoComplete="off"
                 />
                 <div className="relative">
                   <Input
@@ -199,6 +210,7 @@ export function TeamModule() {
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
                     className="bg-white pr-10"
+                    autoComplete="new-password"
                   />
                   <button
                     type="button"
