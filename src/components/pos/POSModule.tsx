@@ -40,6 +40,8 @@ interface ReceiptState {
   total: number;
   paymentMethod: PaymentMethod;
   clientName: string;
+  amountGiven: number;
+  change: number;
   date: Date;
 }
 
@@ -49,6 +51,7 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
   const [search, setSearch] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [clientName, setClientName] = useState('');
+  const [amountGiven, setAmountGiven] = useState('');
   const [loading, setLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState('');
   const [receipt, setReceipt] = useState<ReceiptState | null>(null);
@@ -187,6 +190,7 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
         date: new Date(),
       });
 
+      const given = parseFloat(amountGiven) || 0;
       const saleDate = new Date();
       setReceipt({
         saleId: sale.id,
@@ -195,10 +199,13 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
         total,
         paymentMethod,
         clientName: clientName.trim(),
+        amountGiven: given,
+        change: paymentMethod === 'cash' && given >= total ? given - total : 0,
         date: saleDate,
       });
       setCart([]);
       setClientName('');
+      setAmountGiven('');
       onSaleComplete?.();
     } catch (err) {
       setCheckoutError('Erreur : ' + (err as Error).message);
@@ -351,6 +358,39 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
               MoMo
             </button>
           </div>
+
+          {/* Montant donné + monnaie (espèces uniquement) */}
+          {paymentMethod === 'cash' && (
+            <div className="space-y-2">
+              <div className="space-y-1">
+                <label className="text-xs font-medium text-slate-500">Montant donné (FCFA)</label>
+                <Input
+                  type="number"
+                  placeholder={String(total)}
+                  value={amountGiven}
+                  onChange={(e) => setAmountGiven(e.target.value)}
+                  min={0}
+                  className="text-sm"
+                />
+              </div>
+              {parseFloat(amountGiven) >= total && (
+                <div className="flex justify-between rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2">
+                  <span className="text-sm font-medium text-emerald-700">Monnaie à rendre</span>
+                  <span className="text-sm font-bold text-emerald-700">
+                    {formatCFA(parseFloat(amountGiven) - total)}
+                  </span>
+                </div>
+              )}
+              {parseFloat(amountGiven) > 0 && parseFloat(amountGiven) < total && (
+                <div className="flex justify-between rounded-lg bg-red-50 border border-red-200 px-3 py-2">
+                  <span className="text-sm font-medium text-red-600">Reste à payer</span>
+                  <span className="text-sm font-bold text-red-600">
+                    {formatCFA(total - parseFloat(amountGiven))}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
 
           {checkoutError && (
             <p className="text-red-500 text-xs rounded-lg bg-red-50 border border-red-200 px-3 py-2">

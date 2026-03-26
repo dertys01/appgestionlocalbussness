@@ -5,6 +5,8 @@ interface PrintData {
   total: number;
   paymentMethod: 'cash' | 'momo';
   clientName: string;
+  amountGiven: number;
+  change: number;
   date: Date;
   invoiceNumber?: string;
   org: Organization;
@@ -89,6 +91,10 @@ export function printReceipt(data: PrintData) {
     `<table>`,
     `<tr class="total-row"><td colspan="3">TOTAL</td><td style="text-align:right">${fmtCFA(data.total)}</td></tr>`,
     `<tr><td colspan="3" class="label">Paiement</td><td style="text-align:right">${data.paymentMethod === 'momo' ? 'Mobile Money' : 'Espèces'}</td></tr>`,
+    data.paymentMethod === 'cash' && data.amountGiven >= data.total
+      ? `<tr><td colspan="3" class="label">Reçu</td><td style="text-align:right">${fmtCFA(data.amountGiven)}</td></tr>` +
+        `<tr><td colspan="3" class="label bold">Monnaie</td><td style="text-align:right" class="bold">${fmtCFA(data.change)}</td></tr>`
+      : '',
     `</table>`,
     footer,
     `<div style="margin-top:16px;text-align:center">`,
