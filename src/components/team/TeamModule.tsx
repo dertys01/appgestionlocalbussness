@@ -40,20 +40,33 @@ export function TeamModule() {
 
   // Confirmation suppression
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState('');
 
   const fetchMembers = async () => {
     if (!user) return;
     setLoadingMembers(true);
-    const { data: { session } } = await supabase.auth.getSession();
-    const res = await fetch('/api/employees', {
-      headers: { 'Authorization': `Bearer ${session?.access_token}` },
-    });
-    const json = await res.json();
-    setMembers(json.members ?? []);
-    setLoadingMembers(false);
+    setFetchError('');
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/employees', {
+        headers: { 'Authorization': `Bearer ${session?.access_token}` },
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error ?? 'Erreur serveur');
+      setMembers(json.members ?? []);
+    } catch (e) {
+      setFetchError((e as Error).message);
+    } finally {
+      setLoadingMembers(false);
+    }
   };
 
-  const fetchLogs = async () => {
+  const [logsPage, setLogsPage] = useState(0);
+  const [hasMoreLogs, setHasMoreLogs] = useState(false);
+  const LOGS_PER_PAGE = 50;
+
+  const fetchLogs = async (page = 0) => {
     if (!user) return;
     setLoadingLogs(true);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -61,14 +74,20 @@ export function TeamModule() {
       .from('activity_logs')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(100);
-    setLogs((data as ActivityLog[]) ?? []);
+      .range(page * LOGS_PER_PAGE, (page + 1) * LOGS_PER_PAGE);
+    const rows = (data as ActivityLog[]) ?? [];
+    setHasMoreLogs(rows.length === LOGS_PER_PAGE + 1);
+    const displayRows = rows.slice(0, LOGS_PER_PAGE);
+    setLogs(page === 0 ? displayRows : (prev) => [...prev, ...displayRows]);
+    setLogsPage(page);
     setLoadingLogs(false);
   };
 
+  const loadMoreLogs = () => fetchLogs(logsPage + 1);
+
   useEffect(() => {
     if (panel === 'team') fetchMembers();
-    else fetchLogs();
+    else { setLogs([]); setLogsPage(0); fetchLogs(0); }
   }, [panel, user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAdd = async (e: React.FormEvent) => {
@@ -99,12 +118,17 @@ export function TeamModule() {
   };
 
   const handleDelete = async (memberId: string) => {
+    setConfirmDeleteId(null);
     const { data: { session } } = await supabase.auth.getSession();
     setDeletingId(memberId);
-    await fetch(`/api/employees/${memberId}`, {
+    const res = await fetch(`/api/employees/${memberId}`, {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${session?.access_token}` },
     });
+    if (!res.ok) {
+      const json = await res.json();
+      setFetchError(json.error ?? 'Erreur lors de la suppression');
+    }
     setDeletingId(null);
     fetchMembers();
   };
@@ -113,7 +137,7 @@ export function TeamModule() {
     // Les employés voient uniquement le journal
     return (
       <div className="space-y-4">
-        <LogsPanel logs={logs} loading={loadingLogs} onRefresh={fetchLogs} />
+        <LogsPanel logs={logs} loading={loadingLogs} onRefresh={() => fetchLogs(0)} hasMore={hasMoreLogs} onLoadMore={loadMoreLogs} />
       </div>
     );
   }
@@ -198,38 +222,74 @@ export function TeamModule() {
               </button>
             </div>
 
-            {members.length === 0 ? (
+            {fetchError && (
+              <p className="text-red-500 text-xs rounded-lg bg-red-50 border border-red-200 px-3 py-2">
+                {fetchError}
+              </p>
+            )}
+
+            {members.length === 0 && !fetchError ? (
               <div className="text-center text-slate-400 py-8 text-sm">
                 Aucun employé pour l&apos;instant
               </div>
             ) : (
               members.map((m) => (
-                <Card key={m.id} className="border-slate-200">
-                  <CardContent className="p-3 flex items-center gap-3">
-                    <div className="h-9 w-9 rounded-full bg-indigo-100 flex items-center justify-center shrink-0">
-                      <span className="text-indigo-600 font-bold text-sm">
-                        {m.member_name.charAt(0).toUpperCase()}
-                      </span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-slate-800 text-sm">{m.member_name}</div>
-                      <Badge className="bg-slate-100 text-slate-500 hover:bg-slate-100 text-xs mt-0.5">
-                        {m.role}
-                      </Badge>
-                    </div>
-                    {deletingId === m.member_id ? (
-                      <Loader2 className="h-4 w-4 animate-spin text-red-400" />
-                    ) : (
-                      <button
-                        onClick={() => handleDelete(m.member_id)}
-                        className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
-                        title="Supprimer"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    )}
-                  </CardContent>
-                </Card>
+                <div key={m.id}>
+                  <Card className="border-slate-200">
+                    <CardContent className="p-3 flex items-center gap-3">
+                      <div className="h-9 w-9 rounded-full bg-indigo-100 flex items-center justify-center shrink-0">
+                        <span className="text-indigo-600 font-bold text-sm">
+                          {m.member_name.charAt(0).toUpperCase()}
+                        </span>
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-slate-800 text-sm">{m.member_name}</div>
+                        <Badge className="bg-slate-100 text-slate-500 hover:bg-slate-100 text-xs mt-0.5">
+                          {m.role}
+                        </Badge>
+                      </div>
+                      {deletingId === m.member_id ? (
+                        <Loader2 className="h-4 w-4 animate-spin text-red-400" />
+                      ) : (
+                        <button
+                          onClick={() => setConfirmDeleteId(m.member_id)}
+                          className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                          title="Supprimer"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </CardContent>
+                  </Card>
+
+                  {/* Confirmation inline */}
+                  {confirmDeleteId === m.member_id && (
+                    <Card className="border-red-200 bg-red-50 mt-1">
+                      <CardContent className="p-3 flex items-center justify-between gap-3">
+                        <p className="text-xs text-red-700 font-medium">
+                          Supprimer <strong>{m.member_name}</strong> ? Cette action est irréversible.
+                        </p>
+                        <div className="flex gap-2 shrink-0">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="h-7 text-xs text-slate-600"
+                          >
+                            Annuler
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={() => handleDelete(m.member_id)}
+                            className="h-7 text-xs bg-red-600 hover:bg-red-700 text-white"
+                          >
+                            Confirmer
+                          </Button>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
+                </div>
               ))
             )}
           </div>
@@ -237,17 +297,23 @@ export function TeamModule() {
       )}
 
       {panel === 'logs' && (
-        <LogsPanel logs={logs} loading={loadingLogs} onRefresh={fetchLogs} />
+        <LogsPanel logs={logs} loading={loadingLogs} onRefresh={() => fetchLogs(0)} hasMore={hasMoreLogs} onLoadMore={loadMoreLogs} />
       )}
     </div>
   );
 }
 
-function LogsPanel({ logs, loading, onRefresh }: { logs: ActivityLog[]; loading: boolean; onRefresh: () => void }) {
+function LogsPanel({ logs, loading, onRefresh, hasMore, onLoadMore }: {
+  logs: ActivityLog[];
+  loading: boolean;
+  onRefresh: () => void;
+  hasMore: boolean;
+  onLoadMore: () => void;
+}) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-slate-500">100 dernières actions</p>
+        <p className="text-sm text-slate-500">{logs.length} actions chargées</p>
         <button onClick={onRefresh} disabled={loading} className="p-1.5 text-slate-400 hover:text-indigo-600">
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
         </button>
@@ -286,6 +352,18 @@ function LogsPanel({ logs, loading, onRefresh }: { logs: ActivityLog[]; loading:
             );
           })}
         </div>
+      )}
+
+      {hasMore && !loading && (
+        <button
+          onClick={onLoadMore}
+          className="w-full py-2 text-sm text-indigo-600 hover:text-indigo-800 border border-indigo-200 rounded-lg hover:bg-indigo-50 transition-colors"
+        >
+          Charger plus
+        </button>
+      )}
+      {loading && logs.length > 0 && (
+        <p className="text-center text-xs text-slate-400 py-2">Chargement...</p>
       )}
     </div>
   );

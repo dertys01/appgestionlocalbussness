@@ -36,6 +36,7 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
   const [search, setSearch] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [loading, setLoading] = useState(false);
+  const [checkoutError, setCheckoutError] = useState('');
   const [receipt, setReceipt] = useState<{ saleId: string; waLink: string } | null>(null);
 
   // Recherche produits avec debounce minimal (useMemo suffit pour ce cas)
@@ -85,6 +86,9 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
   const handleCheckout = async () => {
     if (cart.length === 0 || loading) return;
     setLoading(true);
+    setCheckoutError('');
+
+    let saleId: string | null = null;
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -98,8 +102,9 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
         .single();
 
       if (saleErr) throw saleErr;
+      saleId = sale.id;
 
-      // 2. Insérer les sale_items
+      // 2. Insérer les sale_items — si échec, on annule la vente
       const items = cart.map((i) => ({
         sale_id: sale.id,
         product_id: i.product.id,
@@ -110,27 +115,32 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
       }));
 
       const { error: itemsErr } = await supabase.from('sale_items').insert(items);
-      if (itemsErr) throw itemsErr;
+      if (itemsErr) {
+        await supabase.from('sales').delete().eq('id', sale.id);
+        throw itemsErr;
+      }
 
       // 3. Mise à jour du stock + stock_logs
       for (const item of cart) {
         const newQty = item.product.stock_qty - item.quantity;
 
-        await supabase
+        const { error: stockErr } = await supabase
           .from('products')
           .update({ stock_qty: newQty })
           .eq('id', item.product.id);
 
-        await supabase.from('stock_logs').insert({
-          user_id: ownerId,
-          product_id: item.product.id,
-          product_name: item.product.name,
-          movement_type: 'sale',
-          quantity_change: -item.quantity,
-          stock_before: item.product.stock_qty,
-          stock_after: newQty,
-          reference_id: sale.id,
-        });
+        if (!stockErr) {
+          await supabase.from('stock_logs').insert({
+            user_id: ownerId,
+            product_id: item.product.id,
+            product_name: item.product.name,
+            movement_type: 'sale',
+            quantity_change: -item.quantity,
+            stock_before: item.product.stock_qty,
+            stock_after: newQty,
+            reference_id: sale.id,
+          });
+        }
       }
 
       // 4. Journal d'activité
@@ -162,7 +172,7 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
       setCart([]);
       onSaleComplete?.();
     } catch (err) {
-      alert('Erreur lors de la vente : ' + (err as Error).message);
+      setCheckoutError('Erreur : ' + (err as Error).message);
     } finally {
       setLoading(false);
     }
@@ -303,6 +313,11 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
             </button>
           </div>
 
+          {checkoutError && (
+            <p className="text-red-500 text-xs rounded-lg bg-red-50 border border-red-200 px-3 py-2">
+              {checkoutError}
+            </p>
+          )}
           <Button
             onClick={handleCheckout}
             disabled={cart.length === 0 || loading}

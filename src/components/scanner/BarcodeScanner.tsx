@@ -7,39 +7,38 @@ import { Button } from '@/components/ui/button';
 interface BarcodeScannerProps {
   onScan: (value: string) => void;
   onClose: () => void;
+  errorMessage?: string;
 }
 
-export function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
+export function BarcodeScanner({ onScan, onClose, errorMessage }: BarcodeScannerProps) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const scannerRef = useRef<any>(null);
+  const startedRef = useRef(false);
   const containerId = 'qr-reader-container';
-  const [error, setError] = useState<string | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
 
   useEffect(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     let scanner: any = null;
-    let started = false;
 
     async function init() {
       try {
-        // Import dynamique pour éviter le SSR
         const { Html5Qrcode } = await import('html5-qrcode');
         scanner = new Html5Qrcode(containerId);
         scannerRef.current = scanner;
 
         await scanner.start(
-          { facingMode: 'environment' },  // caméra arrière
+          { facingMode: 'environment' },
           { fps: 10, qrbox: { width: 250, height: 150 } },
           (decodedText: string) => {
+            // On notifie le parent — c'est lui qui décide de fermer ou non
             onScan(decodedText);
-            scanner?.stop().catch(() => {}).finally(() => scanner?.clear().catch(() => {}));
-            onClose();
           },
           () => { /* scan en cours, ignorer */ }
         );
-        started = true;
+        startedRef.current = true;
       } catch (err) {
-        setError("Impossible d'accéder à la caméra. Vérifiez les permissions.");
+        setCameraError("Impossible d'accéder à la caméra. Vérifiez les permissions.");
         console.error(err);
       }
     }
@@ -47,15 +46,13 @@ export function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
     init();
 
     return () => {
-      if (scanner && started) {
-        scanner.stop().catch(() => {}).finally(() => {
-          scanner.clear().catch(() => {});
-        });
+      if (scanner && startedRef.current) {
+        scanner.stop().catch(() => {}).finally(() => scanner.clear().catch(() => {}));
       } else if (scanner) {
         scanner.clear().catch(() => {});
       }
     };
-  }, [onScan, onClose]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 flex flex-col items-center justify-center p-4">
@@ -70,10 +67,16 @@ export function BarcodeScanner({ onScan, onClose }: BarcodeScannerProps) {
           </button>
         </div>
 
-        {error ? (
-          <div className="text-red-500 text-sm text-center py-6">{error}</div>
+        {cameraError ? (
+          <div className="text-red-500 text-sm text-center py-6">{cameraError}</div>
         ) : (
           <div id={containerId} className="rounded-lg overflow-hidden" />
+        )}
+
+        {errorMessage && (
+          <p className="text-amber-700 text-xs rounded-lg bg-amber-50 border border-amber-200 px-3 py-2">
+            {errorMessage}
+          </p>
         )}
 
         <Button variant="outline" onClick={onClose} className="w-full">

@@ -40,6 +40,7 @@ export default function HomePage() {
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [showInventoryCount, setShowInventoryCount] = useState(false);
+  const [scanNotFound, setScanNotFound] = useState('');
 
   // Modals produits
   const [showProductForm, setShowProductForm] = useState(false);
@@ -64,8 +65,13 @@ export default function HomePage() {
 
   const handleScan = (sku: string) => {
     const product = products.find((p) => p.sku === sku);
-    if (product) setTab('pos');
-    else alert(`Aucun produit trouvé pour le SKU : ${sku}`);
+    if (product) {
+      setScanNotFound('');
+      setShowScanner(false);
+      setTab('pos');
+    } else {
+      setScanNotFound(`Aucun produit trouvé pour le SKU : ${sku}`);
+    }
   };
 
   const openAdd = () => { setEditingProduct(null); setShowProductForm(true); };
@@ -303,7 +309,11 @@ export default function HomePage() {
         <RestockModal product={restockProduct} onClose={() => setRestockProduct(null)} onSaved={fetchProducts} />
       )}
       {showScanner && (
-        <BarcodeScanner onScan={handleScan} onClose={() => setShowScanner(false)} />
+        <BarcodeScanner
+          onScan={handleScan}
+          onClose={() => { setShowScanner(false); setScanNotFound(''); }}
+          errorMessage={scanNotFound}
+        />
       )}
     </div>
   );
