@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { PLAN_LIMITS } from '@/lib/utils/plans';
+import type { Plan } from '@/types';
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
@@ -54,6 +56,25 @@ export async function POST(req: NextRequest) {
       .eq('member_id', user.id)
       .maybeSingle();
     if (membership) return NextResponse.json({ error: 'Seul le patron peut ajouter des employés' }, { status: 403 });
+
+    // Vérification limite employés selon le plan
+    const { data: org } = await adminClient
+      .from('organizations')
+      .select('plan')
+      .eq('id', user.id)
+      .maybeSingle();
+    const plan = (org?.plan ?? 'free') as Plan;
+    const { count: memberCount } = await adminClient
+      .from('business_members')
+      .select('*', { count: 'exact', head: true })
+      .eq('owner_id', user.id);
+    const limit = PLAN_LIMITS[plan].employees;
+    if (limit !== Infinity && (memberCount ?? 0) >= limit) {
+      return NextResponse.json(
+        { error: `Limite d'employés atteinte pour le plan ${plan} (max ${limit}). Passez à un plan supérieur.` },
+        { status: 403 }
+      );
+    }
 
     const { email, password, name } = await req.json();
     if (!email || !password || !name) {
