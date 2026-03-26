@@ -458,44 +458,33 @@ function LoginPage() {
     setError('');
     setInfo('');
 
-    const { data, error: signUpError } = await supabase.auth.signUp({ email, password });
-    if (signUpError) {
-      setError(signUpError.message);
-      setLoading(false);
-      return;
-    }
-
-    const userId = data.user?.id;
-    if (!userId) {
-      setError('Erreur lors de la création du compte.');
-      setLoading(false);
-      return;
-    }
-
-    // Si pas de session → confirmation email requise (désactiver dans Supabase Auth settings)
-    if (!data.session) {
-      setInfo('Vérifiez votre email pour confirmer votre compte, puis reconnectez-vous.');
-      setLoading(false);
-      return;
-    }
-
-    const slug = businessName.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') + '-' + Math.random().toString(36).slice(2, 6);
-    const { error: orgError } = await supabase.from('organizations').insert({
-      id: userId,
-      name: businessName.trim(),
-      slug,
-      plan: 'free',
-      onboarding_done: false,
+    const res = await fetch('/api/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password, businessName }),
     });
+    const json = await res.json();
 
-    if (orgError) {
-      setError(`Erreur configuration : ${orgError.message}`);
+    if (!res.ok) {
+      setError(json.error ?? 'Erreur lors de la création du compte.');
       setLoading(false);
       return;
     }
 
+    if (json.error) {
+      // Compte créé mais login auto échoué → rediriger vers login
+      setInfo(json.error);
+      switchMode('login');
+      setLoading(false);
+      return;
+    }
+
+    // Session retournée → injecter dans Supabase client
+    await supabase.auth.setSession({
+      access_token: json.access_token,
+      refresh_token: json.refresh_token,
+    });
     setLoading(false);
-    // SupabaseProvider détecte SIGNED_IN → charge l'org → OnboardingWizard s'affiche
   };
 
   const inputClass = "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500";
