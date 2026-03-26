@@ -356,13 +356,23 @@ export default function HomePage() {
   );
 }
 
-// ── Page de connexion ──
+// ── Page de connexion / inscription ──
 function LoginPage() {
   const { supabase } = useSupabase();
+  const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [businessName, setBusinessName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
+
+  const switchMode = (m: 'login' | 'register') => {
+    setMode(m);
+    setError('');
+    setInfo('');
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -372,43 +382,118 @@ function LoginPage() {
     setLoading(false);
   };
 
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    setInfo('');
+
+    const { data, error: signUpError } = await supabase.auth.signUp({ email, password });
+    if (signUpError) {
+      setError(signUpError.message);
+      setLoading(false);
+      return;
+    }
+
+    const userId = data.user?.id;
+    if (!userId) {
+      setError('Erreur lors de la création du compte.');
+      setLoading(false);
+      return;
+    }
+
+    // Si pas de session → confirmation email requise (désactiver dans Supabase Auth settings)
+    if (!data.session) {
+      setInfo('Vérifiez votre email pour confirmer votre compte, puis reconnectez-vous.');
+      setLoading(false);
+      return;
+    }
+
+    const slug = businessName.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') + '-' + Math.random().toString(36).slice(2, 6);
+    const { error: orgError } = await supabase.from('organizations').insert({
+      id: userId,
+      name: businessName.trim(),
+      slug,
+      plan: 'free',
+      onboarding_done: false,
+    });
+
+    if (orgError) {
+      setError(`Erreur configuration : ${orgError.message}`);
+      setLoading(false);
+      return;
+    }
+
+    setLoading(false);
+    // SupabaseProvider détecte SIGNED_IN → charge l'org → OnboardingWizard s'affiche
+  };
+
+  const inputClass = "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500";
+
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 to-slate-100">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-indigo-600">GestionLocal</h1>
-          <p className="text-slate-500 mt-1">Connectez-vous à votre espace</p>
+          <p className="text-slate-500 mt-1">
+            {mode === 'login' ? 'Connectez-vous à votre espace' : 'Créez votre boutique'}
+          </p>
         </div>
+
+        {/* Toggle login / register */}
+        <div className="flex rounded-xl bg-slate-100 p-1 mb-4">
+          <button
+            onClick={() => switchMode('login')}
+            className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${mode === 'login' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}
+          >
+            Se connecter
+          </button>
+          <button
+            onClick={() => switchMode('register')}
+            className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${mode === 'register' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}
+          >
+            Créer un compte
+          </button>
+        </div>
+
         <Card className="border-slate-200 shadow-md">
           <CardContent className="p-6">
-            <form onSubmit={handleLogin} className="space-y-4">
-              <div className="space-y-1">
-                <label className="text-sm font-medium text-slate-700">Email</label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  required
-                  placeholder="vous@exemple.com"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-sm font-medium text-slate-700">Mot de passe</label>
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  placeholder="••••••••"
-                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-              </div>
-              {error && <p className="text-red-500 text-sm">{error}</p>}
-              <Button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 font-semibold">
-                {loading ? 'Connexion...' : 'Se connecter'}
-              </Button>
-            </form>
+            {mode === 'login' ? (
+              <form onSubmit={handleLogin} className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-slate-700">Email</label>
+                  <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="vous@exemple.com" className={inputClass} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-slate-700">Mot de passe</label>
+                  <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="••••••••" className={inputClass} />
+                </div>
+                {error && <p className="text-red-500 text-sm">{error}</p>}
+                <Button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 font-semibold">
+                  {loading ? 'Connexion...' : 'Se connecter'}
+                </Button>
+              </form>
+            ) : (
+              <form onSubmit={handleRegister} className="space-y-4">
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-slate-700">Nom de votre boutique</label>
+                  <input type="text" value={businessName} onChange={(e) => setBusinessName(e.target.value)} required placeholder="Ex: Épicerie Adjonou" className={inputClass} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-slate-700">Email</label>
+                  <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="vous@exemple.com" className={inputClass} />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-slate-700">Mot de passe</label>
+                  <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="8 caractères minimum" minLength={6} className={inputClass} />
+                </div>
+                {error && <p className="text-red-500 text-sm">{error}</p>}
+                {info && <p className="text-indigo-600 text-sm">{info}</p>}
+                <Button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 font-semibold">
+                  {loading ? 'Création...' : 'Créer mon compte'}
+                </Button>
+              </form>
+            )}
           </CardContent>
         </Card>
       </div>
