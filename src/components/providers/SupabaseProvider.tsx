@@ -100,8 +100,11 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
     supabase.auth.getUser().then(({ data }) => {
       const u = data.user ?? null;
       setUser(u);
-      setLoading(false);
-      if (u) resolveMembership(u);
+      if (u) {
+        resolveMembership(u).finally(() => setLoading(false));
+      } else {
+        setLoading(false);
+      }
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
