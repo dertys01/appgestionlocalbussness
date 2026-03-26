@@ -97,6 +97,11 @@ export default function HomePage() {
     return <OnboardingWizard onComplete={fetchProducts} />;
   }
 
+  // Org absente = register interrompu avant la création de l'org
+  if (!isEmployee && !org && !loading) {
+    return <OrgSetupRequired />;
+  }
+
   const NAV_ITEMS = [
     { key: 'dashboard', label: 'Accueil',    icon: LayoutDashboard, locked: false },
     { key: 'pos',       label: 'Vente',      icon: ShoppingCart,    locked: false },
@@ -356,10 +361,63 @@ export default function HomePage() {
   );
 }
 
+// ── Fallback org absente ──
+function OrgSetupRequired() {
+  const { supabase, user } = useSupabase();
+  const [name, setName] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!user) return;
+    setLoading(true);
+    setError('');
+    const slug = name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') + '-' + Math.random().toString(36).slice(2, 6);
+    const { error: err } = await supabase.from('organizations').insert({
+      id: user.id, name: name.trim(), slug, plan: 'free', onboarding_done: false,
+    });
+    if (err) { setError(err.message); setLoading(false); return; }
+    window.location.reload();
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 to-slate-100">
+      <div className="w-full max-w-sm">
+        <div className="text-center mb-6">
+          <h1 className="text-2xl font-bold text-indigo-600">Configuration requise</h1>
+          <p className="text-slate-500 text-sm mt-1">Votre boutique n&apos;a pas été configurée. Entrez son nom pour continuer.</p>
+        </div>
+        <Card className="border-slate-200 shadow-md">
+          <CardContent className="p-6">
+            <form onSubmit={handleCreate} className="space-y-4">
+              <div className="space-y-1">
+                <label className="text-sm font-medium text-slate-700">Nom de la boutique</label>
+                <input
+                  type="text" value={name} onChange={(e) => setName(e.target.value)} required
+                  placeholder="Ex: Épicerie Adjonou"
+                  className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+              </div>
+              {error && <p className="text-red-500 text-sm">{error}</p>}
+              <Button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700">
+                {loading ? 'Création...' : 'Créer ma boutique'}
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+        <button onClick={() => supabase.auth.signOut()} className="mt-4 w-full text-sm text-slate-400 hover:text-slate-600 underline">
+          Se déconnecter
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Page de connexion / inscription ──
 function LoginPage() {
   const { supabase } = useSupabase();
-  const [mode, setMode] = useState<'login' | 'register'>('login');
+  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [businessName, setBusinessName] = useState('');
@@ -367,10 +425,22 @@ function LoginPage() {
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
 
-  const switchMode = (m: 'login' | 'register') => {
+  const switchMode = (m: 'login' | 'register' | 'forgot') => {
     setMode(m);
     setError('');
     setInfo('');
+  };
+
+  const handleForgot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/reset-password`,
+    });
+    if (error) setError(error.message);
+    else setInfo('Email envoyé ! Vérifiez votre boîte mail pour réinitialiser votre mot de passe.');
+    setLoading(false);
   };
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -441,24 +511,45 @@ function LoginPage() {
         </div>
 
         {/* Toggle login / register */}
-        <div className="flex rounded-xl bg-slate-100 p-1 mb-4">
-          <button
-            onClick={() => switchMode('login')}
-            className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${mode === 'login' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}
-          >
-            Se connecter
-          </button>
-          <button
-            onClick={() => switchMode('register')}
-            className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${mode === 'register' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}
-          >
-            Créer un compte
-          </button>
-        </div>
+        {mode !== 'forgot' && (
+          <div className="flex rounded-xl bg-slate-100 p-1 mb-4">
+            <button
+              onClick={() => switchMode('login')}
+              className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${mode === 'login' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}
+            >
+              Se connecter
+            </button>
+            <button
+              onClick={() => switchMode('register')}
+              className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${mode === 'register' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}
+            >
+              Créer un compte
+            </button>
+          </div>
+        )}
 
         <Card className="border-slate-200 shadow-md">
           <CardContent className="p-6">
-            {mode === 'login' ? (
+            {mode === 'forgot' ? (
+              <form onSubmit={handleForgot} className="space-y-4">
+                <div className="text-center mb-2">
+                  <p className="text-sm font-semibold text-slate-700">Réinitialiser le mot de passe</p>
+                  <p className="text-xs text-slate-400 mt-1">Un lien de réinitialisation sera envoyé à votre email</p>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-sm font-medium text-slate-700">Email</label>
+                  <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="vous@exemple.com" className={inputClass} />
+                </div>
+                {error && <p className="text-red-500 text-sm">{error}</p>}
+                {info && <p className="text-emerald-600 text-sm">{info}</p>}
+                <Button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 font-semibold">
+                  {loading ? 'Envoi...' : 'Envoyer le lien'}
+                </Button>
+                <button type="button" onClick={() => switchMode('login')} className="w-full text-sm text-slate-400 hover:text-slate-600 underline">
+                  Retour à la connexion
+                </button>
+              </form>
+            ) : mode === 'login' ? (
               <form onSubmit={handleLogin} className="space-y-4">
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-slate-700">Email</label>
@@ -472,6 +563,9 @@ function LoginPage() {
                 <Button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 font-semibold">
                   {loading ? 'Connexion...' : 'Se connecter'}
                 </Button>
+                <button type="button" onClick={() => switchMode('forgot')} className="w-full text-sm text-slate-400 hover:text-slate-600 underline">
+                  Mot de passe oublié ?
+                </button>
               </form>
             ) : (
               <form onSubmit={handleRegister} className="space-y-4">

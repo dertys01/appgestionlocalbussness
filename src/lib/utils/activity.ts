@@ -13,7 +13,9 @@ interface LogParams {
 export async function logActivity({ ownerId, actorId, actorEmail, actorName, action, description, metadata }: LogParams) {
   const supabase = createClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await (supabase as any).from('activity_logs').insert({
+  const db = supabase as any;
+
+  await db.from('activity_logs').insert({
     business_owner_id: ownerId,
     actor_id: actorId,
     actor_email: actorEmail,
@@ -22,4 +24,12 @@ export async function logActivity({ ownerId, actorId, actorEmail, actorName, act
     description,
     metadata: metadata ?? null,
   });
+
+  // Nettoyage silencieux des logs > 90 jours pour cet owner
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 90);
+  db.from('activity_logs')
+    .delete()
+    .eq('business_owner_id', ownerId)
+    .lt('created_at', cutoff.toISOString());
 }
