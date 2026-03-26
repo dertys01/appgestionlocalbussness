@@ -14,6 +14,8 @@ import {
   ScanBarcode,
   Brain,
   Users,
+  Settings,
+  Lock,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -27,14 +29,17 @@ import { TeamModule } from '@/components/team/TeamModule';
 import { ProductForm } from '@/components/products/ProductForm';
 import { RestockModal } from '@/components/products/RestockModal';
 import { BarcodeScanner } from '@/components/scanner/BarcodeScanner';
+import { SettingsModule } from '@/components/settings/SettingsModule';
+import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
+import { isFeatureAllowed } from '@/lib/utils/plans';
 import type { Product } from '@/types';
 
-type Tab = 'dashboard' | 'pos' | 'inventory' | 'sales' | 'reports' | 'forecast' | 'team';
+type Tab = 'dashboard' | 'pos' | 'inventory' | 'sales' | 'reports' | 'forecast' | 'team' | 'settings';
 
 export default function HomePage() {
-  const { supabase, user, loading, isEmployee } = useSupabase();
+  const { supabase, user, loading, isEmployee, org, plan } = useSupabase();
   const [tab, setTab] = useState<Tab>('dashboard');
   const [products, setProducts] = useState<Product[]>([]);
   const [loadingProducts, setLoadingProducts] = useState(false);
@@ -87,15 +92,20 @@ export default function HomePage() {
 
   if (!user) return <LoginPage />;
 
+  // Onboarding : nouveau compte sans org ou onboarding non terminé
+  if (!isEmployee && org && !org.onboarding_done) {
+    return <OnboardingWizard onComplete={fetchProducts} />;
+  }
+
   const NAV_ITEMS = [
-    { key: 'dashboard', label: 'Accueil',    icon: LayoutDashboard },
-    { key: 'pos',       label: 'Vente',      icon: ShoppingCart },
-    { key: 'inventory', label: 'Stock',      icon: Package },
-    { key: 'sales',     label: 'Ventes',     icon: History },
-    { key: 'reports',   label: 'Rapports',   icon: BarChart2 },
-    { key: 'forecast',  label: 'Prévisions', icon: Brain },
-    { key: 'team',      label: 'Équipe',     icon: Users },
-  ] as { key: Tab; label: string; icon: React.ElementType }[];
+    { key: 'dashboard', label: 'Accueil',    icon: LayoutDashboard, locked: false },
+    { key: 'pos',       label: 'Vente',      icon: ShoppingCart,    locked: false },
+    { key: 'inventory', label: 'Stock',      icon: Package,         locked: false },
+    { key: 'sales',     label: 'Ventes',     icon: History,         locked: false },
+    { key: 'reports',   label: 'Rapports',   icon: BarChart2,       locked: !isFeatureAllowed(plan, 'reports') },
+    { key: 'forecast',  label: 'Prévisions', icon: Brain,           locked: !isFeatureAllowed(plan, 'forecast') },
+    { key: 'team',      label: 'Équipe',     icon: Users,           locked: false },
+  ] as { key: Tab; label: string; icon: React.ElementType; locked: boolean }[];
 
   return (
     <div className="min-h-screen flex">
@@ -114,25 +124,40 @@ export default function HomePage() {
 
         {/* Nav items */}
         <nav className="flex-1 py-3 space-y-1 px-2">
-          {NAV_ITEMS.map(({ key, label, icon: Icon }) => (
+          {NAV_ITEMS.map(({ key, label, icon: Icon, locked }) => (
             <button
               key={key}
-              onClick={() => setTab(key as Tab)}
-              title={label}
+              onClick={() => { if (!locked) setTab(key as Tab); else setTab('settings'); }}
+              title={locked ? `${label} — Plan supérieur requis` : label}
               className={`w-full flex items-center gap-3 px-2 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                 tab === key
                   ? 'bg-indigo-50 text-indigo-600'
-                  : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'
+                  : locked
+                    ? 'text-slate-300 cursor-pointer'
+                    : 'text-slate-500 hover:bg-slate-50 hover:text-slate-700'
               }`}
             >
               <Icon className="h-5 w-5 shrink-0" />
-              <span className="hidden lg:block">{label}</span>
+              <span className="hidden lg:flex lg:items-center lg:gap-1.5">
+                {label}
+                {locked && <Lock className="h-3 w-3 text-slate-300" />}
+              </span>
             </button>
           ))}
         </nav>
 
         {/* Footer sidebar */}
         <div className="border-t border-slate-100 p-2 space-y-1">
+          <button
+            onClick={() => setTab('settings')}
+            title="Paramètres"
+            className={`w-full flex items-center gap-3 px-2 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+              tab === 'settings' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-500 hover:bg-slate-50'
+            }`}
+          >
+            <Settings className="h-5 w-5 shrink-0" />
+            <span className="hidden lg:block">Paramètres</span>
+          </button>
           <button
             onClick={() => setShowScanner(true)}
             title="Scanner"
@@ -298,12 +323,24 @@ export default function HomePage() {
               <TeamModule />
             </div>
           )}
+
+          {tab === 'settings' && (
+            <div className="space-y-4">
+              <h2 className="text-xl font-bold text-slate-800">Paramètres</h2>
+              <SettingsModule />
+            </div>
+          )}
         </div>
       </main>
 
       {/* Modals */}
       {showProductForm && (
-        <ProductForm product={editingProduct} onClose={() => setShowProductForm(false)} onSaved={fetchProducts} />
+        <ProductForm
+          product={editingProduct}
+          onClose={() => setShowProductForm(false)}
+          onSaved={fetchProducts}
+          currentProductCount={products.length}
+        />
       )}
       {restockProduct && (
         <RestockModal product={restockProduct} onClose={() => setRestockProduct(null)} onSaved={fetchProducts} />

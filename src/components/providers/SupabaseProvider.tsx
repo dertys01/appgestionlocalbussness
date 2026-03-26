@@ -3,14 +3,18 @@
 import { createContext, useContext, useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
+import type { Organization, Plan } from '@/types';
 
 interface SupabaseContextType {
   supabase: SupabaseClient;
   user: User | null;
   loading: boolean;
-  ownerId: string | null;      // user_id du patron (= user.id pour le patron, = owner_id pour un employé)
+  ownerId: string | null;
   isEmployee: boolean;
-  actorName: string | null;    // nom affiché dans les logs
+  actorName: string | null;
+  org: Organization | null;
+  plan: Plan;
+  refreshOrg: () => Promise<void>;
 }
 
 const SupabaseContext = createContext<SupabaseContextType | null>(null);
@@ -22,62 +26,96 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
   const [ownerId, setOwnerId] = useState<string | null>(null);
   const [isEmployee, setIsEmployee] = useState(false);
   const [actorName, setActorName] = useState<string | null>(null);
+  const [org, setOrg] = useState<Organization | null>(null);
+  const [plan, setPlan] = useState<Plan>('free');
 
-  const resolveMembership = async (u: User) => { try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data } = await (supabase as any)
-      .from('business_members')
-      .select('owner_id, member_name')
-      .eq('member_id', u.id)
-      .maybeSingle() as { data: { owner_id: string; member_name: string } | null };
+  const loadOrg = async (ownerIdVal: string) => {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data } = await (supabase as any)
+        .from('organizations')
+        .select('*')
+        .eq('id', ownerIdVal)
+        .maybeSingle();
+      if (data) {
+        setOrg(data as Organization);
+        setPlan((data as Organization).plan);
+      }
+    } catch { /* silencieux */ }
+  };
 
-    if (data) {
-      setOwnerId(data.owner_id);
-      setIsEmployee(true);
-      setActorName(data.member_name);
+  const refreshOrg = async () => {
+    if (ownerId) await loadOrg(ownerId);
+  };
+
+  const resolveMembership = async (u: User) => {
+    try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabase as any).from('activity_logs').insert({
-        business_owner_id: data.owner_id,
-        actor_id: u.id,
-        actor_email: u.email ?? '',
-        actor_name: data.member_name,
-        action: 'login',
-        description: `${data.member_name} s'est connecté(e)`,
-      });
-    } else {
-      setOwnerId(u.id);
-      setIsEmployee(false);
-      setActorName(u.email ?? null);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (supabase as any).from('activity_logs').insert({
-        business_owner_id: u.id,
-        actor_id: u.id,
-        actor_email: u.email ?? '',
-        actor_name: u.email ?? null,
-        action: 'login',
-        description: `Connexion patron`,
-      });
-    }
-  } catch { /* silencieux — ne jamais bloquer l'app */ } };
+      const { data } = await (supabase as any)
+        .from('business_members')
+        .select('owner_id, member_name')
+        .eq('member_id', u.id)
+        .maybeSingle() as { data: { owner_id: string; member_name: string } | null };
+
+      let resolvedOwnerId: string;
+      let resolvedName: string;
+
+      if (data) {
+        resolvedOwnerId = data.owner_id;
+        resolvedName = data.member_name;
+        setOwnerId(resolvedOwnerId);
+        setIsEmployee(true);
+        setActorName(resolvedName);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabase as any).from('activity_logs').insert({
+          business_owner_id: resolvedOwnerId,
+          actor_id: u.id,
+          actor_email: u.email ?? '',
+          actor_name: resolvedName,
+          action: 'login',
+          description: `${resolvedName} s'est connecté(e)`,
+        });
+      } else {
+        resolvedOwnerId = u.id;
+        resolvedName = u.email ?? u.id;
+        setOwnerId(resolvedOwnerId);
+        setIsEmployee(false);
+        setActorName(resolvedName);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (supabase as any).from('activity_logs').insert({
+          business_owner_id: resolvedOwnerId,
+          actor_id: u.id,
+          actor_email: u.email ?? '',
+          actor_name: resolvedName,
+          action: 'login',
+          description: 'Connexion patron',
+        });
+      }
+
+      await loadOrg(resolvedOwnerId);
+    } catch { /* silencieux — ne jamais bloquer l'app */ }
+  };
 
   useEffect(() => {
     supabase.auth.getUser().then(({ data }) => {
       const u = data.user ?? null;
       setUser(u);
-      setLoading(false); // ne jamais bloquer le chargement
-      if (u) resolveMembership(u); // async, en arrière-plan
+      setLoading(false);
+      if (u) resolveMembership(u);
     });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       const u = session?.user ?? null;
       setUser(u);
       if (u && event === 'SIGNED_IN') {
-        resolveMembership(u); // async, en arrière-plan
+        resolveMembership(u);
       }
       if (!u) {
         setOwnerId(null);
         setIsEmployee(false);
         setActorName(null);
+        setOrg(null);
+        setPlan('free');
       }
     });
 
@@ -85,7 +123,7 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
   }, [supabase]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <SupabaseContext.Provider value={{ supabase, user, loading, ownerId, isEmployee, actorName }}>
+    <SupabaseContext.Provider value={{ supabase, user, loading, ownerId, isEmployee, actorName, org, plan, refreshOrg }}>
       {children}
     </SupabaseContext.Provider>
   );

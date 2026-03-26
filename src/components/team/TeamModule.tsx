@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
+import { canAddEmployee, PLAN_LIMITS, PLAN_LABELS } from '@/lib/utils/plans';
 import type { BusinessMember, ActivityLog } from '@/types';
 
 type Panel = 'team' | 'logs';
@@ -22,7 +23,7 @@ const ACTION_LABELS: Record<string, { label: string; color: string }> = {
 };
 
 export function TeamModule() {
-  const { supabase, user, isEmployee } = useSupabase();
+  const { supabase, user, isEmployee, plan } = useSupabase();
   const [panel, setPanel] = useState<Panel>('team');
   const [members, setMembers] = useState<BusinessMember[]>([]);
   const [logs, setLogs] = useState<ActivityLog[]>([]);
@@ -96,6 +97,11 @@ export function TeamModule() {
     setFormSuccess('');
     if (!name || !email || !password) { setFormError('Tous les champs sont requis'); return; }
     if (password.length < 6) { setFormError('Mot de passe : 6 caractères minimum'); return; }
+
+    if (!canAddEmployee(plan, members.length)) {
+      setFormError(`Limite atteinte. Le plan ${PLAN_LABELS[plan]} autorise ${PLAN_LIMITS[plan].employees} employé(s). Passez au plan supérieur dans Paramètres.`);
+      return;
+    }
 
     setAdding(true);
     const { data: { session } } = await supabase.auth.getSession();

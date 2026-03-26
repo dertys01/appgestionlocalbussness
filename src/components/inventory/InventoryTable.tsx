@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { AlertTriangle, Search, ArrowUpDown, Pencil, Trash2, Plus, PackagePlus } from 'lucide-react';
+import { AlertTriangle, Search, ArrowUpDown, Pencil, Trash2, Plus, PackagePlus, Download } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -15,6 +15,8 @@ import {
 } from '@/components/ui/table';
 import { formatCFA } from '@/lib/utils/currency';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
+import { toCSV, downloadCSV } from '@/lib/utils/export';
+import { isFeatureAllowed } from '@/lib/utils/plans';
 import type { Product } from '@/types';
 
 interface InventoryTableProps {
@@ -29,7 +31,20 @@ type SortKey = 'name' | 'stock_qty' | 'price_sell' | 'category';
 type SortDir = 'asc' | 'desc';
 
 export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }: InventoryTableProps) {
-  const { supabase } = useSupabase();
+  const { supabase, plan } = useSupabase();
+
+  const handleExport = () => {
+    const csv = toCSV(products as unknown as Record<string, unknown>[], [
+      { key: 'name', label: 'Produit' },
+      { key: 'sku', label: 'SKU' },
+      { key: 'category', label: 'Catégorie' },
+      { key: 'price_buy', label: 'Prix achat (F)' },
+      { key: 'price_sell', label: 'Prix vente (F)' },
+      { key: 'stock_qty', label: 'Stock' },
+      { key: 'min_stock_level', label: 'Stock min' },
+    ]);
+    downloadCSV(csv, `inventaire-${new Date().toISOString().slice(0, 10)}.csv`);
+  };
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
@@ -78,7 +93,7 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
         </div>
       )}
 
-      {/* Barre recherche + bouton ajouter */}
+      {/* Barre recherche + boutons */}
       <div className="flex gap-2">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
@@ -89,6 +104,12 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
             className="pl-9"
           />
         </div>
+        {isFeatureAllowed(plan, 'exportCsv') && (
+          <Button onClick={handleExport} variant="outline" className="gap-2 shrink-0 border-slate-200">
+            <Download className="h-4 w-4" />
+            <span className="hidden sm:inline">CSV</span>
+          </Button>
+        )}
         <Button onClick={onAdd} className="bg-indigo-600 hover:bg-indigo-700 gap-2 shrink-0">
           <Plus className="h-4 w-4" />
           <span className="hidden sm:inline">Ajouter</span>

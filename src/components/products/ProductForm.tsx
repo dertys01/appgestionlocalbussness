@@ -6,16 +6,18 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { logActivity } from '@/lib/utils/activity';
+import { canAddProduct } from '@/lib/utils/plans';
 import type { Product } from '@/types';
 
 interface ProductFormProps {
   product?: Product | null;
   onClose: () => void;
   onSaved: () => void;
+  currentProductCount?: number;
 }
 
-export function ProductForm({ product, onClose, onSaved }: ProductFormProps) {
-  const { supabase, ownerId, actorName } = useSupabase();
+export function ProductForm({ product, onClose, onSaved, currentProductCount = 0 }: ProductFormProps) {
+  const { supabase, ownerId, actorName, plan } = useSupabase();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [categories, setCategories] = useState<string[]>([]);
@@ -64,6 +66,12 @@ export function ProductForm({ product, onClose, onSaved }: ProductFormProps) {
 
     if (!form.name || !form.price_sell) {
       setError('Le nom et le prix de vente sont obligatoires.');
+      return;
+    }
+
+    // Vérification limite de plan (uniquement pour les nouveaux produits)
+    if (!product && !canAddProduct(plan, currentProductCount)) {
+      setError(`Limite atteinte. Votre plan ${plan} autorise au maximum ${plan === 'free' ? 30 : 200} produits. Passez au plan supérieur dans Paramètres.`);
       return;
     }
 
