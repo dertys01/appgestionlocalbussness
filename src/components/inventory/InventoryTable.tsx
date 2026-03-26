@@ -49,6 +49,8 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+  const PAGE_SIZE = 20;
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -72,6 +74,12 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
         return 0;
       });
   }, [products, search, sortKey, sortDir]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const paginated = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+  // Reset page quand la recherche change
+  useMemo(() => { setCurrentPage(1); }, [search, sortKey, sortDir]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleDelete = async (product: Product) => {
     if (!window.confirm(`Supprimer "${product.name}" ? Cette action est irréversible.`)) return;
@@ -151,7 +159,7 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
                 </TableCell>
               </TableRow>
             ) : (
-              filtered.map((p) => {
+              paginated.map((p) => {
                 const isLow = p.stock_qty < p.min_stock_level;
                 return (
                   <TableRow key={p.id} className="hover:bg-slate-50">
@@ -207,9 +215,30 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
         </Table>
       </div>
 
-      <p className="text-xs text-slate-400 text-right">
-        {filtered.length} / {products.length} produit{products.length > 1 ? 's' : ''}
-      </p>
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-slate-400">
+          {filtered.length} / {products.length} produit{products.length > 1 ? 's' : ''}
+        </p>
+        {totalPages > 1 && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={currentPage === 1}
+              className="px-2 py-1 text-xs rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50"
+            >
+              ←
+            </button>
+            <span className="text-xs text-slate-500">{currentPage} / {totalPages}</span>
+            <button
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={currentPage === totalPages}
+              className="px-2 py-1 text-xs rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50"
+            >
+              →
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
