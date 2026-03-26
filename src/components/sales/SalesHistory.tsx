@@ -1,11 +1,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { ChevronDown, ChevronUp, CreditCard, Smartphone, RefreshCw } from 'lucide-react';
+import { ChevronDown, ChevronUp, CreditCard, Smartphone, RefreshCw, Download } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
+import { toCSV, downloadCSV } from '@/lib/utils/export';
+import { isFeatureAllowed } from '@/lib/utils/plans';
 import type { Sale, SaleItem } from '@/types';
 
 interface SaleWithItems extends Sale {
@@ -13,7 +16,7 @@ interface SaleWithItems extends Sale {
 }
 
 export function SalesHistory() {
-  const { supabase } = useSupabase();
+  const { supabase, plan } = useSupabase();
   const [sales, setSales] = useState<SaleWithItems[]>([]);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -65,15 +68,42 @@ export function SalesHistory() {
         </Card>
       </div>
 
-      {/* Bouton rafraîchir */}
-      <button
-        onClick={fetchSales}
-        disabled={loading}
-        className="flex items-center gap-2 text-sm text-slate-500 hover:text-indigo-600 disabled:opacity-40"
-      >
-        <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-        Actualiser
-      </button>
+      {/* Actions */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={fetchSales}
+          disabled={loading}
+          className="flex items-center gap-2 text-sm text-slate-500 hover:text-indigo-600 disabled:opacity-40"
+        >
+          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+          Actualiser
+        </button>
+        {isFeatureAllowed(plan, 'exportCsv') && sales.length > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const rows = sales.map((s) => ({
+                date: new Date(s.created_at).toLocaleString('fr-FR'),
+                montant: s.total_amount,
+                paiement: s.payment_method === 'momo' ? 'MoMo' : 'Espèces',
+                articles: s.sale_items.map((i) => `${i.quantity}x ${i.product_name}`).join(' | '),
+              }));
+              const csv = toCSV(rows, [
+                { key: 'date', label: 'Date' },
+                { key: 'montant', label: 'Montant (F)' },
+                { key: 'paiement', label: 'Paiement' },
+                { key: 'articles', label: 'Articles' },
+              ]);
+              downloadCSV(csv, `ventes-${new Date().toISOString().slice(0, 10)}.csv`);
+            }}
+            className="gap-2 border-slate-200"
+          >
+            <Download className="h-4 w-4" />
+            CSV
+          </Button>
+        )}
+      </div>
 
       {/* Liste des ventes */}
       {sales.length === 0 && !loading ? (

@@ -65,6 +65,44 @@ export interface ActivityLog {
   created_at: string;
 }
 
+// ── SaaS ──────────────────────────────────────────────────────
+
+export type Plan = 'free' | 'starter' | 'pro';
+
+export interface Organization {
+  id: string;
+  name: string;
+  slug: string;
+  logo_url: string | null;
+  plan: Plan;
+  timezone: string;
+  currency: string;
+  onboarding_done: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface Subscription {
+  id: string;
+  org_id: string;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  plan: Plan;
+  status: 'active' | 'trialing' | 'past_due' | 'canceled' | 'unpaid';
+  current_period_end: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PlanLimits {
+  products: number;       // max nb produits (Infinity = illimité)
+  employees: number;      // max nb employés
+  salesHistoryDays: number; // jours d'historique accessible
+  exportCsv: boolean;
+  reports: boolean;
+  forecast: boolean;
+}
+
 // Panier POS
 export interface CartItem {
   product: Product;
