@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Save, Loader2, CreditCard, Zap, CheckCircle, ExternalLink, Building2 } from 'lucide-react';
+import { Save, Loader2, CreditCard, Zap, CheckCircle, ExternalLink, Building2, Globe, Smartphone } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -18,12 +18,12 @@ const PLANS: { id: Plan; price: string; features: string[] }[] = [
   },
   {
     id: 'starter',
-    price: '5 USD / mois',
+    price: '3 000 FCFA / mois',
     features: ['200 produits', '5 employés', 'Historique 1 an', 'Export CSV', 'Rapports avancés'],
   },
   {
     id: 'pro',
-    price: '15 USD / mois',
+    price: '9 000 FCFA / mois',
     features: ['Produits illimités', 'Employés illimités', 'Historique illimité', 'Prévisions IA', 'Support prioritaire'],
   },
 ];
@@ -247,21 +247,48 @@ export function SettingsModule() {
             })}
           </div>
 
-          {/* Gestion abonnement Stripe */}
-          {plan !== 'free' && (
+          {/* Moyens de paiement */}
+          <div className="space-y-2">
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide px-1">Moyens de paiement</p>
+
+            {/* Stripe */}
             <Card className="border-slate-200">
-              <CardContent className="p-4 flex items-center justify-between">
-                <div>
-                  <p className="text-sm font-medium text-slate-700">Gérer mon abonnement</p>
-                  <p className="text-xs text-slate-400">Factures, changement de carte, annulation</p>
+              <CardContent className="p-4 flex items-center gap-3">
+                <div className="h-9 w-9 rounded-lg bg-indigo-100 flex items-center justify-center shrink-0">
+                  <Globe className="h-5 w-5 text-indigo-600" />
                 </div>
-                <Button variant="outline" size="sm" onClick={openPortal} disabled={loadingPortal} className="gap-2">
-                  {loadingPortal ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
-                  Portail Stripe
-                </Button>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium text-slate-700">Stripe</p>
+                    <Badge className="bg-emerald-100 text-emerald-700 text-xs">Disponible</Badge>
+                  </div>
+                  <p className="text-xs text-slate-400">Carte bancaire internationale</p>
+                </div>
+                {plan !== 'free' && (
+                  <Button variant="outline" size="sm" onClick={openPortal} disabled={loadingPortal} className="gap-2 shrink-0">
+                    {loadingPortal ? <Loader2 className="h-4 w-4 animate-spin" /> : <ExternalLink className="h-4 w-4" />}
+                    Gérer
+                  </Button>
+                )}
               </CardContent>
             </Card>
-          )}
+
+            {/* FedaPay */}
+            <Card className="border-slate-200 opacity-60">
+              <CardContent className="p-4 flex items-center gap-3">
+                <div className="h-9 w-9 rounded-lg bg-orange-100 flex items-center justify-center shrink-0">
+                  <Smartphone className="h-5 w-5 text-orange-500" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-medium text-slate-700">FedaPay</p>
+                    <Badge className="bg-slate-100 text-slate-500 text-xs">Bientôt disponible</Badge>
+                  </div>
+                  <p className="text-xs text-slate-400">Mobile Money (MTN, Moov) · Paiement local</p>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
         </div>
       )}
     </div>

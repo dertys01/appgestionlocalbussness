@@ -33,10 +33,10 @@ export const PLAN_LABELS: Record<Plan, string> = {
   pro: 'Pro',
 };
 
-export const PLAN_PRICES: Record<Plan, { usd: number; label: string }> = {
-  free: { usd: 0, label: 'Gratuit' },
-  starter: { usd: 5, label: '5 USD / mois' },
-  pro: { usd: 15, label: '15 USD / mois' },
+export const PLAN_PRICES: Record<Plan, { cfa: number; label: string }> = {
+  free:    { cfa: 0,     label: 'Gratuit' },
+  starter: { cfa: 3000,  label: '3 000 FCFA / mois' },
+  pro:     { cfa: 9000,  label: '9 000 FCFA / mois' },
 };
 
 export function getLimits(plan: Plan): PlanLimits {
