@@ -1,0 +1,25 @@
+name: Supabase Keep-Alive
+
+on:
+  schedule:
+    # Runs every 5 days at 08:00 UTC (well within the 7-day inactivity limit)
+    - cron: '0 8 */5 * *'
+  workflow_dispatch: # Allow manual trigger from GitHub UI
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase to prevent auto-pause
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://lmygvpruffpspixrsixh.supabase.co/rest/v1/products?select=id&limit=1" \
+            -H "apikey: SUPABASE_KEY_A_ROTATIONNER" \
+            -H "Authorization: Bearer SUPABASE_KEY_A_ROTATIONNER")
+          echo "Supabase response: HTTP $STATUS"
+          if [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 300 ]; then
+            echo "✓ Supabase is alive"
+          else
+            echo "⚠ Unexpected status: $STATUS"
+            exit 1
+          fi
