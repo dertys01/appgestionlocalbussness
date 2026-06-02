@@ -111,7 +111,8 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
       const u = session?.user ?? null;
       setUser(u);
       if (u && event === 'SIGNED_IN') {
-        resolveMembership(u);
+        setLoading(true);
+        resolveMembership(u).finally(() => setLoading(false));
       }
       if (!u) {
         setOwnerId(null);
