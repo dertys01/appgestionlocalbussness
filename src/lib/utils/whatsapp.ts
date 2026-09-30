@@ -48,6 +48,10 @@ export function generateWhatsAppReceiptLink(receipt: SaleReceipt, phone?: string
   ].join('\n');
 
   const encoded = encodeURIComponent(message);
-  const base = phone ? `https://wa.me/${phone}` : `https://wa.me`;
+  // `wa.me?text=` sans barre oblique n'est pas reconnu : le lien s'ouvrait
+  // mais sans message prérempli. La barre oblique est obligatoire.
+  const base = phone
+    ? `https://wa.me/${phone.replace(/[^\d]/g, '')}`
+    : 'https://wa.me/';
   return `${base}?text=${encoded}`;
 }

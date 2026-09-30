@@ -10,12 +10,15 @@ interface LogParams {
   metadata?: Record<string, unknown>;
 }
 
+/** Une purge sur 20 écritures de journal suffit largement à retenir 90 jours. */
+const PRUNE_EVERY_N = 20;
+
 export async function logActivity({ ownerId, actorId, actorEmail, actorName, action, description, metadata }: LogParams) {
   const supabase = createClient();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
-  await db.from('activity_logs').insert({
+  const { error } = await db.from('activity_logs').insert({
     business_owner_id: ownerId,
     actor_id: actorId,
     actor_email: actorEmail,
@@ -24,12 +27,19 @@ export async function logActivity({ ownerId, actorId, actorEmail, actorName, act
     description,
     metadata: metadata ?? null,
   });
+  if (error) console.error('[activity] Échec écriture journal', error);
 
-  // Nettoyage silencieux des logs > 90 jours pour cet owner
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 90);
-  db.from('activity_logs')
-    .delete()
-    .eq('business_owner_id', ownerId)
-    .lt('created_at', cutoff.toISOString());
+  // Nettoyage des logs > 90 jours pour cet owner. Échantillonné (1 vente sur
+  // PRUNE_ODD) pour ne pas ajouter un aller-retour réseau à chaque encaissement.
+  // `await` obligatoire : les builders Supabase sont des thenables lazy, sans
+  // `await` la requête n'est jamais exécutée.
+  if (Math.random() * PRUNE_EVERY_N < 1) {
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - 90);
+    await db
+      .from('activity_logs')
+      .delete()
+      .eq('business_owner_id', ownerId)
+      .lt('created_at', cutoff.toISOString());
+  }
 }

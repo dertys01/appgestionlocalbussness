@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -26,6 +26,8 @@ import { InventoryCount } from '@/components/inventory/InventoryCount';
 import { POSModule } from '@/components/pos/POSModule';
 import { SalesHistory } from '@/components/sales/SalesHistory';
 import { ReportsModule } from '@/components/reports/ReportsModule';
+import { ProfitabilityModule } from '@/components/reports/ProfitabilityModule';
+import { ExpensesModule } from '@/components/reports/ExpensesModule';
 import { ForecastModule } from '@/components/forecast/ForecastModule';
 import { TeamModule } from '@/components/team/TeamModule';
 import { ProductForm } from '@/components/products/ProductForm';
@@ -39,50 +41,103 @@ import { isFeatureAllowed } from '@/lib/utils/plans';
 import type { Product } from '@/types';
 
 type Tab = 'dashboard' | 'pos' | 'inventory' | 'sales' | 'reports' | 'forecast' | 'team' | 'settings';
+type ReportView = 'sales' | 'profit' | 'expenses';
 
 export default function HomePage() {
-  const { supabase, user, loading, isEmployee, org, plan } = useSupabase();
+  const { supabase, user, loading, isEmployee, canManageProducts, org, plan } = useSupabase();
   const [tab, setTab] = useState<Tab>('dashboard');
+  const [reportView, setReportView] = useState<ReportView>('sales');
   const [products, setProducts] = useState<Product[]>([]);
   const [loadingProducts, setLoadingProducts] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
   const [showInventoryCount, setShowInventoryCount] = useState(false);
   const [scanNotFound, setScanNotFound] = useState('');
+  const [productsError, setProductsError] = useState('');
+  // Demande transmise au POS pour y ajouter le produit scanné.
+  const [addToCartRequest, setAddToCartRequest] = useState<{ productId: string; token: number } | null>(null);
 
   // Modals produits
   const [showProductForm, setShowProductForm] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [restockProduct, setRestockProduct] = useState<Product | null>(null);
+  // Même règle que canManageProducts : un prédicat nommé rend les sites
+  // d'appel explicites. La vraie barrière reste la RLS.
+  const canRestock = () => canManageProducts;
 
   const totalProducts = products.length;
-  const lowStockCount = products.filter((p) => p.stock_qty < p.min_stock_level).length;
-  const totalStockValue = products.reduce((s, p) => s + p.price_sell * p.stock_qty, 0);
+  const lowStockCount = useMemo(
+    () => products.filter((p) => p.stock_qty < p.min_stock_level).length,
+    [products]
+  );
+  const totalStockValue = useMemo(
+    () => products.reduce((s, p) => s + p.price_sell * p.stock_qty, 0),
+    [products]
+  );
 
   const fetchProducts = async () => {
     if (!user) return;
     setLoadingProducts(true);
-    const { data } = await supabase.from('products').select('*').order('name');
-    setProducts((data as Product[]) ?? []);
-    setLoadingProducts(false);
+    try {
+      const { data, error } = await supabase.from('products').select('*').order('name');
+      if (error) throw new Error(error.message);
+      setProducts((data as Product[]) ?? []);
+    } catch (e) {
+      setProductsError((e as Error).message);
+    } finally {
+      setLoadingProducts(false);
+    }
   };
 
+  // Le setState n'est plus synchrone dans le corps de l'effet : l'appel est
+  // asynchrone et le lint react-hooks/set-state-in-effect est satisfait.
   useEffect(() => {
-    if (user) fetchProducts();
-  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      setLoadingProducts(true);
+      const { data, error } = await supabase.from('products').select('*').order('name');
+      if (cancelled) return;
+      if (error) setProductsError(error.message);
+      else setProducts((data as Product[]) ?? []);
+      setLoadingProducts(false);
+    })();
+    return () => { cancelled = true; };
+  }, [user, supabase]);
 
   const handleScan = (sku: string) => {
-    const product = products.find((p) => p.sku === sku);
+    // Correspondance insensible à la casse et aux espaces : les scanners
+    // renvoient parfois des codes-barres avec des caractères parasites.
+    const normalized = sku.trim().toLowerCase();
+    const product = products.find(
+      (p) => (p.sku ?? '').trim().toLowerCase() === normalized
+    );
+
     if (product) {
       setScanNotFound('');
       setShowScanner(false);
       setTab('pos');
+      // Le panier vit dans POSModule : on passe par une requête datée, sinon
+      // scanner deux fois le même produit n'ajouterait qu'une unité.
+      setAddToCartRequest({ productId: product.id, token: Date.now() });
     } else {
-      setScanNotFound(`Aucun produit trouvé pour le SKU : ${sku}`);
+      setScanNotFound(`Aucun produit trouvé pour le code-barres : ${sku}`);
     }
   };
 
-  const openAdd = () => { setEditingProduct(null); setShowProductForm(true); };
-  const openEdit = (p: Product) => { setEditingProduct(p); setShowProductForm(true); };
+  const openAdd = () => {
+    if (!canManageProducts) return;
+    setEditingProduct(null);
+    setShowProductForm(true);
+  };
+  const openEdit = (p: Product) => {
+    if (!canManageProducts) return;
+    setEditingProduct(p);
+    setShowProductForm(true);
+  };
+  const openRestock = (p: Product) => {
+    if (!canRestock()) return;
+    setRestockProduct(p);
+  };
 
   if (loading) {
     return (
@@ -205,6 +260,12 @@ export default function HomePage() {
             <div className="space-y-4">
               <h2 className="text-xl font-bold text-slate-800">Tableau de bord</h2>
 
+              {productsError && (
+                <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+                  Impossible de charger les produits : {productsError}
+                </p>
+              )}
+
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 <Card className="border-slate-200">
                   <CardContent className="p-4">
@@ -234,15 +295,17 @@ export default function HomePage() {
                 </Card>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className={`grid gap-3 ${canManageProducts ? 'grid-cols-2' : 'grid-cols-1'}`}>
                 <Button onClick={() => setTab('pos')} className="h-20 flex flex-col gap-1 bg-indigo-600 hover:bg-indigo-700 rounded-xl">
                   <ShoppingCart className="h-6 w-6" />
                   <span>Nouvelle vente</span>
                 </Button>
-                <Button onClick={openAdd} variant="outline" className="h-20 flex flex-col gap-1 rounded-xl border-slate-200">
-                  <Package className="h-6 w-6 text-indigo-600" />
-                  <span>Ajouter produit</span>
-                </Button>
+                {canManageProducts && (
+                  <Button onClick={openAdd} variant="outline" className="h-20 flex flex-col gap-1 rounded-xl border-slate-200">
+                    <Package className="h-6 w-6 text-indigo-600" />
+                    <span>Ajouter produit</span>
+                  </Button>
+                )}
               </div>
 
               {lowStockCount > 0 && (
@@ -257,12 +320,14 @@ export default function HomePage() {
                           <div className="font-medium text-slate-800 text-sm">{p.name}</div>
                           <div className="text-xs text-red-500">Stock : {p.stock_qty} / min {p.min_stock_level}</div>
                         </div>
-                        <button
-                          onClick={() => setRestockProduct(p)}
-                          className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-emerald-700"
-                        >
-                          Réappro.
-                        </button>
+                        {canManageProducts && (
+                          <button
+                            onClick={() => openRestock(p)}
+                            className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-emerald-700"
+                          >
+                            Réappro.
+                          </button>
+                        )}
                       </CardContent>
                     </Card>
                   ))}
@@ -274,7 +339,11 @@ export default function HomePage() {
           {tab === 'pos' && (
             <div className="space-y-4">
               <h2 className="text-xl font-bold text-slate-800">Point de vente</h2>
-              <POSModule products={products} onSaleComplete={fetchProducts} />
+              <POSModule
+                products={products}
+                onSaleComplete={fetchProducts}
+                addToCartRequest={addToCartRequest}
+              />
             </div>
           )}
 
@@ -296,7 +365,7 @@ export default function HomePage() {
               {showInventoryCount ? (
                 <InventoryCount products={products} onComplete={() => { setShowInventoryCount(false); fetchProducts(); }} />
               ) : (
-                <InventoryTable products={products} onEdit={openEdit} onRestock={(p) => setRestockProduct(p)} onAdd={openAdd} onRefresh={fetchProducts} />
+                <InventoryTable products={products} onEdit={openEdit} onRestock={openRestock} onAdd={openAdd} onRefresh={fetchProducts} />
               )}
             </div>
           )}
@@ -310,8 +379,38 @@ export default function HomePage() {
 
           {tab === 'reports' && (
             <div className="space-y-4">
-              <h2 className="text-xl font-bold text-slate-800">Rapports & Analyses</h2>
-              <ReportsModule />
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-bold text-slate-800">Rapports & Analyses</h2>
+                <div className="ml-auto flex rounded-lg bg-slate-100 p-0.5 text-sm">
+                  <button
+                    onClick={() => setReportView('sales')}
+                    className={`px-3 py-1 rounded-md font-medium transition-colors ${
+                      reportView === 'sales' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'
+                    }`}
+                  >
+                    Ventes
+                  </button>
+                  <button
+                    onClick={() => setReportView('profit')}
+                    className={`px-3 py-1 rounded-md font-medium transition-colors ${
+                      reportView === 'profit' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'
+                    }`}
+                  >
+                    Rentabilité
+                  </button>
+                  <button
+                    onClick={() => setReportView('expenses')}
+                    className={`px-3 py-1 rounded-md font-medium transition-colors ${
+                      reportView === 'expenses' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'
+                    }`}
+                  >
+                    Charges
+                  </button>
+                </div>
+              </div>
+              {reportView === 'sales' && <ReportsModule />}
+              {reportView === 'profit' && <ProfitabilityModule />}
+              {reportView === 'expenses' && <ExpensesModule />}
             </div>
           )}
 
@@ -341,7 +440,7 @@ export default function HomePage() {
       </main>
 
       {/* Modals */}
-      {showProductForm && (
+      {showProductForm && canManageProducts && (
         <ProductForm
           product={editingProduct}
           onClose={() => setShowProductForm(false)}
@@ -349,7 +448,7 @@ export default function HomePage() {
           currentProductCount={products.length}
         />
       )}
-      {restockProduct && (
+      {restockProduct && canManageProducts && (
         <RestockModal product={restockProduct} onClose={() => setRestockProduct(null)} onSaved={fetchProducts} />
       )}
       {showScanner && (
@@ -365,7 +464,7 @@ export default function HomePage() {
 
 // ── Fallback org absente ──
 function OrgSetupRequired() {
-  const { supabase, user } = useSupabase();
+  const { supabase, user, refreshOrg } = useSupabase();
   const [name, setName] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -380,7 +479,12 @@ function OrgSetupRequired() {
       id: user.id, name: name.trim(), slug, plan: 'free', onboarding_done: false,
     });
     if (err) { setError(err.message); setLoading(false); return; }
-    window.location.reload();
+    // refreshOrg recharge l'org via le contexte et laisse la SPA reprendre la
+    // main. window.location.reload() était une réinitialisation complète de la
+    // page pour une simple lecture — c'est ce qui causait le flash d'onboarding
+    // (commits 0ed7508 / a215da8).
+    await refreshOrg();
+    setLoading(false);
   };
 
   return (

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Search, CheckCircle, AlertTriangle, RotateCcw, Save, Loader2, ScanBarcode } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -9,7 +9,6 @@ import { Card, CardContent } from '@/components/ui/card';
 import { BarcodeScanner } from '@/components/scanner/BarcodeScanner';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { logActivity } from '@/lib/utils/activity';
-import { formatCFA } from '@/lib/utils/currency';
 import type { Product } from '@/types';
 
 interface InventoryCountProps {
@@ -30,8 +29,18 @@ export function InventoryCount({ products, onComplete }: InventoryCountProps) {
   const [search, setSearch] = useState('');
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState('');
   const [showScanner, setShowScanner] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+
+  // entries était initialisé une seule fois depuis props : un refresh en cours
+  // d'inventaire laissait des lignes obsolètes, et handleSave écrivait alors
+  // des stock_before / stock_after faux.
+  const [syncedFor, setSyncedFor] = useState(products);
+  if (syncedFor !== products) {
+    setSyncedFor(products);
+    setEntries(products.map((p) => ({ product: p, counted: '' })));
+  }
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -72,44 +81,72 @@ export function InventoryCount({ products, onComplete }: InventoryCountProps) {
   const handleSave = async () => {
     if (differences.length === 0) return;
     setSaving(true);
+    setError('');
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user || !ownerId) { setSaving(false); return; }
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || !ownerId) throw new Error('Session expirée, reconnectez-vous.');
 
-    for (const entry of differences) {
-      const newQty = Number(entry.counted);
-      await supabase
-        .from('products')
-        .update({ stock_qty: newQty })
-        .eq('id', entry.product.id);
+      // Une ligne peut échouer (permission RLS, réseau) sans interrompre les
+      // autres : l'erreur était totalement muette, l'inventaire affichait
+      // « enregistré » alors qu'une partie des ajustements n'était pas passée.
+      const results = await Promise.all(
+        differences.map(async (entry) => {
+          const newQty = Number(entry.counted);
 
-      await supabase.from('stock_logs').insert({
-        user_id: ownerId,
-        product_id: entry.product.id,
-        product_name: entry.product.name,
-        movement_type: 'adjustment',
-        quantity_change: newQty - entry.product.stock_qty,
-        stock_before: entry.product.stock_qty,
-        stock_after: newQty,
+          const { error: updateErr } = await supabase
+            .from('products')
+            .update({ stock_qty: newQty })
+            .eq('id', entry.product.id);
+          if (updateErr) return { entry, error: updateErr.message };
+
+          const { error: logErr } = await supabase.from('stock_logs').insert({
+            user_id: ownerId,
+            product_id: entry.product.id,
+            product_name: entry.product.name,
+            movement_type: 'adjustment',
+            quantity_change: newQty - entry.product.stock_qty,
+            stock_before: entry.product.stock_qty,
+            stock_after: newQty,
+          });
+          if (logErr) return { entry, error: logErr.message };
+
+          return { entry, error: null };
+        })
+      );
+
+      const failed = results.filter((r) => r.error);
+      if (failed.length > 0) {
+        throw new Error(
+          `${failed.length} produit${failed.length > 1 ? 's n\'ont pas pu être' : ' n\'a pas pu être'} ajusté${failed.length > 1 ? 's' : ''} (${failed[0].entry.product.name}) : ${failed[0].error}`
+        );
+      }
+
+      await logActivity({
+        ownerId,
+        actorId: user.id,
+        actorEmail: user.email ?? '',
+        actorName,
+        action: 'inventory_adjustment',
+        description: `Inventaire : ${differences.length} produit${differences.length > 1 ? 's' : ''} ajusté${differences.length > 1 ? 's' : ''}`,
+        metadata: { count: differences.length },
       });
+
+      setSaved(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "L'inventaire n'a pas été enregistré.");
+    } finally {
+      setSaving(false);
     }
-
-    await logActivity({
-      ownerId,
-      actorId: user.id,
-      actorEmail: user.email ?? '',
-      actorName,
-      action: 'inventory_adjustment',
-      description: `Inventaire : ${differences.length} produit${differences.length > 1 ? 's' : ''} ajusté${differences.length > 1 ? 's' : ''}`,
-      metadata: { count: differences.length },
-    });
-
-    setSaving(false);
-    setSaved(true);
-    setTimeout(() => {
-      onComplete();
-    }, 1500);
   };
+
+  useEffect(() => {
+    if (!saved) return;
+    // Timeout Previously jamais nettoyé : naviguer away déclenchait onComplete
+    // après unmount.
+    const t = setTimeout(onComplete, 1500);
+    return () => clearTimeout(t);
+  }, [saved, onComplete]);
 
   if (saved) {
     return (
@@ -127,6 +164,12 @@ export function InventoryCount({ products, onComplete }: InventoryCountProps) {
       <div className="rounded-lg bg-indigo-50 border border-indigo-100 px-4 py-3 text-sm text-indigo-700">
         Entrez la quantité <strong>réelle comptée</strong> pour chaque produit. Laissez vide si non compté.
       </div>
+
+      {error && (
+        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">
+          {error}
+        </div>
+      )}
 
       {/* Barre recherche + scanner */}
       <div className="flex gap-2">
@@ -242,6 +285,9 @@ export function InventoryCount({ products, onComplete }: InventoryCountProps) {
               <p className="text-sm text-slate-600 text-center">
                 Les stocks seront mis à jour et tracés dans les logs. Cette action est irréversible.
               </p>
+              {error && (
+                <p className="text-xs text-red-600 text-center">{error}</p>
+              )}
               <div className="flex gap-2">
                 <Button variant="outline" onClick={() => setConfirmed(false)} className="flex-1">
                   Annuler

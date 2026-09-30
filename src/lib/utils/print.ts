@@ -8,7 +8,8 @@ interface PrintData {
   amountGiven: number;
   change: number;
   date: Date;
-  invoiceNumber?: string;
+  /** Numéro de facture normalisée ; absent/null sur les plans non-Pro. */
+  invoiceNumber?: string | null;
   org: Organization;
 }
 
@@ -16,12 +17,23 @@ function fmtCFA(n: number) {
   return n.toLocaleString('fr-FR') + ' FCFA';
 }
 
-function pad(n: number) {
-  return String(n).padStart(5, '0');
-}
-
-export function buildInvoiceNumber(org: Organization): string {
-  return `FAC-${new Date().getFullYear()}-${pad(org.invoice_counter + 1)}`;
+/**
+ * Le reçu est rendu dans une fenêtre `blob:text/html`, qui hérite de l'origine
+ * de l'app : sans échappement, un nom de produit contenant du HTML exécuterait
+ * du JavaScript dans cette origine et pourrait voler la session Supabase
+ * (stockée en localStorage). Toute donnée saisie par l'utilisateur passe ici.
+ */
+function escapeHtml(value: unknown): string {
+  return String(value ?? '').replace(/[&<>"']/g, (c) => {
+    switch (c) {
+      case '&': return '&amp;';
+      case '<': return '&lt;';
+      case '>': return '&gt;';
+      case '"': return '&quot;';
+      case "'": return '&#39;';
+      default: return c;
+    }
+  });
 }
 
 export function printReceipt(data: PrintData) {
@@ -33,30 +45,30 @@ export function printReceipt(data: PrintData) {
 
   const rows = data.items.map((i) => [
     `<tr>`,
-    `<td>${i.product.name}</td>`,
-    `<td style="text-align:center">${i.quantity}</td>`,
-    `<td style="text-align:right">${fmtCFA(i.product.price_sell)}</td>`,
-    `<td style="text-align:right">${fmtCFA(i.product.price_sell * i.quantity)}</td>`,
+    `<td>${escapeHtml(i.product.name)}</td>`,
+    `<td style="text-align:center">${escapeHtml(i.quantity)}</td>`,
+    `<td style="text-align:right">${escapeHtml(fmtCFA(i.product.price_sell))}</td>`,
+    `<td style="text-align:right">${escapeHtml(fmtCFA(i.product.price_sell * i.quantity))}</td>`,
     `</tr>`,
   ].join('')).join('');
 
   const vendorBlock = isNormalized ? [
-    `<p class="bold fs13">FACTURE N° ${data.invoiceNumber}</p>`,
-    `<p class="label">Date : ${dateStr}</p>`,
+    `<p class="bold fs13">FACTURE N° ${escapeHtml(data.invoiceNumber)}</p>`,
+    `<p class="label">Date : ${escapeHtml(dateStr)}</p>`,
     `<div class="divider"></div>`,
     `<p class="bold">VENDEUR</p>`,
-    `<p>${data.org.name}</p>`,
-    data.org.address ? `<p>${data.org.address}</p>` : '',
-    data.org.ifu    ? `<p>IFU : ${data.org.ifu}</p>` : '',
+    `<p>${escapeHtml(data.org.name)}</p>`,
+    data.org.address ? `<p>${escapeHtml(data.org.address)}</p>` : '',
+    data.org.ifu    ? `<p>IFU : ${escapeHtml(data.org.ifu)}</p>` : '',
   ].join('') : [
-    `<h1>${data.org.name}</h1>`,
-    `<p class="center label">${dateStr}</p>`,
+    `<h1>${escapeHtml(data.org.name)}</h1>`,
+    `<p class="center label">${escapeHtml(dateStr)}</p>`,
   ].join('');
 
   const clientBlock = isNormalized && data.clientName ? [
     `<div class="divider"></div>`,
     `<p class="bold">CLIENT</p>`,
-    `<p>${data.clientName}</p>`,
+    `<p>${escapeHtml(data.clientName)}</p>`,
   ].join('') : '';
 
   const footer = !isNormalized
@@ -65,7 +77,7 @@ export function printReceipt(data: PrintData) {
 
   const html = [
     `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">`,
-    `<title>${isNormalized ? data.invoiceNumber : 'Reçu'}</title>`,
+    `<title>${escapeHtml(isNormalized ? data.invoiceNumber : 'Reçu')}</title>`,
     `<style>`,
     `*{margin:0;padding:0;box-sizing:border-box}`,
     `body{font-family:'Courier New',monospace;font-size:12px;color:#000;padding:16px;max-width:320px;margin:auto}`,
@@ -89,11 +101,11 @@ export function printReceipt(data: PrintData) {
     `</tr></thead><tbody>${rows}</tbody></table>`,
     `<div class="divider"></div>`,
     `<table>`,
-    `<tr class="total-row"><td colspan="3">TOTAL</td><td style="text-align:right">${fmtCFA(data.total)}</td></tr>`,
+    `<tr class="total-row"><td colspan="3">TOTAL</td><td style="text-align:right">${escapeHtml(fmtCFA(data.total))}</td></tr>`,
     `<tr><td colspan="3" class="label">Paiement</td><td style="text-align:right">${data.paymentMethod === 'momo' ? 'Mobile Money' : 'Espèces'}</td></tr>`,
     data.paymentMethod === 'cash' && data.amountGiven >= data.total
-      ? `<tr><td colspan="3" class="label">Reçu</td><td style="text-align:right">${fmtCFA(data.amountGiven)}</td></tr>` +
-        `<tr><td colspan="3" class="label bold">Monnaie</td><td style="text-align:right" class="bold">${fmtCFA(data.change)}</td></tr>`
+      ? `<tr><td colspan="3" class="label">Reçu</td><td style="text-align:right">${escapeHtml(fmtCFA(data.amountGiven))}</td></tr>` +
+        `<tr><td colspan="3" class="label bold">Monnaie</td><td style="text-align:right" class="bold">${escapeHtml(fmtCFA(data.change))}</td></tr>`
       : '',
     `</table>`,
     footer,
@@ -105,11 +117,32 @@ export function printReceipt(data: PrintData) {
 
   const blob = new Blob([html], { type: 'text/html' });
   const url = URL.createObjectURL(blob);
-  const win = window.open(url, '_blank', 'width=420,height=620');
-  if (!win) return;
+  const popup = window.open(url, '_blank', 'width=420,height=620');
+
+  if (!popup) {
+    // Popup bloquée : libérer l'URL plutôt que de la laisser fuiter.
+    URL.revokeObjectURL(url);
+    return;
+  }
+  // Alias non nullable : le typeScript ne propage pas le narrowing de `popup`
+  // dans une déclaration de fonction hissée.
+  const win = popup;
+
+  let settled = false;
+  // Déclaration de fonction : hissée, donc utilisable dans le callback plus bas.
+  function close() {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    win.close();
+    URL.revokeObjectURL(url);
+  }
+
+  const timer = setTimeout(() => { win.print(); }, 400);
+
+  // Enregistré avant l'appel à print() : sinon la fermeture peut survenir
+  // avant que le gestionnaire ne soit affecté.
+  win.addEventListener('afterprint', close, { once: true });
+
   win.focus();
-  setTimeout(() => {
-    win.print();
-    win.onafterprint = () => { win.close(); URL.revokeObjectURL(url); };
-  }, 400);
 }

@@ -8,6 +8,9 @@ export interface Product {
   stock_qty: number;
   min_stock_level: number;
   category: string | null;
+  /** false = archivé : invisible en caisse, conservé pour l'historique */
+  is_active: boolean;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 }
