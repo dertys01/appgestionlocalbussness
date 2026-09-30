@@ -1,8 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { PLAN_LIMITS } from '@/lib/utils/plans';
 import { serverError, requireEnv } from '@/lib/utils/server';
-import type { Plan } from '@/types';
 
 const SUPABASE_URL = requireEnv('NEXT_PUBLIC_SUPABASE_URL');
 const SERVICE_ROLE_KEY = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
@@ -35,95 +33,13 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// POST : créer un employé
-export async function POST(req: NextRequest) {
-  try {
-    const jwt = req.headers.get('authorization')?.replace('Bearer ', '');
-    if (!jwt) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 });
-
-    const adminClient = getAdminClient();
-
-    // Vérifie l'identité du appelant
-    const { data: { user }, error: authError } = await adminClient.auth.getUser(jwt);
-    if (authError || !user) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 });
-
-    // Vérifie que ce n'est pas un employé qui essaie d'ajouter quelqu'un
-    const { data: membership } = await adminClient
-      .from('business_members')
-      .select('owner_id')
-      .eq('member_id', user.id)
-      .maybeSingle();
-    if (membership) return NextResponse.json({ error: 'Seul le patron peut ajouter des employés' }, { status: 403 });
-
-    // Vérification limite employés selon le plan
-    const { data: org } = await adminClient
-      .from('organizations')
-      .select('plan')
-      .eq('id', user.id)
-      .maybeSingle();
-    const plan = (org?.plan ?? 'free') as Plan;
-    const { count: memberCount } = await adminClient
-      .from('business_members')
-      .select('*', { count: 'exact', head: true })
-      .eq('owner_id', user.id);
-    const limit = PLAN_LIMITS[plan].employees;
-    if (limit !== Infinity && (memberCount ?? 0) >= limit) {
-      return NextResponse.json(
-        { error: `Limite d'employés atteinte pour le plan ${plan} (max ${limit}). Passez à un plan supérieur.` },
-        { status: 403 }
-      );
-    }
-
-    const { email, password, name } = await req.json();
-    if (!email || !password || !name) {
-      return NextResponse.json({ error: 'Nom, email et mot de passe sont obligatoires' }, { status: 400 });
-    }
-    if (password.length < 6) {
-      return NextResponse.json({ error: 'Mot de passe : 6 caractères minimum' }, { status: 400 });
-    }
-
-    // Crée le compte sans confirmation email
-    const { data: newUser, error: createError } = await adminClient.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
-    });
-
-    if (createError) {
-      const msg = createError.message;
-      let userMessage: string;
-      if (/already registered|already been registered|already exists/i.test(msg)) {
-        userMessage = 'Cet email est déjà utilisé';
-      } else if (/database error/i.test(msg)) {
-        // L'API d'administration de Supabase échoue sur certaines lignes
-        // auth.users (incident en cours sur le projet). Le message brut
-        // "Database error checking email" ne dit rien : ni si l'email est
-        // libre, ni ce qu'il faut faire ensuite. On donne la piste.
-        userMessage =
-          "Le service d'authentification rencontre un incident et ne peut pas vérifier cet email. " +
-          "Si cette adresse a déjà servi à un compte, supprimez-la depuis le dashboard " +
-          '(Authentication > Users) avant de réessayer, ou utilisez une autre adresse.';
-      } else {
-        userMessage = msg;
-      }
-      return NextResponse.json({ error: userMessage }, { status: 400 });
-    }
-
-    // Lie l'employé au patron
-    const { error: memberError } = await adminClient
-      .from('business_members')
-      .insert({ owner_id: user.id, member_id: newUser.user.id, member_name: name });
-
-    if (memberError) {
-      await adminClient.auth.admin.deleteUser(newUser.user.id);
-      return NextResponse.json({ error: memberError.message }, { status: 400 });
-    }
-
-    return NextResponse.json({
-      success: true,
-      member: { id: newUser.user.id, email, name },
-    });
-  } catch (e) {
-    return NextResponse.json(serverError('employees', e), { status: 500 });
-  }
-}
+// POST : supprime.
+//
+// La creation d'un employe passe desormais par une invitation
+// (POST /api/invitations, puis /invitation/[token]). Le patron ne fixe plus le
+// mot de passe de son employe : il ne l'a jamais connu, donc il ne peut ni le
+// transmettre par un canal non chiffre, ni l'oublier. C'etait le chemin le plus
+// probable pour qu'un acces client soit compromis.
+//
+// DELETE /api/employees/[id] reste en place : retirer un employe de l'equipe
+// est une autre operation.

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { UserPlus, Trash2, RefreshCw, Users, ClipboardList, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { UserPlus, Trash2, RefreshCw, Users, ClipboardList, Loader2, Link2, Copy, Check, MessageCircle, XCircle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,6 +11,14 @@ import { canAddEmployee, PLAN_LIMITS, PLAN_LABELS } from '@/lib/utils/plans';
 import type { BusinessMember, ActivityLog } from '@/types';
 
 type Panel = 'team' | 'logs';
+
+type Invitation = {
+  id: string;
+  email: string;
+  role: string;
+  created_at: string;
+  expires_at: string;
+};
 
 const ACTION_LABELS: Record<string, { label: string; color: string }> = {
   login:                  { label: 'Connexion',      color: 'bg-slate-100 text-slate-600' },
@@ -36,14 +44,14 @@ export function TeamModule() {
   const [loadingMembers, setLoadingMembers] = useState(false);
   const [loadingLogs, setLoadingLogs] = useState(false);
 
-  // Formulaire ajout
-  const [name, setName] = useState('');
+  // Formulaire d'invitation
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPwd, setShowPwd] = useState(false);
   const [adding, setAdding] = useState(false);
   const [formError, setFormError] = useState('');
-  const [formSuccess, setFormSuccess] = useState('');
+  const [lastLink, setLastLink] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [invitations, setInvitations] = useState<Invitation[]>([]);
+  const [revokingId, setRevokingId] = useState<string | null>(null);
 
   // Confirmation suppression
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -76,6 +84,23 @@ export function TeamModule() {
       setFetchError((e as Error).message);
     } finally {
       setLoadingMembers(false);
+    }
+  };
+
+  const fetchInvitations = async () => {
+    if (!user) return;
+    try {
+      const token = await getToken();
+      if (!token) return;
+      const res = await fetch('/api/invitations', {
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const json = await res.json();
+      if (!res.ok) return;
+      setInvitations(json.invitations ?? []);
+    } catch {
+      // Les invitations en attente sont un complément : leur échec ne doit pas
+      // masquer la liste des employés, déjà chargée par fetchMembers().
     }
   };
 
@@ -121,50 +146,80 @@ export function TeamModule() {
       fetchLogs(0);
       return;
     }
-    if (panel === 'team') fetchMembers();
+    if (panel === 'team') { fetchMembers(); fetchInvitations(); }
     else { setLogs([]); setLogsPage(0); fetchLogs(0); }
   }, [panel, user, isEmployee]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleAdd = async (e: React.FormEvent) => {
+  const handleInvite = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
-    setFormSuccess('');
-    if (!name || !email || !password) { setFormError('Tous les champs sont requis'); return; }
-    if (password.length < 6) { setFormError('Mot de passe : 6 caractères minimum'); return; }
+    setLastLink('');
 
-    if (!canAddEmployee(plan, members.length)) {
-      setFormError(`Limite atteinte. Le plan ${PLAN_LABELS[plan]} autorise ${PLAN_LIMITS[plan].employees} employé(s). Passez au plan supérieur dans Paramètres.`);
+    if (!email.trim()) { setFormError('Saisissez l\'adresse email de l\'employé'); return; }
+
+    // Les invitations en attente occupent déjà un poste au regard du plan : ne
+    // pas les compter ici laisserait l'échec survenir plus tard, à l'acceptation,
+    // sans raison visible pour l'utilisateur.
+    if (!canAddEmployee(plan, members.length + invitations.length)) {
+      setFormError(
+        `Limite atteinte. Le plan ${PLAN_LABELS[plan]} autorise ${PLAN_LIMITS[plan]} employé(s), invitations en attente comprises. Passez au plan supérieur dans Paramètres.`
+      );
       return;
     }
 
     setAdding(true);
-    setFormError('');
     try {
-      // getToken() rafraîchit la session si le jeton a expiré ; getSession()
-      // seul renvoyait un access_token périmé → 401 incompréhensible.
       const token = await getToken();
       if (!token) throw new Error('Session expirée. Veuillez vous reconnecter.');
 
-      const res = await fetch('/api/employees', {
+      const res = await fetch('/api/invitations', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify({ name, email, password }),
+        body: JSON.stringify({ email }),
       });
-      // Une réponse non JSON (502, page d'erreur Vercel) faisait exploser res.json()
-      // et laissait `adding` bloqué à true.
       const json = await res.json().catch(() => null);
       if (!res.ok) throw new Error(json?.error ?? `Erreur serveur (${res.status})`);
 
-      setFormSuccess(`${name} peut maintenant se connecter avec ses identifiants`);
-      setName(''); setEmail(''); setPassword('');
-      fetchMembers();
+      setLastLink(json.url);
+      setEmail('');
+      fetchInvitations();
     } catch (e) {
       setFormError((e as Error).message);
     } finally {
       setAdding(false);
+    }
+  };
+
+  const copyLink = async (url: string) => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      setFormError('Copie impossible. Sélectionnez le lien et copiez-le manuellement.');
+    }
+  };
+
+  const revokeInvitation = async (id: string) => {
+    setRevokingId(id);
+    setFetchError('');
+    try {
+      const token = await getToken();
+      if (!token) throw new Error('Session expirée. Veuillez vous reconnecter.');
+      const res = await fetch(`/api/invitations?id=${id}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(json?.error ?? `Erreur serveur (${res.status})`);
+      await fetchInvitations();
+    } catch (e) {
+      setFetchError((e as Error).message);
+    } finally {
+      setRevokingId(null);
     }
   };
 
@@ -230,52 +285,100 @@ export function TeamModule() {
 
       {panel === 'team' && (
         <div className="space-y-4">
-          {/* Formulaire ajout */}
+          {/* Invitation */}
           <Card className="border-indigo-200 bg-indigo-50">
             <CardContent className="p-4 space-y-3">
               <div className="flex items-center gap-2 font-semibold text-indigo-700 text-sm">
-                <UserPlus className="h-4 w-4" /> Ajouter un employé
+                <UserPlus className="h-4 w-4" /> Inviter un employé
               </div>
-              <form onSubmit={handleAdd} className="space-y-3">
-                <Input
-                  placeholder="Nom affiché (ex: Marie)"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="bg-white"
-                />
+              <p className="text-xs text-slate-600">
+                Vous saisissez son adresse et vous lui transmettez le lien.
+                <strong> C&apos;est lui qui choisit son mot de passe</strong> : vous n&apos;en
+                connaissez jamais la valeur.
+              </p>
+              <form onSubmit={handleInvite} className="space-y-3">
                 <Input
                   type="email"
-                  placeholder="Email"
+                  placeholder="Adresse email de l'employé"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="bg-white"
                   autoComplete="off"
                 />
-                <div className="relative">
-                  <Input
-                    type={showPwd ? 'text' : 'password'}
-                    placeholder="Mot de passe (min. 6 caractères)"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="bg-white pr-10"
-                    autoComplete="new-password"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPwd(!showPwd)}
-                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400"
-                  >
-                    {showPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-                  </button>
-                </div>
                 {formError && <p className="text-red-500 text-sm">{formError}</p>}
-                {formSuccess && <p className="text-emerald-600 text-sm">{formSuccess}</p>}
                 <Button type="submit" disabled={adding} className="w-full bg-indigo-600 hover:bg-indigo-700 gap-2">
-                  {adding ? <><Loader2 className="h-4 w-4 animate-spin" /> Création...</> : <><UserPlus className="h-4 w-4" /> Créer le compte</>}
+                  {adding
+                    ? <><Loader2 className="h-4 w-4 animate-spin" /> Création du lien…</>
+                    : <><UserPlus className="h-4 w-4" /> Générer le lien</>}
                 </Button>
               </form>
+
+              {lastLink && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50 p-3 space-y-2">
+                  <p className="text-xs font-medium text-emerald-800">
+                    Lien prêt. Transmettez-le à l&apos;employé, il expire dans 7 jours.
+                  </p>
+                  <p className="text-xs text-emerald-700 break-all font-mono bg-white rounded p-2 border border-emerald-100">
+                    {lastLink}
+                  </p>
+                  <div className="flex gap-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => copyLink(lastLink)}
+                      className="flex-1 bg-emerald-600 hover:bg-emerald-700 text-white gap-1.5"
+                    >
+                      {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+                      {copied ? 'Copié' : 'Copier'}
+                    </Button>
+                    <a
+                      href={`https://wa.me/?text=${encodeURIComponent(
+                        `Rejoignez la boutique sur GestionLocal : ${lastLink}`
+                      )}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-medium h-8"
+                    >
+                      <MessageCircle className="h-3.5 w-3.5" /> WhatsApp
+                    </a>
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
+
+          {/* Invitations en attente */}
+          {invitations.length > 0 && (
+            <div className="space-y-2">
+              <h3 className="text-sm font-semibold text-slate-700">
+                Invitations en attente ({invitations.length})
+              </h3>
+              {invitations.map((inv) => (
+                <Card key={inv.id} className="border-amber-200 bg-amber-50">
+                  <CardContent className="p-3 flex items-center gap-3">
+                    <Link2 className="h-4 w-4 text-amber-600 shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-slate-800 truncate">{inv.email}</div>
+                      <div className="text-xs text-amber-700">
+                        Expire le {new Date(inv.expires_at).toLocaleDateString('fr-FR')}
+                      </div>
+                    </div>
+                    {revokingId === inv.id ? (
+                      <Loader2 className="h-4 w-4 animate-spin text-slate-400" />
+                    ) : (
+                      <button
+                        onClick={() => revokeInvitation(inv.id)}
+                        title="Révoquer le lien"
+                        className="p-1.5 text-amber-500 hover:text-red-600 rounded-lg shrink-0"
+                      >
+                        <XCircle className="h-4 w-4" />
+                      </button>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
 
           {/* Liste employés */}
           <div className="space-y-2">
