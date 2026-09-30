@@ -554,16 +554,46 @@ function LoginPage() {
     });
 
     if (error) {
-      console.error('[auth] resetPasswordForEmail', error.message);
-      setError(
-        /redirect|not.*allow|url/i.test(error.message)
-          ? "La demande a été refusée : l'adresse du site n'est pas autorisée. Contactez le support."
-          : "Impossible d'envoyer l'email. Réessayez dans quelques minutes."
-      );
+      console.error('[auth] resetPasswordForEmail', error.status, error.message);
+      const m = error.message || '';
+      if (/redirect|not.*allow/i.test(m)) {
+        setError("La demande a été refusée : l'adresse du site n'est pas autorisée. Contactez le support.");
+      } else if (/rate limit|too many|seconds/i.test(m)) {
+        setError('Trop de demandes envoyées. Patientez une minute avant de réessayer.');
+      } else {
+        // Un envoi d'email ne doit jamais reveler si l'adresse existe : on ne
+        // distingue donc pas "compte inconnu" de "echec d'envoi". Mais on
+        // affiche le detail technique, sinon un incident serveur reste
+        // impossible a diagnostiquer depuis l'ecran.
+        setError(`L'email n'a pas pu être envoyé. Détail technique : ${m}`);
+      }
     } else {
       setInfo('Email envoyé ! Vérifiez votre boîte mail pour réinitialiser votre mot de passe.');
     }
     setLoading(false);
+  };
+
+  // Un "email ou mot de passe incorrect" affiche quand toute requete a
+  // echoue : incident Supabase (500), cle anon corrompue dans Vercel, extension
+  // bloquant fetch... Le message affirmait un mauvais mot de passe sur des
+  // comptes parfaitement valides, ce qui a fait perdre des heures a l'utilisateur.
+  // On ne montre "incorrect" que si Supabase dit explicitement que les
+  // identifiants sont.refuses ; tout le reste est qualifie.
+  const describeAuthError = (err: { message: string; status?: number }) => {
+    const m = err.message || '';
+    if (/invalid login credentials/i.test(m)) {
+      return 'Email ou mot de passe incorrect.';
+    }
+    if (/email rate limit|over_email_send_rate_limit|too many|rate limit/i.test(m)) {
+      return 'Trop de tentatives. Patientez une minute avant de réessayer.';
+    }
+    if (err.status === 0 || /failed to fetch|network|load failed/i.test(m)) {
+      return 'Connexion au service impossible. Vérifiez votre connexion internet.';
+    }
+    if (err.status && err.status >= 500) {
+      return 'Le service d\'authentification rencontre un incident. Réessayez dans quelques minutes.';
+    }
+    return `Connexion impossible (${err.status ?? '?'}). Détail : ${m}`;
   };
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -571,7 +601,10 @@ function LoginPage() {
     setLoading(true);
     setError('');
     const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) setError('Email ou mot de passe incorrect.');
+    if (error) {
+      console.error('[auth] signInWithPassword', error.status, error.message);
+      setError(describeAuthError(error));
+    }
     setLoading(false);
   };
 
