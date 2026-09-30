@@ -49,6 +49,7 @@ point à vérifier après un `git pull`.
 | 9 | `migration_roles.sql` | Séparation des droits employé / patron |
 | 10 | `migration_profitability.sql` | Coût figé à la vente, `get_product_profitability()`, archivage |
 | 11 | `migration_expenses.sql` | Tables `expenses` / `expense_categories`, `get_cash_flow()` |
+| 12 | `migration_invitations.sql` | `employee_invitations`, `redeem_invitation()` |
 
 > `migration_team.sql` doit précéder `migration_saas.sql` : la policy
 > « Employé lit l'org de son patron » référence `business_members`.
@@ -137,6 +138,33 @@ rappelle : le résultat net vaut alors le CA, ce qui ne prouve rien.
 La séparation est appliquée en base (`can_manage_products()`) et reflétée dans
 l'interface via `canManageProducts`. Le rôle se règle dans `business_members.role`
 (`'employee'`, `'manager'`).
+
+## Inviter un employé
+
+Le patron saisit une adresse email et reçoit un lien à transmettre ; l'employé
+ouvre ce lien et **choisit son propre mot de passe**. Le patron ne connaît donc
+jamais ce mot de passe : il ne peut ni le transmettre sur un canal non chiffré,
+ni l'oublier.
+
+Le lien est `/invitation/<token>`, avec un jeton de 32 octets aléatoires
+expirant après 7 jours. Le partage WhatsApp est proposé depuis l'écran
+d'invitation : c'est le canal que la cible utilise déjà.
+
+`redeem_invitation()` fait foi. Elle est `SECURITY DEFINER` parce que l'appelant
+n'est pas encore membre de l'équipe, et elle :
+
+- refuse un jeton inconnu, révoqué, expiré ou déjà consommé (`FOR UPDATE` sérialise
+  deux usages simultanés du même lien) ;
+- **vérifie que le compte correspond à l'email invité** — sans cela, un lien
+  intercepté suffirait à s'attribuer la boutique ;
+- refuse un rôle ou un nom vide.
+
+`purge_accepted_invitations()` nettoie les invitations consommées ; elle n'est
+pas branchée, il faut l'appeler périodiquement (pg_cron ou à la main).
+
+L'ancien `POST /api/employees` a été supprimé : il demandait au patron de fixer
+le mot de passe de son employé. `GET /api/employees` et
+`DELETE /api/employees/[id]` sont inchangés.
 
 ## Email (réinitialisation de mot de passe)
 

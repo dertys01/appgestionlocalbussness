@@ -46,6 +46,11 @@ export function proxy(req: NextRequest) {
   // Routes protégées par rate limiting
   const sensitiveRoutes = [
     '/api/employees',
+    // Invitations et acceptation : la première crée un jeton d'accès, la seconde
+    // crée un compte. Les deux doivent être encadrées comme la création d'un
+    // compte patron.
+    '/api/invitations',
+    '/api/register',
     '/api/stripe/checkout',
     '/api/stripe/portal',
   ];

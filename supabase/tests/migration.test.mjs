@@ -18,6 +18,7 @@ const ORDER = [
   // Doit suivre create_sale : la fonction écrit sale_items.unit_cost.
   'migration_profitability.sql',
   'migration_expenses.sql',
+  'migration_invitations.sql',
 ];
 
 const db = new PGlite();
@@ -115,7 +116,8 @@ if (failures > 0) {
 // Une policy créée sans DROP préalable échoue en 42710 « already exists » et
 // interrompt le script : c'est arrivé sur migration_expenses.sql.
 const REPLAYABLE = ORDER.filter((f) =>
-  ['migration_profitability.sql', 'migration_expenses.sql', 'migration_indexes.sql'].includes(f)
+  ['migration_profitability.sql', 'migration_expenses.sql', 'migration_indexes.sql',
+   'migration_invitations.sql'].includes(f)
 );
 
 console.log(`\n▸ Rejouabilité (${REPLAYABLE.length} migrations incrémentales)`);
@@ -633,6 +635,193 @@ const TODAY = '2026-06-15';
 
   check(`7m. les charges d'un autre tenant sont invisibles`, leaked === 0, `${leaked} vue(s)`);
   check(`7n. le cash-flow n'inclut pas les charges d'autrui`, cfExpenses === 65000, `obtenu ${cfExpenses}`);
+}
+
+// ═══ 8. Invitations d'équipe ═══════════════════════════════
+// Le patron invite un employé par email ; l'employé choisit son propre mot de
+// passe et consommé le lien. redeem_invitation() doit être atomique et refuser
+// un lien déjà utilisé, expiré, ou présenté par un compte au mauvais email.
+console.log('\n▸ Invitations d\'équipe');
+
+const INVITE = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+const EMPLOYE2 = '12121212-1212-1212-1212-121212121212';
+const INTRUS = '13131313-1313-1313-1313-131313131313';
+const TOKEN = 'tok_' + 'a'.repeat(48);
+
+await q(`INSERT INTO auth.users (id,email) VALUES ('${INVITE}','marie@exemple.ci')`);
+await q(`INSERT INTO auth.users (id,email) VALUES ('${EMPLOYE2}','marie@exemple.ci')`);
+await q(`INSERT INTO auth.users (id,email) VALUES ('${INTRUS}','pirate@exemple.ci')`);
+
+await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+await q(`INSERT INTO employee_invitations (owner_id, email, token, role)
+         VALUES ('${PATRON}', 'marie@exemple.ci', '${TOKEN}', 'employee')`);
+{
+  const n = await count(
+    `SELECT count(*) FROM employee_invitations WHERE owner_id='${PATRON}' AND token='${TOKEN}'`);
+  check('8a. invitation créée par le patron', n === 1);
+}
+
+// Le token doit être unique : deux invitations ne peuvent pas le partager.
+{
+  let msg = '';
+  try {
+    await q(`INSERT INTO employee_invitations (owner_id, email, token)
+             VALUES ('${PATRON}', 'autre@exemple.ci', '${TOKEN}')`);
+  } catch (e) { msg = e.message; }
+  check('8b. token en double refusé', /employee_invitations_token_key|duplicate key/.test(msg),
+    msg || 'accepté !');
+}
+
+// L'email est normalisé en minuscules : deux invitations pour la même adresse
+// ne divergent pas à l'orthographe.
+{
+  let msg = '';
+  try {
+    await q(`INSERT INTO employee_invitations (owner_id, email, token)
+             VALUES ('${PATRON}', 'Marie@Exemple.CI', '${'b'.repeat(48)}')`);
+  } catch (e) { msg = e.message; }
+  check('8c. email en majuscules refusé (normalisé)', /employee_invitations_email_lower/.test(msg),
+    msg || 'accepté !');
+}
+
+// Un token trop court est refusé : un lien devinable n'est pas un secret.
+{
+  let msg = '';
+  try {
+    await q(`INSERT INTO employee_invitations (owner_id, email, token)
+             VALUES ('${PATRON}', 'court@exemple.ci', 'trop-court')`);
+  } catch (e) { msg = e.message; }
+  check('8d. token trop court refusé', /employee_invitations_token_len/.test(msg),
+    msg || 'accepté !');
+}
+
+// ── Le cas central : un compte au MAUVAIS email tente de consommer le lien.
+// Sans ce contrôle, un lien intercepté (WhatsApp, capture d'écran) suffit à
+// s'attribuer la boutique.
+{
+  let msg = '';
+  try {
+    await q(`SELECT * FROM redeem_invitation('${TOKEN}', '${INTRUS}', 'Pirate')`);
+  } catch (e) { msg = e.message; }
+  check('8e. email différent de celui invité : refusé',
+    /invite uniquement/.test(msg), msg || 'accepté !');
+
+  const still = await count(
+    `SELECT count(*) FROM employee_invitations WHERE token='${TOKEN}' AND accepted_at IS NULL`);
+  check('8f. l\'invitation reste inutilisée après le refus', still === 1);
+}
+
+// Usage normal : le bon compte, le bon email.
+{
+  const r = await q(`SELECT * FROM redeem_invitation('${TOKEN}', '${EMPLOYE2}', '  Marie Koffi  ')`);
+  const row = r.rows[0];
+  check('8g. remboursement accepté', !!row, 'aucune ligne retournée');
+  check('8h. boutique correcte', row?.owner_id === PATRON, row?.owner_id);
+  check('8i. email.normalisé renvoyé', row?.email === 'marie@exemple.ci', row?.email);
+  check('8j. nom rogné', row?.member_name === 'Marie Koffi', row?.member_name);
+
+  const members = await count(
+    `SELECT count(*) FROM business_members WHERE member_id='${EMPLOYE2}' AND owner_id='${PATRON}'`);
+  check('8k. membre lié à la boutique', members === 1);
+
+  const role = (await q(
+    `SELECT role FROM business_members WHERE member_id='${EMPLOYE2}'`)).rows[0]?.role;
+  check('8l. rôle repris de l\'invitation', role === 'employee', role);
+
+  const accepted = await count(
+    `SELECT count(*) FROM employee_invitations WHERE token='${TOKEN}' AND accepted_at IS NOT NULL`);
+  check('8m. invitation marquée acceptée', accepted === 1);
+}
+
+// Un lien à usage unique ne se réutilise pas.
+{
+  let msg = '';
+  try {
+    await q(`SELECT * FROM redeem_invitation('${TOKEN}', '${EMPLOYE2}', 'Marie Koffi')`);
+  } catch (e) { msg = e.message; }
+  check('8n. second usage refusé', /déjà (été )?utilisée/.test(msg), msg || 'accepté !');
+}
+
+{
+  let msg = '';
+  try {
+    await q(`SELECT * FROM redeem_invitation('inexistant', '${EMPLOYE2}', 'X')`);
+  } catch (e) { msg = e.message; }
+  check('8o. token inconnu refusé', /introuvable|révoquée/.test(msg), msg || 'accepté !');
+}
+
+// Invitation expirée
+{
+  const TOK_EXP = 'c'.repeat(48);
+  await q(`INSERT INTO employee_invitations (owner_id, email, token, expires_at)
+           VALUES ('${PATRON}', 'tardif@exemple.ci', '${TOK_EXP}', now() - interval '1 day')`);
+  await q(`INSERT INTO auth.users (id,email) VALUES ('14141414-1414-1414-1414-141414141414','tardif@exemple.ci')`);
+
+  let msg = '';
+  try {
+    await q(`SELECT * FROM redeem_invitation('${TOK_EXP}', '14141414-1414-1414-1414-141414141414', 'Tardif')`);
+  } catch (e) { msg = e.message; }
+  check('8p. invitation expirée refusée', /expiré/.test(msg), msg || 'accepté !');
+}
+
+// ── RLS : un employé ne doit pas voir les invitations de la boutique, sinon
+// il pourrait s'inviter lui-même ou lire un jeton.
+{
+  await q(`SELECT set_config('request.jwt.claim.sub', '${EMPLOYE2}', false)`);
+  await e('SET ROLE authenticated');
+  let seen = -1;
+  let inserted = false;
+  try {
+    seen = Number((await q(
+      `SELECT count(*)::int c FROM employee_invitations WHERE owner_id='${PATRON}'`)).rows[0].c);
+    await q(`INSERT INTO employee_invitations (owner_id, email, token)
+             VALUES ('${PATRON}',' pirate@exemple.ci','${'d'.repeat(48)}')`);
+    inserted = true;
+  } catch { /* refusé */ }
+  await e('RESET ROLE');
+  check('8q. employé NE LIT PAS les invitations', seen === 0, `${seen} vue(s)`);
+  check('8r. employé NE CRÉE PAS d\'invitation', !inserted);
+}
+
+// Isolation multi-tenant sur les invitations
+{
+  const AUTRE4 = '99999999-9999-9999-9999-999999999999';
+  await q(`INSERT INTO auth.users (id,email) VALUES ('${AUTRE4}','patron2@t.ci')`);
+  await q(`INSERT INTO organizations (id,name,slug) VALUES ('${AUTRE4}','Deux','deux')`);
+
+  await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+  await e('SET ROLE authenticated');
+  const leaked = Number((await q(
+    `SELECT count(*)::int c FROM employee_invitations WHERE owner_id='${AUTRE4}'`)).rows[0].c);
+  await e('RESET ROLE');
+  check('8s. les invitations d\'autre tenant sont invisibles', leaked === 0, `${leaked} vue(s)`);
+}
+
+// redeem_invitation n'est pas appelable par un client authentifié : elle est
+// révoquée au public et accordée au service_role seulement.
+{
+  await q(`SELECT set_config('request.jwt.claim.sub', '${EMPLOYE2}', false)`);
+  await e('SET ROLE authenticated');
+  let denied = false;
+  try {
+    await q(`SELECT * FROM redeem_invitation('${'e'.repeat(48)}', '${EMPLOYE2}', 'X')`);
+  } catch { denied = true; }
+  await e('RESET ROLE');
+  check('8t. un client authentifié ne peut PAS appeler redeem_invitation', denied);
+}
+
+// Purge : seules les invitations acceptées et anciennes sont supprimées.
+{
+  const before = await count(`SELECT count(*) FROM employee_invitations`);
+  await q(`UPDATE employee_invitations
+           SET accepted_at = now() - interval '30 days'
+           WHERE token='${TOKEN}'`);
+  const purged = (await q(`SELECT purge_accepted_invitations(7)`)).rows[0].purge_accepted_invitations;
+  const after = await count(`SELECT count(*) FROM employee_invitations`);
+  check('8u. purge supprime les invitations acceptées et anciennes', Number(purged) === 1,
+    `${purged} purgée(s)`);
+  check('8v. la purge épargne les invitations en attente', after === before - 1,
+    `${before} → ${after}`);
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
