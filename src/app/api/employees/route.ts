@@ -90,10 +90,23 @@ export async function POST(req: NextRequest) {
     });
 
     if (createError) {
-      const msg = createError.message.includes('already registered')
-        ? 'Cet email est déjà utilisé'
-        : createError.message;
-      return NextResponse.json({ error: msg }, { status: 400 });
+      const msg = createError.message;
+      let userMessage: string;
+      if (/already registered|already been registered|already exists/i.test(msg)) {
+        userMessage = 'Cet email est déjà utilisé';
+      } else if (/database error/i.test(msg)) {
+        // L'API d'administration de Supabase échoue sur certaines lignes
+        // auth.users (incident en cours sur le projet). Le message brut
+        // "Database error checking email" ne dit rien : ni si l'email est
+        // libre, ni ce qu'il faut faire ensuite. On donne la piste.
+        userMessage =
+          "Le service d'authentification rencontre un incident et ne peut pas vérifier cet email. " +
+          "Si cette adresse a déjà servi à un compte, supprimez-la depuis le dashboard " +
+          '(Authentication > Users) avant de réessayer, ou utilisez une autre adresse.';
+      } else {
+        userMessage = msg;
+      }
+      return NextResponse.json({ error: userMessage }, { status: 400 });
     }
 
     // Lie l'employé au patron
