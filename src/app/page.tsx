@@ -542,11 +542,27 @@ function LoginPage() {
     e.preventDefault();
     setLoading(true);
     setError('');
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    setInfo('');
+
+    // window.location.origin : le lien part vers la boite mail du client, pas
+    // vers l'API Supabase. Si l'origine n'est pas dans la liste blanche
+    // (Authentication > URL Configuration), Supabase redirige vers le Site URL
+    // configure et le client atterrit sur la page d'accueil au lieu de
+    // /reset-password.
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
       redirectTo: `${window.location.origin}/reset-password`,
     });
-    if (error) setError(error.message);
-    else setInfo('Email envoyé ! Vérifiez votre boîte mail pour réinitialiser votre mot de passe.');
+
+    if (error) {
+      console.error('[auth] resetPasswordForEmail', error.message);
+      setError(
+        /redirect|not.*allow|url/i.test(error.message)
+          ? "La demande a été refusée : l'adresse du site n'est pas autorisée. Contactez le support."
+          : "Impossible d'envoyer l'email. Réessayez dans quelques minutes."
+      );
+    } else {
+      setInfo('Email envoyé ! Vérifiez votre boîte mail pour réinitialiser votre mot de passe.');
+    }
     setLoading(false);
   };
 

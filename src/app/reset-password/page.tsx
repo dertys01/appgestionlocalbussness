@@ -16,11 +16,23 @@ export default function ResetPasswordPage() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    // Supabase injecte la session depuis le hash d'URL lors du PASSWORD_RECOVERY
+    // Course conditionnelle : le SDK detecte la session issue du fragment
+    // d'URL (detectSessionInUrl) et peut emettre PASSWORD_RECOVERY *avant*
+    // que l'abonnement ci-dessous soit en place. Le listener seul laissait
+    // alors l'ecran bloque sur « Validation du lien en cours... ».
+    let active = true;
+    const markReady = () => { if (active) setReady(true); };
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event) => {
-      if (event === 'PASSWORD_RECOVERY') setReady(true);
+      if (event === 'PASSWORD_RECOVERY') markReady();
     });
-    return () => subscription.unsubscribe();
+
+    // Filet : une session de recuperation deja etablie signifie qu'on est pret.
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) markReady();
+    });
+
+    return () => { active = false; subscription.unsubscribe(); };
   }, [supabase]);
 
   const handleSubmit = async (e: React.FormEvent) => {
