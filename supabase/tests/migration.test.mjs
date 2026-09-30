@@ -19,6 +19,7 @@ const ORDER = [
   'migration_profitability.sql',
   'migration_expenses.sql',
   'migration_invitations.sql',
+  'migration_profitability_fix.sql',
 ];
 
 const db = new PGlite();
@@ -117,7 +118,7 @@ if (failures > 0) {
 // interrompt le script : c'est arrivé sur migration_expenses.sql.
 const REPLAYABLE = ORDER.filter((f) =>
   ['migration_profitability.sql', 'migration_expenses.sql', 'migration_indexes.sql',
-   'migration_invitations.sql'].includes(f)
+   'migration_invitations.sql', 'migration_profitability_fix.sql'].includes(f)
 );
 
 console.log(`\n▸ Rejouabilité (${REPLAYABLE.length} migrations incrémentales)`);
@@ -822,6 +823,77 @@ await q(`INSERT INTO employee_invitations (owner_id, email, token, role)
     `${purged} purgée(s)`);
   check('8v. la purge épargne les invitations en attente', after === before - 1,
     `${before} → ${after}`);
+}
+
+// ═══ 9. Correctif marge : lines sans coût figé ═══════════
+// Reproduit le déploiement incomplet : une vente insérée sans unit_cost, comme
+// le faisait la create_sale() d'avant. Le correctif doit la réparer, sans
+// dégrader la protection qui interdit de retoucher un coût une fois figé.
+console.log('\n▸ Correctif du coût figé');
+
+{
+  const ART = '90909090-9090-9090-9090-909090909090';
+  await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+  await q(`INSERT INTO products (id, user_id, name, price_buy, price_sell, stock_qty)
+           VALUES ('${ART}', '${PATRON}', 'Article correctif', 4000, 10000, 50)`);
+
+  // Vente créée « à l'ancienne » : unit_cost non fourni.
+  await q(`INSERT INTO sales (user_id, total_amount, payment_method)
+           VALUES ('${PATRON}', 20000, 'cash')`);
+  const saleId = (await q(
+    `SELECT id FROM sales WHERE user_id='${PATRON}' ORDER BY created_at DESC LIMIT 1`)).rows[0].id;
+  await q(`INSERT INTO sale_items (sale_id, product_id, product_name, quantity, unit_price, subtotal)
+           VALUES ('${saleId}', '${ART}', 'Article correctif', 2, 10000, 20000)`);
+
+  const avant = (await q(
+    `SELECT unit_cost FROM sale_items WHERE sale_id='${saleId}'`)).rows[0].unit_cost;
+  check('9a. vente ancienne sans coût (NULL)', avant === null, String(avant));
+
+  await e(fs.readFileSync(path.join(SQL_DIR, 'migration_profitability_fix.sql'), 'utf8'));
+
+  const apres = (await q(
+    `SELECT unit_cost, product_id_archived FROM sale_items WHERE sale_id='${saleId}'`)).rows[0];
+  check('9b. coût retrospectively rempli (4 000)', Number(apres.unit_cost) === 4000, String(apres.unit_cost));
+  check('9c. product_id_archived renseigné', !!apres.product_id_archived);
+
+  // Le correctif ne doit pas assouplir la protection : un coût figé reste figé.
+  const trig = (await q(
+    `SELECT count(*)::int c FROM pg_trigger WHERE tgname='sale_items_freeze_cost'`)).rows[0].c;
+  check('9d. trigger de figeage toujours présent', trig === 1, `${trig}`);
+
+  let bloque = false;
+  const siId = (await q(
+    `SELECT id FROM sale_items WHERE sale_id='${saleId}'`)).rows[0].id;
+  try { await q(`UPDATE sale_items SET unit_cost = 1 WHERE id='${siId}'`); }
+  catch { bloque = true; }
+  check('9e. modifier un coût figé reste refusé', bloque);
+
+  // Et une vente neuve, créée par la create_sale() courante, fige son coût.
+  await q(`UPDATE products SET stock_qty = 50 WHERE id='${ART}'`);
+  const r = await q(`SELECT create_sale(
+    '[{"product_id":"${ART}","quantity":1}]'::jsonb, 'cash', null) AS v`);
+  // create_sale() renvoie du jsonb : selon le pilote, il arrive en objet ou en
+  // chaîne. On normalise avant d'en lire l'id.
+  const brut = r.rows[0]?.v;
+  const vente = typeof brut === 'string' ? JSON.parse(brut) : brut;
+  check('9f. create_sale() aboutit', !!vente?.id, JSON.stringify(brut)?.slice(0, 120));
+  const neuf = (await q(
+    `SELECT si.unit_cost FROM sale_items si
+      WHERE si.sale_id = '${vente?.id}'`)).rows[0]?.unit_cost;
+  check('9g. nouvelle vente : coût figé (4 000)', Number(neuf) === 4000, String(neuf));
+
+  // La marge n'est plus nulle une fois le coût connu. Le produit a désormais
+  // deux ventes : 2 unités (20 000 F) + 1 unité (10 000 F) = 30 000 F de CA,
+  // pour 3 × 4 000 = 12 000 F de coût.
+  const prof = (await q(`SELECT * FROM get_product_profitability()`)).rows
+    .find((x) => x.name === 'Article correctif');
+  check('9h. CA cumulé = 30 000', Number(prof?.revenue) === 30000, `obtenu ${prof?.revenue}`);
+  check('9i. coût des marchandises = 12 000', Number(prof?.cost_of_goods) === 12000,
+    `obtenu ${prof?.cost_of_goods}`);
+  check('9j. marge brute = 18 000 (30 000 − 12 000)', Number(prof?.gross_profit) === 18000,
+    `obtenu ${prof?.gross_profit}`);
+  check('9k. taux de marge = 60 %', Math.round(Number(prof?.margin_pct)) === 60,
+    `obtenu ${prof?.margin_pct}`);
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);

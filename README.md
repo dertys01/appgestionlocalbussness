@@ -50,6 +50,7 @@ point à vérifier après un `git pull`.
 | 10 | `migration_profitability.sql` | Coût figé à la vente, `get_product_profitability()`, archivage |
 | 11 | `migration_expenses.sql` | Tables `expenses` / `expense_categories`, `get_cash_flow()` |
 | 12 | `migration_invitations.sql` | `employee_invitations`, `redeem_invitation()` |
+| 13 | `migration_profitability_fix.sql` | Remplit les `unit_cost` manquants, recrée le trigger |
 
 > `migration_team.sql` doit précéder `migration_saas.sql` : la policy
 > « Employé lit l'org de son patron » référence `business_members`.
@@ -234,6 +235,30 @@ directe dans `sales` / `sale_items` / `products` depuis le client : c'est ce qui
 permaitait auparavant de décrémenter le stock de façon non atomique et de
 présenter une vente partielle comme réussie. Le prix et le total sont recalculés
 côté serveur ; le client n'envoie que `product_id` et `quantity`.
+
+**L'ordre des migrations est une dépendance de code, pas seulement de tables.**
+`migration_profitability.sql` ajoute `sale_items.unit_cost` et pose un trigger
+qui interdit de le modifier ensuite, mais elle **ne redéfinit pas
+`create_sale()`**, qui vit dans `migration_sales_rpc.sql`. Si la version
+déployée de la fonction précède l'ajout de la colonne, chaque vente insère une
+ligne sans coût — et le trigger interdit ensuite toute correction.
+
+Le symptôme est discret : Rentabilité affiche « coût 0 F », marge brute égale au
+CA, taux 100 %, un tiret dans la colonne %. Un produit sans prix d'achat
+donnerait 0, **jamais NULL** : le NULL prouve que la colonne n'était pas
+fournie.
+
+Après toute modification de `create_sale()`, réappliquez
+`migration_sales_rpc.sql`. Détection :
+
+```sql
+SELECT count(*) FILTER (WHERE unit_cost IS NULL) AS sans_cout, count(*) AS total
+FROM sale_items;
+```
+
+`migration_profitability_fix.sql` remplit l'existant avec le prix d'achat
+**actuel** — exact pour des ventes de test, approximatif sur une boutique avec
+de l'antériorité.
 
 **Le rate limiting de `src/proxy.ts` ne fonctionne pas en serverless.** Le
 compteur vit en mémoire ; sur Vercel chaque instance est isolée et repart vide.
