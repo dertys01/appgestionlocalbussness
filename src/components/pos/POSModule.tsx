@@ -118,8 +118,26 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
     [filtered, visibleCount]
   );
 
+  // Prix effectif de la ligne : prix convenu s'il y en a un, sinon catalogue.
+  const linePrice = (item: CartItem) => item.unitPrice ?? item.product.price_sell;
+
   const total = useMemo(
-    () => cart.reduce((sum, item) => sum + item.product.price_sell * item.quantity, 0),
+    () => cart.reduce((sum, item) => sum + linePrice(item) * item.quantity, 0),
+    [cart]
+  );
+
+  /** Remise totale accordée sur le panier, en FCFA. */
+  const totalDiscount = useMemo(
+    () => cart.reduce(
+      (sum, item) => sum + (item.product.price_sell - linePrice(item)) * item.quantity,
+      0
+    ),
+    [cart]
+  );
+
+  /** Lignes dont le prix convenu passe sous le prix d'achat. */
+  const atLossLines = useMemo(
+    () => cart.filter((i) => linePrice(i) < i.product.price_buy).length,
     [cart]
   );
 
@@ -132,8 +150,19 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
           i.product.id === product.id ? { ...i, quantity: i.quantity + 1 } : i
         );
       }
-      return [...prev, { product, quantity: 1 }];
+      return [...prev, { product, quantity: 1, unitPrice: null }];
     });
+  }, []);
+
+  const setLinePrice = useCallback((productId: string, raw: string) => {
+    setCart((prev) => prev.map((i) => {
+      if (i.product.id !== productId) return i;
+      // Vide = retour au prix catalogue, pas un prix à zéro.
+      if (raw.trim() === '') return { ...i, unitPrice: null };
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n <= 0) return i;
+      return { ...i, unitPrice: n };
+    }));
   }, []);
 
   // Demande d'ajout venue du scanner (page parente). Le `token` permet de
@@ -183,6 +212,9 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
         p_items: cart.map((i) => ({
           product_id: i.product.id,
           quantity: i.quantity,
+          // Absent quand le prix catalogue s'applique : le serveur garde alors
+          // son comportement habituel. Envoyé seulement s'il y a eu marchandage.
+          ...(i.unitPrice !== null ? { unit_price: i.unitPrice } : {}),
         })),
         p_payment_method: paymentMethod,
         p_client_name: clientName.trim() || null,
@@ -199,15 +231,28 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
       // Journal d'activité : best-effort, ne doit pas faire échouer l'encaissement
       const { data: { user } } = await supabase.auth.getUser();
       if (user && ownerId) {
-        const itemsDesc = cart.map((i) => `${i.quantity}x ${i.product.name}`).join(', ');
+        const itemsDesc = cart
+          .map((i) => `${i.quantity}x ${i.product.name}`)
+          .join(', ');
+        // La remise est mentionnée dans le journal : c'est elle qui rend la
+        // concession lisible plus tard, quand le prix convenu n'est plus
+        // déductible de la ligne de vente.
+        const remise = Number((data as { discount_amount?: number })?.discount_amount ?? 0);
         await logActivity({
           ownerId,
           actorId: user.id,
           actorEmail: user.email ?? '',
           actorName,
           action: 'sale',
-          description: `Vente ${formatCFA(serverTotal)} (${paymentMethod === 'cash' ? 'Espèces' : 'MoMo'}) — ${itemsDesc}`,
-          metadata: { sale_id: saleId, total: serverTotal, payment_method: paymentMethod },
+          description:
+            `Vente ${formatCFA(serverTotal)} (${paymentMethod === 'cash' ? 'Espèces' : 'MoMo'}) — ${itemsDesc}` +
+            (remise > 0 ? ` — remise ${formatCFA(remise)}` : ''),
+          metadata: {
+            sale_id: saleId,
+            total: serverTotal,
+            payment_method: paymentMethod,
+            discount: remise,
+          },
         });
       }
 
@@ -215,11 +260,14 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
       // les reçus disaient « Notre Boutique » et s'ouvraient sans destinataire.
       const waLink = generateWhatsAppReceiptLink(
         {
+          // Prix réellement encaissé, pas le prix catalogue : envoyer un reçu
+          // affichant 15 000 F pour une ligne négociée à 12 000 F met le client
+          // et le commerçant en désaccord sur ce qui a été payé.
           items: cart.map((i) => ({
             product_name: i.product.name,
             quantity: i.quantity,
-            unit_price: i.product.price_sell,
-            subtotal: i.product.price_sell * i.quantity,
+            unit_price: linePrice(i),
+            subtotal: linePrice(i) * i.quantity,
           })),
           total: serverTotal,
           paymentMethod,
@@ -347,42 +395,89 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
               Cliquez sur un produit pour l&apos;ajouter
             </div>
           ) : (
-            cart.map((item) => (
-              <Card key={item.product.id} className="shadow-none border-slate-200">
-                <CardContent className="p-3 flex items-center gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-slate-800 truncate">
-                      {item.product.name}
+            cart.map((item) => {
+              const prix = linePrice(item);
+              const remise = item.product.price_sell - prix;
+              const sousCout = prix < item.product.price_buy;
+              return (
+              <Card
+                key={item.product.id}
+                className={`shadow-none ${remise ? 'border-amber-300' : 'border-slate-200'}`}
+              >
+                <CardContent className="p-3 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div className="text-sm font-medium text-slate-800 truncate">
+                        {item.product.name}
+                      </div>
+                      <div className="text-xs text-indigo-600 font-semibold">
+                        {formatCFA(prix * item.quantity)}
+                      </div>
                     </div>
-                    <div className="text-xs text-indigo-600 font-semibold">
-                      {formatCFA(item.product.price_sell * item.quantity)}
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => updateQty(item.product.id, -1)}
+                        className="h-6 w-6 rounded-full border border-slate-200 flex items-center justify-center hover:bg-slate-100"
+                      >
+                        <Minus className="h-3 w-3" />
+                      </button>
+                      <span className="text-sm font-bold w-5 text-center">{item.quantity}</span>
+                      <button
+                        onClick={() => updateQty(item.product.id, 1)}
+                        disabled={item.quantity >= item.product.stock_qty}
+                        className="h-6 w-6 rounded-full border border-slate-200 flex items-center justify-center hover:bg-slate-100 disabled:opacity-40"
+                      >
+                        <Plus className="h-3 w-3" />
+                      </button>
+                      <button
+                        onClick={() => removeFromCart(item.product.id)}
+                        className="ml-1 text-red-400 hover:text-red-600"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button
-                      onClick={() => updateQty(item.product.id, -1)}
-                      className="h-6 w-6 rounded-full border border-slate-200 flex items-center justify-center hover:bg-slate-100"
-                    >
-                      <Minus className="h-3 w-3" />
-                    </button>
-                    <span className="text-sm font-bold w-5 text-center">{item.quantity}</span>
-                    <button
-                      onClick={() => updateQty(item.product.id, 1)}
-                      disabled={item.quantity >= item.product.stock_qty}
-                      className="h-6 w-6 rounded-full border border-slate-200 flex items-center justify-center hover:bg-slate-100 disabled:opacity-40"
-                    >
-                      <Plus className="h-3 w-3" />
-                    </button>
-                    <button
-                      onClick={() => removeFromCart(item.product.id)}
-                      className="ml-1 text-red-400 hover:text-red-600"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+
+                  {/* Prix négocié : tapotable directement, sans menu. Un
+                      marchandage se fait en trois secondes, un écran
+                      supplémentaire le ferait abandonner. */}
+                  <div className="flex items-center gap-2">
+                    <div className="relative flex-1">
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        min="0"
+                        step="1"
+                        value={item.unitPrice ?? ''}
+                        onChange={(e) => setLinePrice(item.product.id, e.target.value)}
+                        placeholder={String(item.product.price_sell)}
+                        aria-label={`Prix unitaire négocié pour ${item.product.name}`}
+                        className="w-full rounded-lg border border-slate-200 px-2 py-1 text-xs pr-14 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 pointer-events-none">
+                        {formatCFA(item.product.price_sell)}
+                      </span>
+                    </div>
+
+                    {remise > 0 && (
+                      <span className="text-[10px] font-medium text-amber-600 whitespace-nowrap">
+                        −{formatCFA(remise * item.quantity)}
+                      </span>
+                    )}
                   </div>
+
+                  {/* Vente sous le prix d'achat : signalée, jamais bloquée.
+                      Écouler un stock aging est un motif légitime ; ce qui ne
+                      l'est pas, c'est de le faire sans le savoir. */}
+                  {sousCout && (
+                    <p className="text-[10px] text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-1">
+                      Sous le prix d&apos;achat ({formatCFA(item.product.price_buy)})
+                    </p>
+                  )}
                 </CardContent>
               </Card>
-            ))
+              );
+            })
           )}
         </div>
 
@@ -412,10 +507,30 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
 
         {/* Total */}
         <div className="border-t border-slate-200 pt-3 space-y-3">
+          {/* Le prix catalogue reste visible quand une remise a été faite :
+              sans lui, le commerçant ne peut plus contrôler ce qu'il
+              concède, et l'écart se normalise sans qu'on s'en aperçoive. */}
+          {totalDiscount > 0 && (
+            <div className="flex justify-between text-xs text-slate-400">
+              <span>Prix catalogue</span>
+              <span className="line-through">{formatCFA(total + totalDiscount)}</span>
+            </div>
+          )}
           <div className="flex justify-between text-lg font-bold text-slate-800">
             <span>Total</span>
             <span className="text-indigo-600">{formatCFA(total)}</span>
           </div>
+          {totalDiscount > 0 && (
+            <div className="flex justify-between text-xs text-amber-600 font-medium">
+              <span>Remise accordée</span>
+              <span>− {formatCFA(totalDiscount)}</span>
+            </div>
+          )}
+          {atLossLines > 0 && (
+            <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-2.5 py-1.5">
+              {atLossLines} ligne(s) sous le prix d&apos;achat. La vente reste possible.
+            </p>
+          )}
 
           {/* Mode de paiement */}
           <div className="grid grid-cols-2 gap-2">

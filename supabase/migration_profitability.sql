@@ -125,7 +125,15 @@ RETURNS TABLE (
   revenue            numeric,
   cost_of_goods      numeric,
   gross_profit       numeric,
-  margin_pct         numeric
+  margin_pct         numeric,
+  -- Prix moyen réellement encaissé. Diffère de unit_price (catalogue courant)
+  -- dès qu'une vente a été négociée : c'est ce prix-là qui a rapporté.
+  avg_sold_price     numeric(12,2),
+  -- Total concédé sur le produit, en FCFA.
+  discount_given     numeric,
+  -- Volume vendu sous le prix d'achat, en unités. Non nul = du stock écoulé
+  -- à perte, ce qu'un commerçant doit voir sans que la vente soit bloquée.
+  units_sold_at_loss bigint
 )
 LANGUAGE sql
 STABLE
@@ -149,7 +157,20 @@ AS $$
           100 * SUM(si.subtotal - si.unit_cost * si.quantity)
           / SUM(si.subtotal), 1)
       ELSE NULL
-    END                                          AS margin_pct
+    END                                          AS margin_pct,
+    CASE
+      WHEN COALESCE(SUM(si.quantity), 0) > 0
+        THEN ROUND(SUM(si.subtotal) / SUM(si.quantity), 2)
+      ELSE NULL
+    END                                          AS avg_sold_price,
+    -- list_price est NULL sur les ventes antérieures au prix négocié : on
+    -- traite l'absence comme « pas de remise » plutôt que de fausser l'écart.
+    COALESCE(SUM(
+      (COALESCE(si.list_price, si.unit_price) - si.unit_price) * si.quantity
+    ), 0)                                        AS discount_given,
+    COALESCE(SUM(si.quantity) FILTER (
+      WHERE si.unit_cost IS NOT NULL AND si.unit_price < si.unit_cost
+    ), 0)                                        AS units_sold_at_loss
   FROM products p
   LEFT JOIN sale_items si ON si.product_id = p.id
   -- Les produits archivés restent hors du tableau de bord : leur historique

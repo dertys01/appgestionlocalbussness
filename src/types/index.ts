@@ -132,4 +132,13 @@ export interface PlanLimits {
 export interface CartItem {
   product: Product;
   quantity: number;
+  /**
+   * Prix unitaire convenu. `null` = prix catalogue inchangé.
+   *
+   * Dans un marché de rue, « c'est le dernier prix » est la règle : bloquer la
+   * modification d'un prix n'est pas une protection, c'est un blocage qui
+   * pousse la vente hors de l'application. Le prix catalogue reste enregistré
+   * côté serveur (`sale_items.list_price`), donc la remise est traçable.
+   */
+  unitPrice: number | null;
 }

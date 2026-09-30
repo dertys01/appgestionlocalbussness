@@ -22,6 +22,12 @@ interface ProfitRow {
   cost_of_goods: number;
   gross_profit: number;
   margin_pct: number | null;
+  /** Prix moyen réellement encaissé (diffère du catalogue si marchandage). */
+  avg_sold_price: number | null;
+  /** Total concédé sur ce produit, en FCFA. */
+  discount_given: number | null;
+  /** Unités vendues sous le prix d'achat. */
+  units_sold_at_loss: number | null;
 }
 
 export function ProfitabilityModule() {
@@ -180,8 +186,13 @@ export function ProfitabilityModule() {
                       produit: r.name,
                       categorie: r.category ?? '',
                       'prix achat': r.unit_cost,
-                      'prix vente': r.unit_price,
+                      'prix vente catalogue': r.unit_price,
+                      // Prix moyen réellement encaissé : la différence avec le
+                      // catalogue est ce que la vente au rabais a coûté.
+                      'prix moyen encaisse': r.avg_sold_price ?? '',
+                      'remise accordee': r.discount_given ?? 0,
                       'unites vendues': r.units_sold,
+                      'unites vendues a perte': r.units_sold_at_loss ?? 0,
                       'CA': r.revenue,
                       'cout marchandises': r.cost_of_goods,
                       'marge brute': r.gross_profit,
@@ -235,6 +246,11 @@ export function ProfitabilityModule() {
                     const pct = r.margin_pct == null ? null : Number(r.margin_pct);
                     const isLoss = pct !== null && pct < 10;
                     const isNoCost = Number(r.unit_cost) === 0 && Number(r.revenue) > 0;
+                    // Prix moyen réellement encaissé vs prix catalogue. Écart non
+                    // nul = marchandage sur ce produit.
+                    const avg = r.avg_sold_price == null ? null : Number(r.avg_sold_price);
+                    const remise = Number(r.discount_given ?? 0);
+                    const aPerte = Number(r.units_sold_at_loss ?? 0);
                     return (
                       <tr key={r.id} className="border-b border-slate-100 last:border-0">
                         <td className="py-2 pr-3">
@@ -242,14 +258,31 @@ export function ProfitabilityModule() {
                           {r.category && (
                             <div className="text-xs text-slate-400">{r.category}</div>
                           )}
+                          {aPerte > 0 && (
+                            <div className="text-[10px] text-red-600 mt-0.5">
+                              {aPerte} vendu(s) à perte
+                            </div>
+                          )}
                         </td>
                         <td className="py-2 text-right text-slate-500 tabular-nums">
                           {Number(r.unit_cost) > 0 ? formatCFA(r.unit_cost) : '—'}
                         </td>
                         <td className="py-2 text-right text-slate-500 tabular-nums">
                           {formatCFA(r.unit_price)}
+                          {avg !== null && Math.abs(avg - Number(r.unit_price)) >= 1 && (
+                            <div className="text-[10px] text-amber-600">
+                              moyen {formatCFA(avg)}
+                            </div>
+                          )}
                         </td>
-                        <td className="py-2 text-right text-slate-500 tabular-nums">{r.units_sold}</td>
+                        <td className="py-2 text-right text-slate-500 tabular-nums">
+                          {r.units_sold}
+                          {remise > 0 && (
+                            <div className="text-[10px] text-amber-600">
+                              −{formatCFA(remise)}
+                            </div>
+                          )}
+                        </td>
                         <td className="py-2 text-right text-slate-700 tabular-nums font-medium">
                           {formatCFA(r.revenue)}
                         </td>

@@ -47,14 +47,19 @@ point à vérifier après un `git pull`.
 | 7 | `migration_indexes.sql` | Index |
 | 8 | `migration_sales_rpc.sql` | `create_sale()`, `bump_rate_limit()`, CHECK stock |
 | 9 | `migration_roles.sql` | Séparation des droits employé / patron |
-| 10 | `migration_profitability.sql` | Coût figé à la vente, `get_product_profitability()`, archivage |
-| 11 | `migration_expenses.sql` | Tables `expenses` / `expense_categories`, `get_cash_flow()` |
-| 12 | `migration_invitations.sql` | `employee_invitations`, `redeem_invitation()` |
-| 13 | `migration_profitability_fix.sql` | Remplit les `unit_cost` manquants, recrée le trigger |
-| 14 | `migration_suppliers.sql` | `suppliers`, `products.supplier_id`, `products_with_supplier` |
+| 10 | `migration_price_override.sql` | Prix négocié par ligne, `sale_items.list_price` |
+| 11 | `migration_profitability.sql` | Coût figé à la vente, `get_product_profitability()`, archivage |
+| 12 | `migration_expenses.sql` | Tables `expenses` / `expense_categories`, `get_cash_flow()` |
+| 13 | `migration_invitations.sql` | `employee_invitations`, `redeem_invitation()` |
+| 14 | `migration_profitability_fix.sql` | Remplit les `unit_cost` manquants, recrée le trigger |
+| 15 | `migration_suppliers.sql` | `suppliers`, `products.supplier_id`, `products_with_supplier` |
 
-`APPLY_MIGRATIONS.sql` concatène les 14 migrations pour partir d'une base
+`APPLY_MIGRATIONS.sql` concatène les 15 migrations pour partir d'une base
 vide. Sur une base existante, appliquer la seule migration concernée.
+
+`migration_price_override.sql` doit précéder `migration_profitability.sql` :
+c'est elle qui crée `sale_items.list_price`, colonne lue par
+`avg_sold_price` et `discount_given`.
 
 **Les 14 migrations sont rejouables** : `IF NOT EXISTS` sur les tables et les
 index, `DROP … IF EXISTS` avant chaque policy et chaque trigger. Recollé sur une
@@ -174,6 +179,32 @@ caisse (60 par tranche, `PRODUCT_PAGE_SIZE`) et les charges (50 par tranche,
 « Afficher plus »). La recherche porte toujours sur la liste entière, pas sur la
 tranche affichée ; le scanner cherche dans `products` complet et ajoute donc
 correctement un produit hors écran.
+
+## Prix négocié
+
+Une ligne de panier porte un prix unitaire **convenu**. Le prix catalogue n'est
+plus imposé — c'était un blocage, pas une protection : dans un marché de rue,
+« c'est le dernier prix » est la règle, et un commerçant qui ne peut pas
+modifier un prix vend en espèces, hors de l'application.
+
+Le prix catalogue est conservé dans `sale_items.list_price`, ce qui rend chaque
+remise traçable. C'est la traçabilité qui remplace le verrou, pas l'inverse : le
+risque réel d'un prix transmis par le client n'est pas un client malveillant,
+c'est une caisse qui cache du chiffre.
+
+**La vente à perte est autorisée.** Bloquer un prix inférieur au prix d'achat
+empêcherait d'écouler un stock aging, qui est précisément le moment où le
+commerçant en a besoin. Elle est signalée : avertissement en caisse,
+`units_sold_at_loss` en rentabilité, `at_loss_count` dans la réponse de
+`create_sale()`.
+
+Refusés : prix nul, négatif ou non numérique (une vente gratuite n'a pas de
+sens marchand), et deux prix différents pour le même article dans le même panier
+— ambigu, et prendre le minimum ou le maximum permettrait de fabriquer un panier
+truqué.
+
+`get_product_profitability()` expose `avg_sold_price` (prix moyen réellement
+encaissé), `discount_given` (total concédé) et `units_sold_at_loss`.
 
 ## Fournisseurs
 
