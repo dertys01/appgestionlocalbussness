@@ -40,9 +40,11 @@ ALTER TABLE employee_invitations ENABLE ROW LEVEL SECURITY;
 -- renverrait son patron, il pourrait donc lire les invitations de la boutique
 -- et s'inviter lui-même. On vérifie explicitement qu'il est le patron.
 DROP POLICY IF EXISTS "invitations_owner_read" ON employee_invitations;
+DROP POLICY IF EXISTS "invitations_owner_read" ON employee_invitations;
 CREATE POLICY "invitations_owner_read" ON employee_invitations
   FOR SELECT USING (auth.uid() = owner_id);
 
+DROP POLICY IF EXISTS "invitations_owner_write" ON employee_invitations;
 DROP POLICY IF EXISTS "invitations_owner_write" ON employee_invitations;
 CREATE POLICY "invitations_owner_write" ON employee_invitations
   FOR ALL USING (auth.uid() = owner_id) WITH CHECK (auth.uid() = owner_id);
@@ -50,7 +52,6 @@ CREATE POLICY "invitations_owner_write" ON employee_invitations
 -- Index sur owner_id : le patron liste ses invitations à chaque affichage.
 CREATE INDEX IF NOT EXISTS idx_employee_invitations_owner
   ON employee_invitations(owner_id, created_at DESC);
-
 
 -- ─── 2. Remboursement atomique ──────────────────────────────
 -- L'employé s'inscrit depuis un lien ; cette fonction consume l'invitation et
@@ -137,7 +138,6 @@ COMMENT ON TABLE employee_invitations IS
   'Invitations d''équipe en attente. Le jeton est un secret à usage unique, '
   'expirant après 7 jours ; il est transmis au patron pour un envoi WhatsApp '
   'ou tout autre canal, jamais par email.';
-
 
 -- ─── 3. Nettoyage ───────────────────────────────────────────
 -- Les invitations acceptées ne servent plus à rien. Sans cette étape la table

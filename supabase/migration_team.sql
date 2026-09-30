@@ -31,19 +31,23 @@ ALTER TABLE business_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE activity_logs    ENABLE ROW LEVEL SECURITY;
 
 -- business_members : le patron gère ses membres
+DROP POLICY IF EXISTS "owner_manage_members" ON business_members;
 CREATE POLICY "owner_manage_members" ON business_members
   USING (auth.uid() = owner_id)
   WITH CHECK (auth.uid() = owner_id);
 
 -- business_members : chaque employé voit son propre lien
+DROP POLICY IF EXISTS "member_view_own" ON business_members;
 CREATE POLICY "member_view_own" ON business_members
   FOR SELECT USING (auth.uid() = member_id);
 
 -- activity_logs : insert libre (actor = soi-même)
+DROP POLICY IF EXISTS "activity_insert" ON activity_logs;
 CREATE POLICY "activity_insert" ON activity_logs
   FOR INSERT WITH CHECK (auth.uid() = actor_id);
 
 -- activity_logs : le patron et ses employés peuvent lire
+DROP POLICY IF EXISTS "activity_read" ON activity_logs;
 CREATE POLICY "activity_read" ON activity_logs
   FOR SELECT USING (
     auth.uid() = business_owner_id OR
@@ -65,15 +69,18 @@ $$ LANGUAGE sql SECURITY DEFINER STABLE;
 -- Mise à jour des politiques RLS existantes pour supporter les employés
 
 DROP POLICY IF EXISTS "user_products" ON products;
+DROP POLICY IF EXISTS "user_products" ON products;
 CREATE POLICY "user_products" ON products
   USING (user_id = get_business_owner_id())
   WITH CHECK (user_id = get_business_owner_id());
 
 DROP POLICY IF EXISTS "user_sales" ON sales;
+DROP POLICY IF EXISTS "user_sales" ON sales;
 CREATE POLICY "user_sales" ON sales
   USING (user_id = get_business_owner_id())
   WITH CHECK (user_id = get_business_owner_id());
 
+DROP POLICY IF EXISTS "user_sale_items" ON sale_items;
 DROP POLICY IF EXISTS "user_sale_items" ON sale_items;
 CREATE POLICY "user_sale_items" ON sale_items
   USING (
@@ -84,6 +91,7 @@ CREATE POLICY "user_sale_items" ON sale_items
     )
   );
 
+DROP POLICY IF EXISTS "user_stock_logs" ON stock_logs;
 DROP POLICY IF EXISTS "user_stock_logs" ON stock_logs;
 CREATE POLICY "user_stock_logs" ON stock_logs
   USING (user_id = get_business_owner_id())

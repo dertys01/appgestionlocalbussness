@@ -91,24 +91,29 @@ $$;
 -- remplacent pas.
 DROP POLICY IF EXISTS "user_products"  ON products;
 DROP POLICY IF EXISTS "products_read"  ON products;
+DROP POLICY IF EXISTS "products_read" ON products;
 CREATE POLICY "products_read" ON products
   FOR SELECT USING (user_id = get_business_owner_id());
 
 -- Écriture : patron / manager uniquement.
 DROP POLICY IF EXISTS "products_insert" ON products;
+DROP POLICY IF EXISTS "products_insert" ON products;
 CREATE POLICY "products_insert" ON products
   FOR INSERT WITH CHECK (can_manage_products() AND user_id = get_business_owner_id());
 
+DROP POLICY IF EXISTS "products_update" ON products;
 DROP POLICY IF EXISTS "products_update" ON products;
 CREATE POLICY "products_update" ON products
   FOR UPDATE USING (can_manage_products())
   WITH CHECK (can_manage_products() AND user_id = get_business_owner_id());
 
 DROP POLICY IF EXISTS "products_delete" ON products;
+DROP POLICY IF EXISTS "products_delete" ON products;
 CREATE POLICY "products_delete" ON products
   FOR DELETE USING (can_manage_products());
 
 -- ─── 4. Journal d'activité : le tenant est imposé par la base ─
+DROP POLICY IF EXISTS "activity_insert" ON activity_logs;
 DROP POLICY IF EXISTS "activity_insert" ON activity_logs;
 CREATE POLICY "activity_insert" ON activity_logs
   FOR INSERT WITH CHECK (
@@ -117,6 +122,7 @@ CREATE POLICY "activity_insert" ON activity_logs
   );
 
 -- ─── 5. Un employé ne peut pas créer sa propre organisation ─
+DROP POLICY IF EXISTS "Patron crée son org" ON organizations;
 DROP POLICY IF EXISTS "Patron crée son org" ON organizations;
 CREATE POLICY "Patron crée son org" ON organizations
   FOR INSERT WITH CHECK (

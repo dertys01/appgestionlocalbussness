@@ -36,9 +36,11 @@ ALTER TABLE expense_categories ENABLE ROW LEVEL SECURITY;
 
 -- Séparée par organisation : chaque boutique voit son seul plan de comptes.
 DROP POLICY IF EXISTS "expense_categories_read" ON expense_categories;
+DROP POLICY IF EXISTS "expense_categories_read" ON expense_categories;
 CREATE POLICY "expense_categories_read" ON expense_categories
   FOR SELECT USING (user_id = get_business_owner_id());
 
+DROP POLICY IF EXISTS "expense_categories_write" ON expense_categories;
 DROP POLICY IF EXISTS "expense_categories_write" ON expense_categories;
 CREATE POLICY "expense_categories_write" ON expense_categories
   FOR ALL USING (can_manage_products() AND user_id = get_business_owner_id())
@@ -105,19 +107,23 @@ ALTER TABLE expenses ENABLE ROW LEVEL SECURITY;
 
 -- Lecture : tout le tenant, comme les ventes.
 DROP POLICY IF EXISTS "expenses_read" ON expenses;
+DROP POLICY IF EXISTS "expenses_read" ON expenses;
 CREATE POLICY "expenses_read" ON expenses
   FOR SELECT USING (user_id = get_business_owner_id());
 
 -- Écriture : patron / manager, même règle que le catalogue.
 DROP POLICY IF EXISTS "expenses_insert" ON expenses;
+DROP POLICY IF EXISTS "expenses_insert" ON expenses;
 CREATE POLICY "expenses_insert" ON expenses
   FOR INSERT WITH CHECK (can_manage_products() AND user_id = get_business_owner_id());
 
+DROP POLICY IF EXISTS "expenses_update" ON expenses;
 DROP POLICY IF EXISTS "expenses_update" ON expenses;
 CREATE POLICY "expenses_update" ON expenses
   FOR UPDATE USING (can_manage_products())
   WITH CHECK (can_manage_products() AND user_id = get_business_owner_id());
 
+DROP POLICY IF EXISTS "expenses_delete" ON expenses;
 DROP POLICY IF EXISTS "expenses_delete" ON expenses;
 CREATE POLICY "expenses_delete" ON expenses
   FOR DELETE USING (can_manage_products());

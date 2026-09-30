@@ -56,6 +56,13 @@ point à vérifier après un `git pull`.
 `APPLY_MIGRATIONS.sql` concatène les 14 migrations pour partir d'une base
 vide. Sur une base existante, appliquer la seule migration concernée.
 
+**Les 14 migrations sont rejouables** : `IF NOT EXISTS` sur les tables et les
+index, `DROP … IF EXISTS` avant chaque policy et chaque trigger. Recollé sur une
+base déjà peuplée, le fichier ne doit rien casser — c'est vérifié par un test
+qui applique chaque migration deux fois. Une policy sans `DROP` préalable
+échoue en 42710, une table sans `IF NOT EXISTS` en 42P07, et dans les deux cas
+le script s'interrompt en cours de route.
+
 > `migration_team.sql` doit précéder `migration_saas.sql` : la policy
 > « Employé lit l'org de son patron » référence `business_members`.
 > `migration_profitability.sql` doit suivre `migration_sales_rpc.sql` :
