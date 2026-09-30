@@ -5,28 +5,61 @@ const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
 
-// Rate limiting simple par IP : max 3 tentatives par heure
-const attempts = new Map<string, { count: number; resetAt: number }>();
+const MAX_ATTEMPTS_PER_HOUR = 3;
 
-function isRateLimited(ip: string): boolean {
-  const now = Date.now();
-  const entry = attempts.get(ip);
-  if (!entry || now > entry.resetAt) {
-    attempts.set(ip, { count: 1, resetAt: now + 60 * 60 * 1000 });
+/**
+ * Rate limiting par IP : max 3 inscriptions par heure.
+ *
+ * Le comptage passe par la service role pour être partagé entre toutes les
+ * instances serverless. Un limiteur en mémoire (Map) serait recréé vide à
+ * chaque invocation et ne limiterait rien en production.
+ *
+ * Si la fonction SQL est absente (migration pas encore appliquée), on laisse
+ * passer plutôt que de rendre l'inscription indisponible.
+ */
+// Le client Supabase n'est typé sur aucun schéma : les signatures de RPC ne
+// sont pas connues tant que les types ne sont pas générés.
+interface RpcCapable {
+  rpc(
+    fn: string,
+    args: Record<string, unknown>
+  ): PromiseLike<{ data: unknown; error: { message: string } | null }>;
+}
+
+async function isRateLimited(client: unknown, ip: string): Promise<boolean> {
+  const db = client as RpcCapable;
+
+  try {
+    const { data, error } = await db.rpc('bump_rate_limit', {
+      p_key: `register:${ip}`,
+      p_max: MAX_ATTEMPTS_PER_HOUR,
+      p_window_seconds: 3600,
+    });
+
+    if (error) {
+      console.error('[register] rate limit indisponible', error.message);
+      return false;
+    }
+
+    return data === true;
+  } catch (e) {
+    console.error('[register] rate limit indisponible', e);
     return false;
   }
-  if (entry.count >= 3) return true;
-  entry.count++;
-  return false;
 }
 
 export async function POST(req: NextRequest) {
   try {
     const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
-    if (isRateLimited(ip)) {
+
+    const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
+
+    if (await isRateLimited(adminClient, ip)) {
       return NextResponse.json(
         { error: 'Trop de tentatives. Réessayez dans une heure.' },
-        { status: 429 }
+        { status: 429, headers: { 'Retry-After': '3600' } }
       );
     }
 
@@ -40,10 +73,6 @@ export async function POST(req: NextRequest) {
     if (businessName.trim().length < 2) {
       return NextResponse.json({ error: 'Nom de boutique trop court.' }, { status: 400 });
     }
-
-    const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
 
     // Créer le compte sans confirmation email
     const { data: newUser, error: signUpError } = await adminClient.auth.admin.createUser({
