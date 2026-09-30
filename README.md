@@ -138,6 +138,43 @@ La séparation est appliquée en base (`can_manage_products()`) et reflétée da
 l'interface via `canManageProducts`. Le rôle se règle dans `business_members.role`
 (`'employee'`, `'manager'`).
 
+## Email (réinitialisation de mot de passe)
+
+Le reset de mot de passe ne fonctionne qu'avec un fournisseur SMTP configuré.
+Sans lui, aucun email ne part et un client qui perd son accès est perdu.
+
+**Supabase** → Authentication → **Emails** → *Configure email provider*
+
+| Champ | Valeur |
+|---|---|
+| SMTP Host | `smtp.resend.com` |
+| SMTP Port | `465` |
+| SMTP Username | `resend` |
+| SMTP Password | clé API Resend (permission *Sending access*) |
+| From address | `onboarding@resend.dev` |
+
+Aucune de ces valeurs ne transite par le code : la clé reste entre Resend et
+Supabase, il n'y a donc rien à ajouter dans `.env.local` ni dans Vercel.
+
+**Authentication** → **URL Configuration** — indispensable, sinon le lien de
+récupération renvoie vers la page d'accueil au lieu de l'écran de nouveau mot
+de passe :
+
+| Champ | Valeur |
+|---|---|
+| Site URL | `https://appgestionlocalbussness.vercel.app` |
+| Redirect URLs | `https://appgestionlocalbussness.vercel.app/reset-password` |
+
+Puis *Emails* → *Templates* → activer **Reset password**.
+
+Deux points à connaître :
+
+- Activer un SMTP custom bride Supabase à **30 emails/heure**
+  (Authentication → Rate Limits → *Email sent*). C'est une protection, pas un bug.
+- `onboarding@resend.dev` ne livre qu'à l'adresse du compte Resend. Tester avec
+  une adresse tierce exige un domaine vérifié dans Resend (SPF + DKIM + DMARC),
+  seul moyen de débloquer des utilisateurs externes.
+
 ## Points d'attention
 
 **Les ventes passent par `create_sale()`.** Ne réintroduisez pas d'insertion
