@@ -3,8 +3,6 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   ShoppingCart,
-  Plus,
-  Minus,
   Trash2,
   CreditCard,
   Smartphone,
@@ -45,6 +43,17 @@ type PaymentMethod = 'cash' | 'momo';
  * au-delà, le défilement saccade sur un appareil d'entrée de gamme.
  */
 const PRODUCT_PAGE_SIZE = 60;
+
+/**
+ * Quantité affichée : « 1,5 » et non « 1.50000001 » ni « 2 » pour 2 kg.
+ *
+ * Le point décimal est LOCAL — un Amount bruto s'affiche avec un point chez
+ * les anglophones, une virgule chez nous. `maximumFractionDigits: 3` évite la
+ *Notation scientifique sur les grands nombres.
+ */
+function formatQty(n: number): string {
+  return n.toLocaleString('fr-FR', { maximumFractionDigits: 3 });
+}
 
 interface ReceiptState {
   saleId: string;
@@ -154,6 +163,23 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
     });
   }, []);
 
+  /**
+   * Quantité saisie. Le champ est décimal : « 1,2 » comme « 1.2 » sont acceptés
+   * — un clavier de téléphone au Bénin produit les deux.
+   *
+   * La valeur est bornée au stock, mais pas refusée au-delà : la caisse doit
+   * pouvoir terminer sa saisie. C'est create_sale() qui refuse, avec un message
+   * qui nomme le produit et les deux quantités.
+   */
+  const setLineQty = useCallback((productId: string, raw: string) => {
+    setCart((prev) => prev.map((i) => {
+      if (i.product.id !== productId) return i;
+      const n = Number(String(raw).replace(',', '.'));
+      if (!Number.isFinite(n) || n <= 0) return i;
+      return { ...i, quantity: Math.min(n, 1000000) };
+    }));
+  }, []);
+
   const setLinePrice = useCallback((productId: string, raw: string) => {
     setCart((prev) => prev.map((i) => {
       if (i.product.id !== productId) return i;
@@ -182,16 +208,6 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
     setScanError('');
     addToCart(product);
   }, [addToCartRequest, products, addToCart]);
-
-  const updateQty = useCallback((productId: string, delta: number) => {
-    setCart((prev) =>
-      prev
-        .map((i) =>
-          i.product.id === productId ? { ...i, quantity: i.quantity + delta } : i
-        )
-        .filter((i) => i.quantity > 0)
-    );
-  }, []);
 
   const removeFromCart = useCallback((productId: string) => {
     setCart((prev) => prev.filter((i) => i.product.id !== productId));
@@ -349,7 +365,9 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
                   {p.name}
                 </div>
                 <div className="mt-2 font-bold text-indigo-600">{formatCFA(p.price_sell)}</div>
-                <div className="text-xs text-slate-400">Stock : {p.stock_qty}</div>
+                <div className="text-xs text-slate-400">
+                  Stock : {formatQty(p.stock_qty)} {p.unit ?? 'pce'}
+                </div>
               </button>
             );
           })}
@@ -415,20 +433,23 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
                       </div>
                     </div>
                     <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        onClick={() => updateQty(item.product.id, -1)}
-                        className="h-6 w-6 rounded-full border border-slate-200 flex items-center justify-center hover:bg-slate-100"
-                      >
-                        <Minus className="h-3 w-3" />
-                      </button>
-                      <span className="text-sm font-bold w-5 text-center">{item.quantity}</span>
-                      <button
-                        onClick={() => updateQty(item.product.id, 1)}
-                        disabled={item.quantity >= item.product.stock_qty}
-                        className="h-6 w-6 rounded-full border border-slate-200 flex items-center justify-center hover:bg-slate-100 disabled:opacity-40"
-                      >
-                        <Plus className="h-3 w-3" />
-                      </button>
+                      {/* Quantité saisie directement : un poids vendu ne
+                          s'atteint pas avec des boutons +/-. Le champ reste
+                          numérique pour le clavier mobile, et l'unité du
+                          produit s'affiche à côté. */}
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        step="any"
+                        min="0"
+                        value={item.quantity}
+                        onChange={(e) => setLineQty(item.product.id, e.target.value)}
+                        aria-label={`Quantité pour ${item.product.name}`}
+                        className="w-14 rounded-lg border border-slate-200 px-1.5 py-0.5 text-sm font-bold text-center focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      />
+                      <span className="text-[10px] text-slate-400 w-8">
+                        {item.product.unit ?? 'pce'}
+                      </span>
                       <button
                         onClick={() => removeFromCart(item.product.id)}
                         className="ml-1 text-red-400 hover:text-red-600"

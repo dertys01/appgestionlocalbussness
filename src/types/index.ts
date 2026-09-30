@@ -8,6 +8,14 @@ export interface Product {
   stock_qty: number;
   min_stock_level: number;
   category: string | null;
+  /**
+   * Unité de vente : `pce`, `kg`, `L`, `botte`, `sachet`…
+   *
+   * Affichage seulement — la quantité est un nombre dans cette unité. Un produit
+   * vendu en sachet et au kilo doit être deux produits, sinon il faudrait deux
+   * stocks et un facteur de conversion.
+   */
+  unit: string;
   /** false = archivé : invisible en caisse, conservé pour l'historique */
   is_active: boolean;
   archived_at: string | null;

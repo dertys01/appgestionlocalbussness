@@ -15,10 +15,17 @@ const ORDER = [
   'migration_indexes.sql',
   'migration_sales_rpc.sql',
   'migration_roles.sql',
-  // Crée sale_items.list_price : doit précéder get_product_profitability(),
-  // qui lit cette colonne pour avg_sold_price et discount_given.
+  // Les trois migrations qui redéfinissent create_sale(). Vues dans cet ordre,
+  // la dernière version l'emporte : vente au poids (NUMERIC + virgule).
+  //
+  // ⚠ Toute migration antérieure listée APRÈS celles-ci réécrirait
+  //   create_sale() dans sa version entière — y compris pendant le test de
+  //   rejouabilité, qui les rejoue dans l'ordre du tableau. C'est exactement ce
+  //   qui faisait échouer la section « vente au poids » : migration_sales_rpc.sql
+  //   rejouée réinstallait la version à quantités entières, et 1,5 kg était
+  //   refusé avec « Ligne de panier invalide ».
   'migration_price_override.sql',
-  // Doit suivre create_sale : la fonction écrit sale_items.unit_cost.
+  'migration_weighted_sales.sql',
   'migration_profitability.sql',
   'migration_expenses.sql',
   'migration_invitations.sql',
@@ -124,7 +131,33 @@ if (failures > 0) {
 // 42P07 et interrompt le script — c'est ce qu'il a rencontré.
 //
 // Une policy créée sans DROP préalable échoue de même en 42710.
+//
+// ⚠ La rejouabilité teste que le SCRIPT ne casse pas, pas qu'il produit le bon
+// état. Rejouer chaque migration dans l'ordre du tableau réinstalle
+// create_sale() dans sa version la plus ancienne — migration_sales_rpc.sql la
+// redéfinit entièrement. La base se retrouvait avec une fonction à quantités
+// entières alors que la colonne était numérique, et la section « vente au
+// poids » échouait sur 1,5 kg.
+//
+// On rejoue donc dans l'ordre d'application reel, et on remet la derniere
+// version de chaque fonction a la fin : c'est l'etat attendu apres coup.
 const REPLAYABLE = ORDER;
+
+const DERNIERE_VERSION = [
+  // Fonctions redefinies par plusieurs migrations : seule la derniere compte.
+  'migration_sales_rpc.sql',      // bump_rate_limit, purge_rate_limits
+  'migration_price_override.sql', // create_sale (prix negocié)
+  'migration_weighted_sales.sql', // create_sale (NUMERIC) — doit rester en tete
+  'migration_profitability.sql',  // archive_product, restore_product, gel du cout
+  'migration_expenses.sql',       // seed_expense_categories, get_cash_flow
+  'migration_invitations.sql',    // redeem_invitation, purge_accepted_invitations
+  'migration_roles.sql',          // can_manage_products
+  // ⚠ migration_saas.sql est volontairement ABSENTE. Elle contient le seed
+  //   « créer une organisation pour tout utilisateur Auth existant », qui
+  //   n'est pas une redéfinition de fonction : la rejouer donnait une
+  //   organisation fantôme à l'employé du test 4k et cassait deux assertions.
+  //   Un seed de données n'a pas à être rejoué pour que le schéma soit bon.
+];
 
 console.log(`\n▸ Rejouabilité (${REPLAYABLE.length} migrations incrémentales)`);
 {
@@ -141,6 +174,28 @@ console.log(`\n▸ Rejouabilité (${REPLAYABLE.length} migrations incrémentales
     }
   }
   if (replayOk) console.log(`  ✓ les ${REPLAYABLE.length} migrations se rejouent sans erreur`);
+
+  // Remise en état : la rejouabilité a réinstallé les fonctions dans leur
+  // version la plus ancienne (create_sale() est redéfinie en entier par
+  // migration_sales_rpc.sql). Sans cette étape, la suite teste une base qui
+  // ne correspond à aucun déploiement réel.
+  for (const file of DERNIERE_VERSION) {
+    const sql = fs.readFileSync(path.join(SQL_DIR, file), 'utf8')
+      .replace(/CREATE EXTENSION[^;]*;/gi, '');
+    try {
+      await db.exec(sql);
+    } catch (err) {
+      failures++;
+      console.log(`  ✗ ${file} (état final)\n    ${err.message}`);
+    }
+  }
+  const def = (await q(
+    `SELECT pg_get_functiondef(oid) AS d FROM pg_proc WHERE proname = 'create_sale'`)).rows[0]?.d ?? '';
+  const etatFinal = def.includes("replace(e->>'quantity', ',', '.')");
+  if (!etatFinal) {
+    failures++;
+    console.log('  ✗ create_sale() n\'est pas revenue à la version quantité décimale');
+  }
 }
 
 // ─── 2. Jeu de données de test ──────────────────────────────
@@ -1209,6 +1264,157 @@ console.log('\n▸ Changement de signature de retour');
     cols.includes('avg_sold_price'), cols.join(', '));
   check('12d. … discount_given', cols.includes('discount_given'));
   check('12e. … units_sold_at_loss', cols.includes('units_sold_at_loss'));
+}
+
+// ═══ 13. Vente au poids ═══════════════════════════════════
+// Le blocage n° 1 du marché : tout se vend au kilo, et la quantité était un
+// INTEGER validé par `^[0-9]+$`. 1,2 kg de riz était impossible à enregistrer.
+console.log('\n▸ Vente au poids');
+
+const RIZ = 'e0e0e0e0-0000-4000-8000-000000000001';
+await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+await q(`INSERT INTO products (id, user_id, name, unit, price_buy, price_sell, stock_qty)
+         VALUES ('${RIZ}', '${PATRON}', 'Riz', 'kg', 600, 750, 50)`);
+
+const vendreK = async (items) => {
+  const r = await q(`SELECT create_sale('${items}'::jsonb, 'cash', null) AS v`);
+  const b = r.rows[0]?.v;
+  return typeof b === 'string' ? JSON.parse(b) : b;
+};
+const ligneK = (saleId) => q(`SELECT * FROM sale_items WHERE sale_id='${saleId}'`);
+
+{
+  // 1. Le cas de base : 1,5 kg à 750 F = 1 125 F.
+  const v = await vendreK(JSON.stringify([{ product_id: RIZ, quantity: 1.5 }]));
+  const li = (await ligneK(v.id)).rows[0];
+  check('13a. 1,5 kg accepté', Number(li.quantity) === 1.5, String(li.quantity));
+  check('13b. total = 1,5 × 750', Number(v.total_amount) === 1125, String(v.total_amount));
+}
+
+{
+  // 2. La virgule décimale : un clavier de téléphone au Bénin produit « 1,2 ».
+  //    Sans conversion, ::numeric échoue et la vente est refusée sans raison
+  //    visible.
+  const v = await vendreK(JSON.stringify([{ product_id: RIZ, quantity: '2,25' }]));
+  const li = (await ligneK(v.id)).rows[0];
+  check('13c. virgule décimale acceptée (2,25)', Number(li.quantity) === 2.25, String(li.quantity));
+  check('13d. total = 2,25 × 750', Number(v.total_amount) === 1687.5, String(v.total_amount));
+}
+
+{
+  // 3. Trois décimales : 1,250 kg se pèse au gramme près.
+  const v = await vendreK(JSON.stringify([{ product_id: RIZ, quantity: '1.250' }]));
+  check('13e. trois décimales acceptées', Number((await ligneK(v.id)).rows[0].quantity) === 1.25);
+}
+
+{
+  // 4. Le stock décrémente proprement, sans reste fantôme.
+  const stock = (await q(`SELECT stock_qty FROM products WHERE id='${RIZ}'`)).rows[0].stock_qty;
+  // 50 − 1,5 − 2,25 − 1,25 = 45
+  check('13f. stock décrémenté sans arrondi', Number(stock) === 45, `stock = ${stock}`);
+}
+
+{
+  // 5. L'agrégation additionne les fractions, elle ne les écrase pas.
+  //    1,2 + 0,8 = 2 et non 1 : c'est le cas des deux scans du même lot.
+  const v = await vendreK(JSON.stringify([
+    { product_id: RIZ, quantity: 1.2 },
+    { product_id: RIZ, quantity: 0.8 },
+  ]));
+  const li = (await ligneK(v.id)).rows;
+  check('13g. fractions agrégées en une ligne', li.length === 1, `${li.length} ligne(s)`);
+  check('13h. 1,2 + 0,8 = 2 (pas 1)', Number(li[0].quantity) === 2, String(li[0].quantity));
+  check('13i. total = 2 × 750', Number(v.total_amount) === 1500, String(v.total_amount));
+}
+
+{
+  // 6. Le prix négocié s'applique au poids, pas au total.
+  //    « 700 le kilo au lieu de 750 » — pas « 1400 les 2 kg ».
+  const v = await vendreK(JSON.stringify([{ product_id: RIZ, quantity: 2, unit_price: 700 }]));
+  check('13j. prix négocié au poids', Number(v.total_amount) === 1400, String(v.total_amount));
+  check('13k. remise = 50 × 2', Number(v.discount_amount) === 100, String(v.discount_amount));
+}
+
+{
+  // 7. Stock insuffisant : la comparaison est décimale, pas entière.
+  //    Avec 1,5 kg restants, vendre 1,6 doit échouer — un cast en int
+  //    tronquerait 1,6 à 1 et autoriserait la vente.
+  await q(`UPDATE products SET stock_qty = 1.5 WHERE id='${RIZ}'`);
+  let msg = '';
+  try {
+    await vendreK(JSON.stringify([{ product_id: RIZ, quantity: 1.6 }]));
+  } catch (e) { msg = e.message; }
+  check('13l. 1,5 en stock, 1,6 demandé : refusé', /Stock insuffisant/.test(msg), msg || 'accepté !');
+
+  // Et 1,5 en stock, 1,5 demandé : passe, le stock tombe à zéro.
+  const v = await vendreK(JSON.stringify([{ product_id: RIZ, quantity: 1.5 }]));
+  const stock = (await q(`SELECT stock_qty FROM products WHERE id='${RIZ}'`)).rows[0].stock_qty;
+  check('13m. 1,5 en stock, 1,5 demandé : accepté', !!v.id, msg);
+  check('13n. stock exactement à zéro', Number(stock) === 0, `stock = ${stock}`);
+}
+
+{
+  // 8. Le stock ne peut pas devenir négatif par fractions.
+  await q(`UPDATE products SET stock_qty = 0.4 WHERE id='${RIZ}'`);
+  let refuse = false;
+  try {
+    await vendreK(JSON.stringify([{ product_id: RIZ, quantity: 0.5 }]));
+  } catch { refuse = true; }
+  check('13o. 0,4 en stock, 0,5 demandé : refusé', refuse);
+  const stock = (await q(`SELECT stock_qty FROM products WHERE id='${RIZ}'`)).rows[0].stock_qty;
+  check('13p. stock resté à 0,4 (pas de décrément partiel)', Number(stock) === 0.4, `stock = ${stock}`);
+}
+
+{
+  // 9. Garde-fous sur la quantité.
+  let msg = '';
+  try {
+    await q(`UPDATE products SET stock_qty = 100 WHERE id='${RIZ}'`);
+    await vendreK(JSON.stringify([{ product_id: RIZ, quantity: 0 }]));
+  } catch (e) { msg = e.message; }
+  check('13q. quantité nulle refusée', /Ligne de panier invalide/.test(msg), msg || 'acceptée !');
+
+  msg = '';
+  try { await vendreK(JSON.stringify([{ product_id: RIZ, quantity: -2 }])); }
+  catch (e) { msg = e.message; }
+  check('13r. quantité négative refusée', /Ligne de panier invalide/.test(msg), msg || 'acceptée !');
+
+  msg = '';
+  try { await vendreK(JSON.stringify([{ product_id: RIZ, quantity: 'un kilo' }])); }
+  catch (e) { msg = e.message; }
+  check('13s. quantité non numérique refusée', /Ligne de panier invalide/.test(msg), msg || 'acceptée !');
+
+  msg = '';
+  try { await vendreK(JSON.stringify([{ product_id: RIZ, quantity: '1.2.3' }])); }
+  catch (e) { msg = e.message; }
+  check('13t. deux points refusés', /Ligne de panier invalide/.test(msg), msg || 'acceptée !');
+}
+
+{
+  // 10. L'unité est enregistrée et n'affecte aucun calcul.
+  const u = (await q(`SELECT unit FROM products WHERE id='${RIZ}'`)).rows[0].unit;
+  check('13u. unité enregistrée', u === 'kg', u);
+
+  // Un produit créé avant la migration — donc sans unité explicite — vaut « pce »
+  // et non NULL : l'écran affiche toujours quelque chose. P1 vient de la section
+  // create_sale, il existe donc.
+  const defaut = (await q(`SELECT unit FROM products WHERE id = '${P1}'`)).rows[0]?.unit;
+  check('13v. unité par défaut = pce', defaut === 'pce', String(defaut));
+}
+
+{
+  // 11. La marge au kilo reste juste : c'est le but de l'opération.
+  //     Nom distinct de P2 (« Huile 1L » existe déjà) : sinon .find() renvoie
+  //     le premier homonyme, qui n'a jamais été vendu.
+  await q(`INSERT INTO products (id, user_id, name, unit, price_buy, price_sell, stock_qty)
+           VALUES ('e1e1e1e1-0000-4000-8000-000000000002', '${PATRON}', 'Huile litre', 'L', 800, 1000, 20)`);
+  await vendreK(JSON.stringify([{ product_id: 'e1e1e1e1-0000-4000-8000-000000000002', quantity: 2.5 }]));
+  const prof = (await q(`SELECT * FROM get_product_profitability()`)).rows
+    .find((x) => x.name === 'Huile litre');
+  check('13w. CA = 2,5 × 1 000', Number(prof.revenue) === 2500, `obtenu ${prof.revenue}`);
+  check('13x. coût = 2,5 × 800', Number(prof.cost_of_goods) === 2000, `obtenu ${prof.cost_of_goods}`);
+  check('13y. marge = 500', Number(prof.gross_profit) === 500, `obtenu ${prof.gross_profit}`);
+  check('13z. taux = 20 %', Math.round(Number(prof.margin_pct)) === 20, `obtenu ${prof.margin_pct}`);
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);

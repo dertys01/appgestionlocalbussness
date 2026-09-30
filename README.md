@@ -48,18 +48,36 @@ point à vérifier après un `git pull`.
 | 8 | `migration_sales_rpc.sql` | `create_sale()`, `bump_rate_limit()`, CHECK stock |
 | 9 | `migration_roles.sql` | Séparation des droits employé / patron |
 | 10 | `migration_price_override.sql` | Prix négocié par ligne, `sale_items.list_price` |
-| 11 | `migration_profitability.sql` | Coût figé à la vente, `get_product_profitability()`, archivage |
-| 12 | `migration_expenses.sql` | Tables `expenses` / `expense_categories`, `get_cash_flow()` |
-| 13 | `migration_invitations.sql` | `employee_invitations`, `redeem_invitation()` |
-| 14 | `migration_profitability_fix.sql` | Remplit les `unit_cost` manquants, recrée le trigger |
-| 15 | `migration_suppliers.sql` | `suppliers`, `products.supplier_id`, `products_with_supplier` |
+| 11 | `migration_weighted_sales.sql` | Quantités décimales, `products.unit` |
+| 12 | `migration_profitability.sql` | Coût figé à la vente, `get_product_profitability()`, archivage |
+| 13 | `migration_expenses.sql` | Tables `expenses` / `expense_categories`, `get_cash_flow()` |
+| 14 | `migration_invitations.sql` | `employee_invitations`, `redeem_invitation()` |
+| 15 | `migration_profitability_fix.sql` | Remplit les `unit_cost` manquants, recrée le trigger |
+| 16 | `migration_suppliers.sql` | `suppliers`, `products.supplier_id`, `products_with_supplier` |
 
-`APPLY_MIGRATIONS.sql` concatène les 15 migrations pour partir d'une base
+`APPLY_MIGRATIONS.sql` concatène les 16 migrations pour partir d'une base
 vide. Sur une base existante, appliquer la seule migration concernée.
 
-`migration_price_override.sql` doit précéder `migration_profitability.sql` :
-c'est elle qui crée `sale_items.list_price`, colonne lue par
-`avg_sold_price` et `discount_given`.
+**L'ordre des migrations qui redéfinissent `create_sale()` est significatif.**
+Trois fichiers le font, en versions successives :
+
+| Fichier | Apporte |
+|---|---|
+| `migration_sales_rpc.sql` | version initiale, quantités entières |
+| `migration_price_override.sql` | prix négocié par ligne |
+| `migration_weighted_sales.sql` | **quantités décimales — doit rester en tête** |
+
+Un `CREATE OR REPLACE` réécrit la fonction **en entier**. Rejouer
+`migration_sales_rpc.sql` après `migration_weighted_sales.sql` réinstalle donc
+silencieusement la version à quantités entières : la colonne reste numérique
+mais 1,5 kg est refusé avec « Ligne de panier invalide ». C'est ce que le test
+de rejouabilité a révélé ; il remet maintenant la dernière version de chaque
+fonction après avoir tout rejoué, et vérifie que `create_sale()` est bien revenue
+à la forme décimale.
+
+`migration_weighted_sales.sql` doit aussi précéder
+`migration_profitability.sql` (colonne `list_price`) et suivre
+`migration_price_override.sql` (dont elle reprend le prix négocié).
 
 **Les 15 migrations sont rejouables** : `IF NOT EXISTS` sur les tables et les
 index, `DROP … IF EXISTS` avant chaque policy, chaque trigger et chaque fonction
@@ -195,6 +213,29 @@ caisse (60 par tranche, `PRODUCT_PAGE_SIZE`) et les charges (50 par tranche,
 « Afficher plus »). La recherche porte toujours sur la liste entière, pas sur la
 tranche affichée ; le scanner cherche dans `products` complet et ajoute donc
 correctement un produit hors écran.
+
+## Vente au poids
+
+`quantity`, `stock_qty`, `min_stock_level` et les trois colonnes de `stock_logs`
+passent en `NUMERIC(12,3)`. Au Bénin tout se vend au poids — le riz, l'huile, le
+sucre, le lait en poudre. Un commerçant qui ne peut pas enregistrer 1,2 kg sort
+son téléphone pour rien, et la vente part en espèces hors de l'application.
+
+`products.unit` accompagne la quantité pour que l'écran affiche « 1,2 kg » et
+non « 1,2 ». L'unité n'affecte aucun calcul : la quantité reste un nombre dans
+l'unité du produit, et les prix restent unitaires dans cette unité.
+
+**La virgule décimale est acceptée.** Un clavier de téléphone au Bénin saisit
+« 1,2 » autant que « 1.2 » ; sans conversion préalable, `::numeric` échoue et la
+vente est refusée pour une raison invisible.
+
+**Un produit vendu en sachet et au kilo doit être deux produits.** C'est le
+choix classique des petites caisses. L'alternative — deux unités et un facteur
+de conversion — double la surface d'erreur pour un besoin rare.
+
+Le `ALTER COLUMN TYPE` est gardé par un test sur le type courant : le refaire
+échoue en « cannot alter type of a column used by a view or rule », puisque
+`get_product_profitability()` référence déjà la colonne.
 
 ## Prix négocié
 

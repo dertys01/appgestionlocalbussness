@@ -17,6 +17,13 @@ interface ProductFormProps {
   currentProductCount?: number;
 }
 
+/**
+ * Unités proposées. La liste reste ouverte côté formulaire (saisie libre) :
+ * les unités d'un marché ne sont pas prévisibles, et « calabash » ou
+ * « tine » doivent pouvoir être saisis.
+ */
+const UNITES = ['pce', 'kg', 'g', 'L', 'sachet', 'botte', 'panier', 'tablette'];
+
 export function ProductForm({ product, onClose, onSaved, currentProductCount = 0 }: ProductFormProps) {
   const { supabase, ownerId, actorName, plan } = useSupabase();
   const [loading, setLoading] = useState(false);
@@ -57,6 +64,7 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
     stock_qty: product ? String(product.stock_qty) : '',
     min_stock_level: product ? String(product.min_stock_level) : '5',
     supplier_id: product?.supplier_id ?? null,
+    unit: product?.unit ?? 'pce',
   }));
 
   const set = (key: string, value: string | null) =>
@@ -100,11 +108,13 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
       category: form.category || null,
       price_buy: parseFloat(form.price_buy) || 0,
       price_sell: parseFloat(form.price_sell) || 0,
-      stock_qty: parseInt(form.stock_qty) || 0,
-      min_stock_level: parseInt(form.min_stock_level) || 5,
+      // parseFloat et non parseInt : 1,5 kg de riz est une quantité valide.
+      stock_qty: parseFloat(form.stock_qty) || 0,
+      min_stock_level: parseFloat(form.min_stock_level) || 5,
       // null explicite : sans cela, retirer le fournisseur d'un article ne
       // detachait rien, la colonne gardait l'ancienne valeur.
       supplier_id: form.supplier_id,
+      unit: form.unit.trim() || 'pce',
     };
 
     let err;
@@ -244,12 +254,43 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
             </div>
           </div>
 
+          {/* Unité — affichage seulement, mais indispensable : sans elle
+              l'écran affiche « 1,5 » et le commerçant ne sait pas de quoi. */}
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-slate-700">
+              Unité de vente
+              <span className="text-slate-400 font-normal ml-1">
+                (le stock et les quantités s&apos;expriment dans cette unité)
+              </span>
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {UNITES.map((u) => (
+                <button
+                  key={u}
+                  type="button"
+                  onClick={() => set('unit', u)}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
+                    form.unit === u
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'border-slate-200 text-slate-500 hover:border-indigo-400'
+                  }`}
+                >
+                  {u}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Stock */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-sm font-medium text-slate-700">Stock initial</label>
+              <label className="text-sm font-medium text-slate-700">
+                Stock initial{form.unit !== 'pce' && ` (${form.unit})`}
+              </label>
               <Input
                 type="number"
+                inputMode="decimal"
+                step="any"
                 value={form.stock_qty}
                 onChange={(e) => set('stock_qty', e.target.value)}
                 placeholder="0"
@@ -260,6 +301,8 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
               <label className="text-sm font-medium text-slate-700">Stock min. alerte</label>
               <Input
                 type="number"
+                inputMode="decimal"
+                step="any"
                 value={form.min_stock_level}
                 onChange={(e) => set('min_stock_level', e.target.value)}
                 placeholder="5"
