@@ -52,19 +52,23 @@ ALTER TABLE suppliers ENABLE ROW LEVEL SECURITY;
 -- n'ont pas les mêmes grossistes, et un catalogue partagé exposerait l'un à
 -- l'autre via les policies.
 DROP POLICY IF EXISTS "suppliers_read" ON suppliers;
+DROP POLICY IF EXISTS "suppliers_read" ON suppliers;
 CREATE POLICY "suppliers_read" ON suppliers
   FOR SELECT USING (user_id = get_business_owner_id());
 
 -- Écriture : patron / manager, même règle que le catalogue produits.
 DROP POLICY IF EXISTS "suppliers_insert" ON suppliers;
+DROP POLICY IF EXISTS "suppliers_insert" ON suppliers;
 CREATE POLICY "suppliers_insert" ON suppliers
   FOR INSERT WITH CHECK (can_manage_products() AND user_id = get_business_owner_id());
 
+DROP POLICY IF EXISTS "suppliers_update" ON suppliers;
 DROP POLICY IF EXISTS "suppliers_update" ON suppliers;
 CREATE POLICY "suppliers_update" ON suppliers
   FOR UPDATE USING (can_manage_products())
   WITH CHECK (can_manage_products() AND user_id = get_business_owner_id());
 
+DROP POLICY IF EXISTS "suppliers_delete" ON suppliers;
 DROP POLICY IF EXISTS "suppliers_delete" ON suppliers;
 CREATE POLICY "suppliers_delete" ON suppliers
   FOR DELETE USING (can_manage_products());
@@ -79,7 +83,6 @@ DROP TRIGGER IF EXISTS suppliers_updated_at ON suppliers;
 CREATE TRIGGER suppliers_updated_at
   BEFORE UPDATE ON suppliers
   FOR EACH ROW EXECUTE FUNCTION update_org_timestamp();
-
 
 -- ─── 2. Rattachement du produit ────────────────────────────
 -- ON DELETE SET NULL, et non CASCADE : supprimer un fournisseur ne doit pas
@@ -96,7 +99,6 @@ ALTER TABLE products
 -- négligeable sur un catalogue de quelques milliers.
 CREATE INDEX IF NOT EXISTS idx_products_supplier
   ON products(supplier_id) WHERE supplier_id IS NOT NULL;
-
 
 -- ─── 3. Un fournisseur ne peut pas être volé d'une autre boutique ─
 -- La RLS de products vérifie user_id = get_business_owner_id() : elle protège
@@ -139,7 +141,6 @@ CREATE TRIGGER products_supplier_same_tenant
   BEFORE INSERT OR UPDATE OF supplier_id ON products
   FOR EACH ROW EXECUTE FUNCTION check_product_supplier_tenant();
 
-
 -- ─── 4. Vue : articles et fournisseur d'un coup ───────────
 -- Évite au formulaire produit deux requêtes et un raccordement manuel. Les
 -- produits sans fournisseur sont conservés (LEFT JOIN) : ils sont la majorité
@@ -178,7 +179,6 @@ COMMENT ON VIEW products_with_supplier IS
 REVOKE ALL ON products_with_supplier FROM PUBLIC;
 GRANT SELECT ON products_with_supplier TO authenticated;
 GRANT SELECT ON products_with_supplier TO service_role;
-
 
 -- ─── 5. Diagnostic ────────────────────────────────────────
 -- Vérifier que le trigger a bien été créé une seule fois :

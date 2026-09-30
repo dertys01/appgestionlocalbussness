@@ -8,7 +8,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- ============================================================
 -- TABLE : products
 -- ============================================================
-CREATE TABLE products (
+CREATE TABLE IF NOT EXISTS products (
   id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id       UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   name          TEXT NOT NULL,
@@ -25,7 +25,7 @@ CREATE TABLE products (
 -- ============================================================
 -- TABLE : sales
 -- ============================================================
-CREATE TABLE sales (
+CREATE TABLE IF NOT EXISTS sales (
   id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id       UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   total_amount  NUMERIC(12, 2) NOT NULL DEFAULT 0,
@@ -37,7 +37,7 @@ CREATE TABLE sales (
 -- ============================================================
 -- TABLE : sale_items
 -- ============================================================
-CREATE TABLE sale_items (
+CREATE TABLE IF NOT EXISTS sale_items (
   id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   sale_id       UUID NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
   product_id    UUID NOT NULL REFERENCES products(id),
@@ -50,7 +50,7 @@ CREATE TABLE sale_items (
 -- ============================================================
 -- TABLE : stock_logs  (audit de tous les mouvements)
 -- ============================================================
-CREATE TABLE stock_logs (
+CREATE TABLE IF NOT EXISTS stock_logs (
   id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id       UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   product_id    UUID NOT NULL REFERENCES products(id),
@@ -73,22 +73,26 @@ ALTER TABLE sale_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_logs ENABLE ROW LEVEL SECURITY;
 
 -- products
+DROP POLICY IF EXISTS "user_products" ON products;
 CREATE POLICY "user_products" ON products
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
 -- sales
+DROP POLICY IF EXISTS "user_sales" ON sales;
 CREATE POLICY "user_sales" ON sales
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
 -- sale_items : accessible si la vente appartient à l'utilisateur
+DROP POLICY IF EXISTS "user_sale_items" ON sale_items;
 CREATE POLICY "user_sale_items" ON sale_items
   USING (
     EXISTS (SELECT 1 FROM sales WHERE sales.id = sale_items.sale_id AND sales.user_id = auth.uid())
   );
 
 -- stock_logs
+DROP POLICY IF EXISTS "user_stock_logs" ON stock_logs;
 CREATE POLICY "user_stock_logs" ON stock_logs
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
@@ -104,6 +108,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- DROP préalable : sans lui, la seconde exécution échoue en 42710
+-- « trigger already exists » et interrompt le script en cours de route.
+DROP TRIGGER IF EXISTS products_updated_at ON products;
 CREATE TRIGGER products_updated_at
   BEFORE UPDATE ON products
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();

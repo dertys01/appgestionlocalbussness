@@ -31,9 +31,11 @@ CREATE TRIGGER organizations_updated_at
 -- RLS
 ALTER TABLE organizations ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Patron lit sa propre org" ON organizations;
 CREATE POLICY "Patron lit sa propre org" ON organizations
   FOR SELECT USING (auth.uid() = id);
 
+DROP POLICY IF EXISTS "Employé lit l'org de son patron" ON organizations;
 CREATE POLICY "Employé lit l'org de son patron" ON organizations
   FOR SELECT USING (
     EXISTS (
@@ -42,9 +44,11 @@ CREATE POLICY "Employé lit l'org de son patron" ON organizations
     )
   );
 
+DROP POLICY IF EXISTS "Patron modifie sa propre org" ON organizations;
 CREATE POLICY "Patron modifie sa propre org" ON organizations
   FOR UPDATE USING (auth.uid() = id);
 
+DROP POLICY IF EXISTS "Patron crée son org" ON organizations;
 CREATE POLICY "Patron crée son org" ON organizations
   FOR INSERT WITH CHECK (auth.uid() = id);
 
@@ -63,10 +67,12 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 
 ALTER TABLE subscriptions ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Patron lit ses abonnements" ON subscriptions;
 CREATE POLICY "Patron lit ses abonnements" ON subscriptions
   FOR SELECT USING (org_id = auth.uid());
 
 -- Seul le service role peut écrire (via webhook Stripe)
+DROP POLICY IF EXISTS "Service role gère les abonnements" ON subscriptions;
 CREATE POLICY "Service role gère les abonnements" ON subscriptions
   FOR ALL USING (auth.role() = 'service_role');
 

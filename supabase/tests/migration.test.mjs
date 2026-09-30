@@ -23,6 +23,11 @@ const ORDER = [
   'migration_suppliers.sql',
 ];
 
+// schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
+// base existante, un `CREATE TABLE` sans IF NOT EXISTS échoue en 42P07 et
+// interrompt le script en cours de route. C'est ce que l'utilisateur a rencontré
+// en collant le fichier complet.
+
 const db = new PGlite();
 
 // Les erreurs PGlite remontent avec une pile enorme et illisible : on ne
@@ -110,18 +115,13 @@ if (failures > 0) {
 }
 
 // ─── 1b. Rejouabilité ───────────────────────────────────────
-// Seules les migrations « incrémentales » doivent être rejouables : ce sont
-// celles qu'on applique à un projet existant. schema.sql (création de tables)
-// et les migrations historiques ne le sont pas — elles ont été exécutées une
-// fois, et le README documente l'ordre.
+// TOUTES les migrations doivent être rejouables : le fichier
+// APPLY_MIGRATIONS.sql les concatène et l'utilisateur le colle en un bloc sur
+// une base déjà peuplée. Un `CREATE TABLE` sans IF NOT EXISTS échoue alors en
+// 42P07 et interrompt le script — c'est ce qu'il a rencontré.
 //
-// Une policy créée sans DROP préalable échoue en 42710 « already exists » et
-// interrompt le script : c'est arrivé sur migration_expenses.sql.
-const REPLAYABLE = ORDER.filter((f) =>
-  ['migration_profitability.sql', 'migration_expenses.sql', 'migration_indexes.sql',
-   'migration_invitations.sql', 'migration_profitability_fix.sql',
-   'migration_suppliers.sql'].includes(f)
-);
+// Une policy créée sans DROP préalable échoue de même en 42710.
+const REPLAYABLE = ORDER;
 
 console.log(`\n▸ Rejouabilité (${REPLAYABLE.length} migrations incrémentales)`);
 {

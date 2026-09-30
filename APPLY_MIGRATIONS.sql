@@ -26,7 +26,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- ============================================================
 -- TABLE : products
 -- ============================================================
-CREATE TABLE products (
+CREATE TABLE IF NOT EXISTS products (
   id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id       UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   name          TEXT NOT NULL,
@@ -43,7 +43,7 @@ CREATE TABLE products (
 -- ============================================================
 -- TABLE : sales
 -- ============================================================
-CREATE TABLE sales (
+CREATE TABLE IF NOT EXISTS sales (
   id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id       UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   total_amount  NUMERIC(12, 2) NOT NULL DEFAULT 0,
@@ -55,7 +55,7 @@ CREATE TABLE sales (
 -- ============================================================
 -- TABLE : sale_items
 -- ============================================================
-CREATE TABLE sale_items (
+CREATE TABLE IF NOT EXISTS sale_items (
   id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   sale_id       UUID NOT NULL REFERENCES sales(id) ON DELETE CASCADE,
   product_id    UUID NOT NULL REFERENCES products(id),
@@ -68,7 +68,7 @@ CREATE TABLE sale_items (
 -- ============================================================
 -- TABLE : stock_logs  (audit de tous les mouvements)
 -- ============================================================
-CREATE TABLE stock_logs (
+CREATE TABLE IF NOT EXISTS stock_logs (
   id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id       UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   product_id    UUID NOT NULL REFERENCES products(id),
@@ -91,22 +91,26 @@ ALTER TABLE sale_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE stock_logs ENABLE ROW LEVEL SECURITY;
 
 -- products
+DROP POLICY IF EXISTS "user_products" ON products;
 CREATE POLICY "user_products" ON products
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
 -- sales
+DROP POLICY IF EXISTS "user_sales" ON sales;
 CREATE POLICY "user_sales" ON sales
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
 -- sale_items : accessible si la vente appartient à l'utilisateur
+DROP POLICY IF EXISTS "user_sale_items" ON sale_items;
 CREATE POLICY "user_sale_items" ON sale_items
   USING (
     EXISTS (SELECT 1 FROM sales WHERE sales.id = sale_items.sale_id AND sales.user_id = auth.uid())
   );
 
 -- stock_logs
+DROP POLICY IF EXISTS "user_stock_logs" ON stock_logs;
 CREATE POLICY "user_stock_logs" ON stock_logs
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
@@ -122,6 +126,9 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- DROP préalable : sans lui, la seconde exécution échoue en 42710
+-- « trigger already exists » et interrompt le script en cours de route.
+DROP TRIGGER IF EXISTS products_updated_at ON products;
 CREATE TRIGGER products_updated_at
   BEFORE UPDATE ON products
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
@@ -166,19 +173,23 @@ ALTER TABLE business_members ENABLE ROW LEVEL SECURITY;
 ALTER TABLE activity_logs    ENABLE ROW LEVEL SECURITY;
 
 -- business_members : le patron gère ses membres
+DROP POLICY IF EXISTS "owner_manage_members" ON business_members;
 CREATE POLICY "owner_manage_members" ON business_members
   USING (auth.uid() = owner_id)
   WITH CHECK (auth.uid() = owner_id);
 
 -- business_members : chaque employé voit son propre lien
+DROP POLICY IF EXISTS "member_view_own" ON business_members;
 CREATE POLICY "member_view_own" ON business_members
   FOR SELECT USING (auth.uid() = member_id);
 
 -- activity_logs : insert libre (actor = soi-même)
+DROP POLICY IF EXISTS "activity_insert" ON activity_logs;
 CREATE POLICY "activity_insert" ON activity_logs
   FOR INSERT WITH CHECK (auth.uid() = actor_id);
 
 -- activity_logs : le patron et ses employés peuvent lire
+DROP POLICY IF EXISTS "activity_read" ON activity_logs;
 CREATE POLICY "activity_read" ON activity_logs
   FOR SELECT USING (
     auth.uid() = business_owner_id OR
@@ -200,15 +211,18 @@ $$ LANGUAGE sql SECURITY DEFINER STABLE;
 -- Mise à jour des politiques RLS existantes pour supporter les employés
 
 DROP POLICY IF EXISTS "user_products" ON products;
+DROP POLICY IF EXISTS "user_products" ON products;
 CREATE POLICY "user_products" ON products
   USING (user_id = get_business_owner_id())
   WITH CHECK (user_id = get_business_owner_id());
 
 DROP POLICY IF EXISTS "user_sales" ON sales;
+DROP POLICY IF EXISTS "user_sales" ON sales;
 CREATE POLICY "user_sales" ON sales
   USING (user_id = get_business_owner_id())
   WITH CHECK (user_id = get_business_owner_id());
 
+DROP POLICY IF EXISTS "user_sale_items" ON sale_items;
 DROP POLICY IF EXISTS "user_sale_items" ON sale_items;
 CREATE POLICY "user_sale_items" ON sale_items
   USING (
@@ -219,6 +233,7 @@ CREATE POLICY "user_sale_items" ON sale_items
     )
   );
 
+DROP POLICY IF EXISTS "user_stock_logs" ON stock_logs;
 DROP POLICY IF EXISTS "user_stock_logs" ON stock_logs;
 CREATE POLICY "user_stock_logs" ON stock_logs
   USING (user_id = get_business_owner_id())
@@ -258,9 +273,11 @@ CREATE TRIGGER organizations_updated_at
 -- RLS
 ALTER TABLE organizations ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Patron lit sa propre org" ON organizations;
 CREATE POLICY "Patron lit sa propre org" ON organizations
   FOR SELECT USING (auth.uid() = id);
 
+DROP POLICY IF EXISTS "Employé lit l'org de son patron" ON organizations;
 CREATE POLICY "Employé lit l'org de son patron" ON organizations
   FOR SELECT USING (
     EXISTS (
@@ -269,9 +286,11 @@ CREATE POLICY "Employé lit l'org de son patron" ON organizations
     )
   );
 
+DROP POLICY IF EXISTS "Patron modifie sa propre org" ON organizations;
 CREATE POLICY "Patron modifie sa propre org" ON organizations
   FOR UPDATE USING (auth.uid() = id);
 
+DROP POLICY IF EXISTS "Patron crée son org" ON organizations;
 CREATE POLICY "Patron crée son org" ON organizations
   FOR INSERT WITH CHECK (auth.uid() = id);
 
@@ -290,10 +309,12 @@ CREATE TABLE IF NOT EXISTS subscriptions (
 
 ALTER TABLE subscriptions ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Patron lit ses abonnements" ON subscriptions;
 CREATE POLICY "Patron lit ses abonnements" ON subscriptions
   FOR SELECT USING (org_id = auth.uid());
 
 -- Seul le service role peut écrire (via webhook Stripe)
+DROP POLICY IF EXISTS "Service role gère les abonnements" ON subscriptions;
 CREATE POLICY "Service role gère les abonnements" ON subscriptions
   FOR ALL USING (auth.role() = 'service_role');
 
@@ -514,6 +535,7 @@ GRANT EXECUTE ON FUNCTION purge_rate_limits() TO service_role;
 -- ─── 4. Politique DELETE manquante sur le journal ──────────
 -- activity_logs n'avait qu'une policy INSERT et une policy SELECT : la purge
 -- des logs de plus de 90 jours ne pouvait donc jamais aboutir.
+DROP POLICY IF EXISTS "activity_prune" ON activity_logs;
 DROP POLICY IF EXISTS "activity_prune" ON activity_logs;
 CREATE POLICY "activity_prune" ON activity_logs
   FOR DELETE USING (auth.uid() = business_owner_id);
@@ -778,24 +800,29 @@ $$;
 -- remplacent pas.
 DROP POLICY IF EXISTS "user_products"  ON products;
 DROP POLICY IF EXISTS "products_read"  ON products;
+DROP POLICY IF EXISTS "products_read" ON products;
 CREATE POLICY "products_read" ON products
   FOR SELECT USING (user_id = get_business_owner_id());
 
 -- Écriture : patron / manager uniquement.
 DROP POLICY IF EXISTS "products_insert" ON products;
+DROP POLICY IF EXISTS "products_insert" ON products;
 CREATE POLICY "products_insert" ON products
   FOR INSERT WITH CHECK (can_manage_products() AND user_id = get_business_owner_id());
 
+DROP POLICY IF EXISTS "products_update" ON products;
 DROP POLICY IF EXISTS "products_update" ON products;
 CREATE POLICY "products_update" ON products
   FOR UPDATE USING (can_manage_products())
   WITH CHECK (can_manage_products() AND user_id = get_business_owner_id());
 
 DROP POLICY IF EXISTS "products_delete" ON products;
+DROP POLICY IF EXISTS "products_delete" ON products;
 CREATE POLICY "products_delete" ON products
   FOR DELETE USING (can_manage_products());
 
 -- ─── 4. Journal d'activité : le tenant est imposé par la base ─
+DROP POLICY IF EXISTS "activity_insert" ON activity_logs;
 DROP POLICY IF EXISTS "activity_insert" ON activity_logs;
 CREATE POLICY "activity_insert" ON activity_logs
   FOR INSERT WITH CHECK (
@@ -804,6 +831,7 @@ CREATE POLICY "activity_insert" ON activity_logs
   );
 
 -- ─── 5. Un employé ne peut pas créer sa propre organisation ─
+DROP POLICY IF EXISTS "Patron crée son org" ON organizations;
 DROP POLICY IF EXISTS "Patron crée son org" ON organizations;
 CREATE POLICY "Patron crée son org" ON organizations
   FOR INSERT WITH CHECK (
@@ -1019,9 +1047,11 @@ ALTER TABLE expense_categories ENABLE ROW LEVEL SECURITY;
 
 -- Séparée par organisation : chaque boutique voit son seul plan de comptes.
 DROP POLICY IF EXISTS "expense_categories_read" ON expense_categories;
+DROP POLICY IF EXISTS "expense_categories_read" ON expense_categories;
 CREATE POLICY "expense_categories_read" ON expense_categories
   FOR SELECT USING (user_id = get_business_owner_id());
 
+DROP POLICY IF EXISTS "expense_categories_write" ON expense_categories;
 DROP POLICY IF EXISTS "expense_categories_write" ON expense_categories;
 CREATE POLICY "expense_categories_write" ON expense_categories
   FOR ALL USING (can_manage_products() AND user_id = get_business_owner_id())
@@ -1088,19 +1118,23 @@ ALTER TABLE expenses ENABLE ROW LEVEL SECURITY;
 
 -- Lecture : tout le tenant, comme les ventes.
 DROP POLICY IF EXISTS "expenses_read" ON expenses;
+DROP POLICY IF EXISTS "expenses_read" ON expenses;
 CREATE POLICY "expenses_read" ON expenses
   FOR SELECT USING (user_id = get_business_owner_id());
 
 -- Écriture : patron / manager, même règle que le catalogue.
 DROP POLICY IF EXISTS "expenses_insert" ON expenses;
+DROP POLICY IF EXISTS "expenses_insert" ON expenses;
 CREATE POLICY "expenses_insert" ON expenses
   FOR INSERT WITH CHECK (can_manage_products() AND user_id = get_business_owner_id());
 
+DROP POLICY IF EXISTS "expenses_update" ON expenses;
 DROP POLICY IF EXISTS "expenses_update" ON expenses;
 CREATE POLICY "expenses_update" ON expenses
   FOR UPDATE USING (can_manage_products())
   WITH CHECK (can_manage_products() AND user_id = get_business_owner_id());
 
+DROP POLICY IF EXISTS "expenses_delete" ON expenses;
 DROP POLICY IF EXISTS "expenses_delete" ON expenses;
 CREATE POLICY "expenses_delete" ON expenses
   FOR DELETE USING (can_manage_products());
@@ -1219,9 +1253,11 @@ ALTER TABLE employee_invitations ENABLE ROW LEVEL SECURITY;
 -- renverrait son patron, il pourrait donc lire les invitations de la boutique
 -- et s'inviter lui-même. On vérifie explicitement qu'il est le patron.
 DROP POLICY IF EXISTS "invitations_owner_read" ON employee_invitations;
+DROP POLICY IF EXISTS "invitations_owner_read" ON employee_invitations;
 CREATE POLICY "invitations_owner_read" ON employee_invitations
   FOR SELECT USING (auth.uid() = owner_id);
 
+DROP POLICY IF EXISTS "invitations_owner_write" ON employee_invitations;
 DROP POLICY IF EXISTS "invitations_owner_write" ON employee_invitations;
 CREATE POLICY "invitations_owner_write" ON employee_invitations
   FOR ALL USING (auth.uid() = owner_id) WITH CHECK (auth.uid() = owner_id);
@@ -1229,7 +1265,6 @@ CREATE POLICY "invitations_owner_write" ON employee_invitations
 -- Index sur owner_id : le patron liste ses invitations à chaque affichage.
 CREATE INDEX IF NOT EXISTS idx_employee_invitations_owner
   ON employee_invitations(owner_id, created_at DESC);
-
 
 -- ─── 2. Remboursement atomique ──────────────────────────────
 -- L'employé s'inscrit depuis un lien ; cette fonction consume l'invitation et
@@ -1316,7 +1351,6 @@ COMMENT ON TABLE employee_invitations IS
   'Invitations d''équipe en attente. Le jeton est un secret à usage unique, '
   'expirant après 7 jours ; il est transmis au patron pour un envoi WhatsApp '
   'ou tout autre canal, jamais par email.';
-
 
 -- ─── 3. Nettoyage ───────────────────────────────────────────
 -- Les invitations acceptées ne servent plus à rien. Sans cette étape la table
@@ -1417,7 +1451,6 @@ CREATE TRIGGER sale_items_freeze_cost
   BEFORE UPDATE ON sale_items
   FOR EACH ROW EXECUTE FUNCTION freeze_sale_item_cost();
 
-
 -- ─── 2. create_sale() doit de nouveau figer le coût ───────
 -- Réappliquez migration_sales_rpc.sql juste après ce fichier. Il est
 -- idempotent (CREATE OR REPLACE partout) et redéfinit create_sale() avec
@@ -1484,19 +1517,23 @@ ALTER TABLE suppliers ENABLE ROW LEVEL SECURITY;
 -- n'ont pas les mêmes grossistes, et un catalogue partagé exposerait l'un à
 -- l'autre via les policies.
 DROP POLICY IF EXISTS "suppliers_read" ON suppliers;
+DROP POLICY IF EXISTS "suppliers_read" ON suppliers;
 CREATE POLICY "suppliers_read" ON suppliers
   FOR SELECT USING (user_id = get_business_owner_id());
 
 -- Écriture : patron / manager, même règle que le catalogue produits.
 DROP POLICY IF EXISTS "suppliers_insert" ON suppliers;
+DROP POLICY IF EXISTS "suppliers_insert" ON suppliers;
 CREATE POLICY "suppliers_insert" ON suppliers
   FOR INSERT WITH CHECK (can_manage_products() AND user_id = get_business_owner_id());
 
+DROP POLICY IF EXISTS "suppliers_update" ON suppliers;
 DROP POLICY IF EXISTS "suppliers_update" ON suppliers;
 CREATE POLICY "suppliers_update" ON suppliers
   FOR UPDATE USING (can_manage_products())
   WITH CHECK (can_manage_products() AND user_id = get_business_owner_id());
 
+DROP POLICY IF EXISTS "suppliers_delete" ON suppliers;
 DROP POLICY IF EXISTS "suppliers_delete" ON suppliers;
 CREATE POLICY "suppliers_delete" ON suppliers
   FOR DELETE USING (can_manage_products());
@@ -1511,7 +1548,6 @@ DROP TRIGGER IF EXISTS suppliers_updated_at ON suppliers;
 CREATE TRIGGER suppliers_updated_at
   BEFORE UPDATE ON suppliers
   FOR EACH ROW EXECUTE FUNCTION update_org_timestamp();
-
 
 -- ─── 2. Rattachement du produit ────────────────────────────
 -- ON DELETE SET NULL, et non CASCADE : supprimer un fournisseur ne doit pas
@@ -1528,7 +1564,6 @@ ALTER TABLE products
 -- négligeable sur un catalogue de quelques milliers.
 CREATE INDEX IF NOT EXISTS idx_products_supplier
   ON products(supplier_id) WHERE supplier_id IS NOT NULL;
-
 
 -- ─── 3. Un fournisseur ne peut pas être volé d'une autre boutique ─
 -- La RLS de products vérifie user_id = get_business_owner_id() : elle protège
@@ -1571,7 +1606,6 @@ CREATE TRIGGER products_supplier_same_tenant
   BEFORE INSERT OR UPDATE OF supplier_id ON products
   FOR EACH ROW EXECUTE FUNCTION check_product_supplier_tenant();
 
-
 -- ─── 4. Vue : articles et fournisseur d'un coup ───────────
 -- Évite au formulaire produit deux requêtes et un raccordement manuel. Les
 -- produits sans fournisseur sont conservés (LEFT JOIN) : ils sont la majorité
@@ -1610,7 +1644,6 @@ COMMENT ON VIEW products_with_supplier IS
 REVOKE ALL ON products_with_supplier FROM PUBLIC;
 GRANT SELECT ON products_with_supplier TO authenticated;
 GRANT SELECT ON products_with_supplier TO service_role;
-
 
 -- ─── 5. Diagnostic ────────────────────────────────────────
 -- Vérifier que le trigger a bien été créé une seule fois :

@@ -96,6 +96,7 @@ GRANT EXECUTE ON FUNCTION purge_rate_limits() TO service_role;
 -- activity_logs n'avait qu'une policy INSERT et une policy SELECT : la purge
 -- des logs de plus de 90 jours ne pouvait donc jamais aboutir.
 DROP POLICY IF EXISTS "activity_prune" ON activity_logs;
+DROP POLICY IF EXISTS "activity_prune" ON activity_logs;
 CREATE POLICY "activity_prune" ON activity_logs
   FOR DELETE USING (auth.uid() = business_owner_id);
 

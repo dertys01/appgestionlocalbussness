@@ -66,7 +66,6 @@ CREATE TRIGGER sale_items_freeze_cost
   BEFORE UPDATE ON sale_items
   FOR EACH ROW EXECUTE FUNCTION freeze_sale_item_cost();
 
-
 -- ─── 2. create_sale() doit de nouveau figer le coût ───────
 -- Réappliquez migration_sales_rpc.sql juste après ce fichier. Il est
 -- idempotent (CREATE OR REPLACE partout) et redéfinit create_sale() avec
