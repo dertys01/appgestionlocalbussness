@@ -61,12 +61,28 @@ vide. Sur une base existante, appliquer la seule migration concernée.
 c'est elle qui crée `sale_items.list_price`, colonne lue par
 `avg_sold_price` et `discount_given`.
 
-**Les 14 migrations sont rejouables** : `IF NOT EXISTS` sur les tables et les
-index, `DROP … IF EXISTS` avant chaque policy et chaque trigger. Recollé sur une
-base déjà peuplée, le fichier ne doit rien casser — c'est vérifié par un test
-qui applique chaque migration deux fois. Une policy sans `DROP` préalable
-échoue en 42710, une table sans `IF NOT EXISTS` en 42P07, et dans les deux cas
-le script s'interrompt en cours de route.
+**Les 15 migrations sont rejouables** : `IF NOT EXISTS` sur les tables et les
+index, `DROP … IF EXISTS` avant chaque policy, chaque trigger et chaque fonction
+dont la signature a changé. Recollé sur une base déjà peuplée, le fichier ne
+doit rien casser — c'est vérifié par un test qui applique chaque migration deux
+fois.
+
+Trois refus de PostgreSQL à connaître, tous rencontrés par l'expérience :
+
+| Code | Cause | Correctif |
+|---|---|---|
+| 42P07 | `CREATE TABLE` sur une table existante | `IF NOT EXISTS` |
+| 42710 | `CREATE POLICY` / `CREATE TRIGGER` déjà présents | `DROP … IF EXISTS` avant |
+| **42P13** | **`CREATE OR REPLACE FUNCTION` dont le `RETURNS TABLE` a changé** | **`DROP FUNCTION` avant** |
+
+Le troisième est le plus piègeux : les paramètres `OUT` font partie de la
+signature, donc **ajouter une colonne à un `RETURNS TABLE` exige de supprimer la
+fonction**. `CREATE OR REPLACE` ne suffit pas, et l'erreur interrompt le script
+au milieu. `get_product_profitability()` a necessitate un `DROP` lors de
+l'ajout des colonnes de prix négocié.
+
+Un script qui analyse toutes les fonctions à `RETURNS TABLE` permet de
+détecter ce cas avant de le subir.
 
 > `migration_team.sql` doit précéder `migration_saas.sql` : la policy
 > « Employé lit l'org de son patron » référence `business_members`.

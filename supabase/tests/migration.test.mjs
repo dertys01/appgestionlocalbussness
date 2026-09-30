@@ -1163,5 +1163,53 @@ const ligne = (saleId) =>
   check('11x. un employé ne vend pas un produit du patron', refuse);
 }
 
+// ═══ 12. Changer la signature de retour d'une fonction ══════
+// PostgreSQL refuse en 42P13 de remplacer une fonction dont le type de retour
+// diffère : les paramètres OUT font partie de la signature. C'est ce que
+// l'utilisateur a rencontré en collant APPLY_MIGRATIONS.sql après l'ajout des
+// colonnes de prix négocié à get_product_profitability().
+//
+// On vérifie le mécanisme : une fonction à signature retour A, remplacée par une
+// à signature retour B, doit rester applicable.
+console.log('\n▸ Changement de signature de retour');
+
+{
+  const signA = 'alpha int, beta int';
+  const signB = 'alpha int, beta int, gamma int';
+
+  await e(`CREATE OR REPLACE FUNCTION sig_test() RETURNS TABLE (${signA})
+           LANGUAGE sql STABLE AS $$ SELECT 1 AS alpha, 2 AS beta $$`);
+
+  // Sans DROP préalable, ce remplacement échoue : c'est le cas que la migration
+  // doit éviter.
+  let refuse = false;
+  try {
+    await e(`CREATE OR REPLACE FUNCTION sig_test() RETURNS TABLE (${signB})
+             LANGUAGE sql STABLE AS $$ SELECT 1 AS alpha, 2 AS beta, 3 AS gamma $$`);
+  } catch (err) {
+    refuse = /42P13|cannot change return type/i.test(err.message);
+  }
+  check('12a. sans DROP, le changement de signature est refusé (42P13)', refuse);
+
+  // Avec DROP : le remplacement passe.
+  await e(`DROP FUNCTION IF EXISTS sig_test()`);
+  await e(`CREATE FUNCTION sig_test() RETURNS TABLE (${signB})
+           LANGUAGE sql STABLE AS $$ SELECT 1 AS alpha, 2 AS beta, 3 AS gamma $$`);
+  const r = (await q(`SELECT * FROM sig_test()`)).rows[0];
+  check('12b. avec DROP préalable, la nouvelle signature s\'applique', r?.gamma === 3, JSON.stringify(r));
+
+  await e(`DROP FUNCTION IF EXISTS sig_test()`);
+}
+
+// Et la migration réelle : ses trois nouvelles colonnes doivent être là.
+{
+  const cols = (await q(
+    `SELECT * FROM get_product_profitability() LIMIT 1`)).fields.map((f) => f.name);
+  check('12c. get_product_profitability() expose avg_sold_price',
+    cols.includes('avg_sold_price'), cols.join(', '));
+  check('12d. … discount_given', cols.includes('discount_given'));
+  check('12e. … units_sold_at_loss', cols.includes('units_sold_at_loss'));
+}
+
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
 process.exit(failures ? 1 : 0);
