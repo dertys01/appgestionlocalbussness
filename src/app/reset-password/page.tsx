@@ -14,6 +14,11 @@ export default function ResetPasswordPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [ready, setReady] = useState(false);
+  // Sans affichage en clair, un commerçant qui se trompe de frappe ne voit rien
+  // du tout et suppose que le clavier est defaillant. Le reveal est attendu sur
+  // un ecran de creation de mot de passe, et le risque est nul : c'est
+  // l'utilisateur lui-meme qui saisit la valeur.
+  const [showPassword, setShowPassword] = useState(false);
 
   useEffect(() => {
     // Course conditionnelle : le SDK detecte la session issue du fragment
@@ -65,11 +70,49 @@ export default function ResetPasswordPage() {
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-slate-700">Nouveau mot de passe</label>
-                  <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="••••••••" minLength={6} className={inputClass} />
+                  <div className="relative">
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                      placeholder="6 caractères minimum"
+                      minLength={6}
+                      autoComplete="new-password"
+                      className={inputClass + ' pr-11'}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword((v) => !v)}
+                      aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                      className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-400 hover:text-slate-600 focus:outline-none"
+                    >
+                      {showPassword ? (
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                          <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+                          <line x1="1" y1="1" x2="23" y2="23" />
+                        </svg>
+                      ) : (
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+                          <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                          <circle cx="12" cy="12" r="3" />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
                 </div>
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-slate-700">Confirmer</label>
-                  <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} required placeholder="••••••••" className={inputClass} />
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={confirm}
+                    onChange={(e) => setConfirm(e.target.value)}
+                    required
+                    placeholder="Retapez le même mot de passe"
+                    minLength={6}
+                    autoComplete="new-password"
+                    className={inputClass}
+                  />
                 </div>
                 {error && <p className="text-red-500 text-sm">{error}</p>}
                 <Button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 font-semibold">
