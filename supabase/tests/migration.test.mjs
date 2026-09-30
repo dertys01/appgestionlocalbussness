@@ -20,6 +20,7 @@ const ORDER = [
   'migration_expenses.sql',
   'migration_invitations.sql',
   'migration_profitability_fix.sql',
+  'migration_suppliers.sql',
 ];
 
 const db = new PGlite();
@@ -118,7 +119,8 @@ if (failures > 0) {
 // interrompt le script : c'est arrivé sur migration_expenses.sql.
 const REPLAYABLE = ORDER.filter((f) =>
   ['migration_profitability.sql', 'migration_expenses.sql', 'migration_indexes.sql',
-   'migration_invitations.sql', 'migration_profitability_fix.sql'].includes(f)
+   'migration_invitations.sql', 'migration_profitability_fix.sql',
+   'migration_suppliers.sql'].includes(f)
 );
 
 console.log(`\n▸ Rejouabilité (${REPLAYABLE.length} migrations incrémentales)`);
@@ -894,6 +896,120 @@ console.log('\n▸ Correctif du coût figé');
     `obtenu ${prof?.gross_profit}`);
   check('9k. taux de marge = 60 %', Math.round(Number(prof?.margin_pct)) === 60,
     `obtenu ${prof?.margin_pct}`);
+}
+
+// ═══ 10. Fournisseurs ═════════════════════════════════════
+// Un fournisseur par produit, ON DELETE SET NULL : supprimer un grossiste ne
+// doit jamais supprimer les articles qui en dépendent.
+console.log('\n▸ Fournisseurs');
+
+const FOURNISSEUR = 'a0a0a0a0-a0a0-a0a0-a0a0-a0a0a0a0a0a0';
+const ART_SANS = 'b0b0b0b0-b0b0-b0b0-b0b0-b0b0b0b0b0b0';
+const ART_AVEC = 'c0c0c0c0-c0c0-c0c0-c0c0-c0c0c0c0c0c0';
+
+await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+
+await q(`INSERT INTO products (id, user_id, name, price_buy, price_sell, stock_qty)
+         VALUES ('${ART_SANS}', '${PATRON}', 'Sans fournisseur', 1000, 2000, 5),
+                ('${ART_AVEC}', '${PATRON}', 'Avec fournisseur', 1000, 2000, 5)`);
+
+{
+  // Un nom vide ou en blanc est refusé : la colonne porte le nom, pas une
+  // adresse email.
+  let msg = '';
+  try {
+    await q(`INSERT INTO suppliers (user_id, name) VALUES ('${PATRON}', '   ')`);
+  } catch (e) { msg = e.message; }
+  check('10a. nom de fournisseur vide refusé', /suppliers_name_not_blank/.test(msg),
+    msg || 'accepté !');
+}
+
+{
+  await q(`INSERT INTO suppliers (id, user_id, name, phone)
+           VALUES ('${FOURNISSEUR}', '${PATRON}', 'Grossiste Cokhan', '+229 97 00 00 00')`);
+  await q(`UPDATE products SET supplier_id = '${FOURNISSEUR}' WHERE id = '${ART_AVEC}'`);
+
+  const n = await count(`SELECT count(*) FROM suppliers WHERE user_id='${PATRON}'`);
+  check('10b. fournisseur créé', n === 1, `${n}`);
+}
+
+// La vue doit conserver les produits sans fournisseur, pas les masquer.
+// Filtré sur nos deux articles : les sections précédentes ont déjà créé des
+// produits, et le test porte sur ce catalogue-là.
+{
+  const rows = (await q(`SELECT name, supplier_id, supplier_name
+                         FROM products_with_supplier
+                         WHERE id IN ('${ART_SANS}', '${ART_AVEC}')
+                         ORDER BY name`)).rows;
+  check('10c. la vue expose les deux articles', rows.length === 2, `${rows.length}`);
+  const avec = rows.find((r) => r.name === 'Avec fournisseur');
+  const sans = rows.find((r) => r.name === 'Sans fournisseur');
+  check('10d. fournisseur résolu (jointure)', avec?.supplier_name === 'Grossiste Cokhan',
+    avec?.supplier_name);
+  check('10e. produit sans fournisseur conservé', sans && sans.supplier_id === null,
+    JSON.stringify(sans));
+}
+
+// Supprimer un fournisseur NE doit pas supprimer les articles.
+{
+  await q(`DELETE FROM suppliers WHERE id = '${FOURNISSEUR}'`);
+  const n = await count(`SELECT count(*) FROM products WHERE id = '${ART_AVEC}'`);
+  check('10f. l\'article survit à la suppression du fournisseur', n === 1, `${n}`);
+
+  const orphelin = (await q(`SELECT supplier_id FROM products WHERE id='${ART_AVEC}'`)).rows[0];
+  check('10g. fournisseur mis à null (SET NULL)', orphelin.supplier_id === null,
+    String(orphelin.supplier_id));
+}
+
+// Un fournisseur d'un autre tenant est invisible et inutilisable.
+{
+  const AUTRE5 = '55555555-5555-5555-5555-555555555555';
+  await q(`INSERT INTO auth.users (id,email) VALUES ('${AUTRE5}','fourn@t.ci')
+          ON CONFLICT (id) DO NOTHING`);
+  await q(`INSERT INTO organizations (id,name,slug) VALUES ('${AUTRE5}','Chez lui','chezlui')
+          ON CONFLICT (id) DO NOTHING`);
+  await q(`INSERT INTO suppliers (user_id, name) VALUES ('${AUTRE5}','GrossisteBidon')`);
+
+  // Rattachement refusé : la policy vérifie can_manage_products() ET le tenant.
+  let refuse = false;
+  try {
+    await q(`UPDATE products SET supplier_id = (SELECT id FROM suppliers WHERE user_id='${AUTRE5}')
+             WHERE id='${ART_SANS}'`);
+  } catch { refuse = true; }
+  check('10h. rattacher un fournisseur d\'autre boutique : refusé', refuse);
+
+  // Et invisible en lecture, sous le rôle authentifié.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+  await e('SET ROLE authenticated');
+  const vus = Number((await q(
+    `SELECT count(*)::int c FROM suppliers WHERE user_id='${AUTRE5}'`)).rows[0].c);
+  await e('RESET ROLE');
+  check('10i. les fournisseurs d\'autre tenant sont invisibles', vus === 0, `${vus} vue(s)`);
+}
+
+// Rôle : un employé ne gère pas le catalogue fournisseurs.
+{
+  await q(`SELECT set_config('request.jwt.claim.sub', '${EMPLOYE}', false)`);
+  await e('SET ROLE authenticated');
+  let insere = false;
+  try {
+    await q(`INSERT INTO suppliers (user_id, name) VALUES ('${PATRON}', 'Interdit')`);
+    insere = true;
+  } catch { /* refusé */ }
+  await e('RESET ROLE');
+  check('10j. un employé NE CRÉE PAS de fournisseur', !insere);
+}
+
+// Vue : l'isolation tient sous le rôle authentifié.
+{
+  await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+  await e('SET ROLE authenticated');
+  const noms = (await q(
+    `SELECT DISTINCT supplier_name FROM products_with_supplier
+      WHERE supplier_name IS NOT NULL`)).rows.map((r) => r.supplier_name);
+  await e('RESET ROLE');
+  check('10k. la vue n\'expose aucun fournisseur d\'autre tenant',
+    !noms.includes('GrossisteBidon'), noms.join(', '));
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);

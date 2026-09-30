@@ -5,6 +5,7 @@ import { X, Save, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
+import { SupplierSelect } from '@/components/products/SupplierSelect';
 import { logActivity } from '@/lib/utils/activity';
 import { canAddProduct, PLAN_LIMITS, PLAN_LABELS } from '@/lib/utils/plans';
 import type { Product } from '@/types';
@@ -55,9 +56,10 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
     price_sell: product ? String(product.price_sell) : '',
     stock_qty: product ? String(product.stock_qty) : '',
     min_stock_level: product ? String(product.min_stock_level) : '5',
+    supplier_id: product?.supplier_id ?? null,
   }));
 
-  const set = (key: string, value: string) =>
+  const set = (key: string, value: string | null) =>
     setForm((prev) => ({ ...prev, [key]: value }));
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -100,6 +102,9 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
       price_sell: parseFloat(form.price_sell) || 0,
       stock_qty: parseInt(form.stock_qty) || 0,
       min_stock_level: parseInt(form.min_stock_level) || 5,
+      // null explicite : sans cela, retirer le fournisseur d'un article ne
+      // detachait rien, la colonne gardait l'ancienne valeur.
+      supplier_id: form.supplier_id,
     };
 
     let err;
@@ -200,6 +205,18 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
                 ))}
               </div>
             )}
+          </div>
+
+          {/* Fournisseur */}
+          <div className="space-y-1">
+            <label className="text-sm font-medium text-slate-700">
+              Fournisseur
+              <span className="text-slate-400 font-normal ml-1">(facultatif)</span>
+            </label>
+            <SupplierSelect
+              value={form.supplier_id}
+              onChange={(id) => set('supplier_id', id)}
+            />
           </div>
 
           {/* Prix */}

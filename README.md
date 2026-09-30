@@ -51,6 +51,10 @@ point à vérifier après un `git pull`.
 | 11 | `migration_expenses.sql` | Tables `expenses` / `expense_categories`, `get_cash_flow()` |
 | 12 | `migration_invitations.sql` | `employee_invitations`, `redeem_invitation()` |
 | 13 | `migration_profitability_fix.sql` | Remplit les `unit_cost` manquants, recrée le trigger |
+| 14 | `migration_suppliers.sql` | `suppliers`, `products.supplier_id`, `products_with_supplier` |
+
+`APPLY_MIGRATIONS.sql` concatène les 14 migrations pour partir d'une base
+vide. Sur une base existante, appliquer la seule migration concernée.
 
 > `migration_team.sql` doit précéder `migration_saas.sql` : la policy
 > « Employé lit l'org de son patron » référence `business_members`.
@@ -163,6 +167,35 @@ caisse (60 par tranche, `PRODUCT_PAGE_SIZE`) et les charges (50 par tranche,
 « Afficher plus »). La recherche porte toujours sur la liste entière, pas sur la
 tranche affichée ; le scanner cherche dans `products` complet et ajoute donc
 correctement un produit hors écran.
+
+## Fournisseurs
+
+D'où vient la marchandise. Trois usages, par ordre d'importance : retrouver le
+prix d'achat du mois dernier, savoir qui appeler quand un stock baisse, repérer
+une dépendance excessive à un seul grossiste.
+
+**Un fournisseur par produit**, et non une table de liaison : `products.price_buy`
+est unique, donc un article a un fournisseur principal. Si un jour un même article
+arrive à deux prix selon le fournisseur, ce sont deux articles.
+
+`products.supplier_id` est en `ON DELETE SET NULL` — supprimer un grossiste ne
+doit jamais supprimer les articles qui en dépendent, seulement les orphelins de
+fournisseur. Même arbitrage que l'archivage produit.
+
+**Un fournisseur ne peut pas être rattaché d'une autre boutique.** La RLS de
+`products` protège le produit, pas le fournisseur qu'il référence : sans
+contrôle, un patron écrivait l'UUID d'un fournisseur d'autrui et la vue
+`products_with_supplier` le lui affichait. Le trigger
+`check_product_supplier_tenant()` compare les deux `user_id` — un `CHECK` ne
+peut pas consulter une autre table.
+
+La vue est en `security_invoker` : l'isolation vient de la RLS de `products` et
+`suppliers`, et non d'une vue qui la contournerait.
+
+**Ce que ce n'est pas** : ni registre de conformité MECeF/DGI, ni comptabilité
+fournisseurs. Aucun montant d'achat, aucune échéance, aucun règlement n'est
+enregistré. Pour l'informel, le relevé de prix et le carnet suffisent ; la
+facture normalisée reste le chantier à part, non traité.
 
 ## Inviter un employé
 
