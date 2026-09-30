@@ -11,6 +11,24 @@ export interface Product {
   /** false = archivé : invisible en caisse, conservé pour l'historique */
   is_active: boolean;
   archived_at: string | null;
+  /** Fournisseur principal ; null tant qu'aucun n'est choisi. */
+  supplier_id: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Fournisseur : d'où vient la marchandise. Ne porte aucun montant d'achat ni
+ * aucune échéance — ce n'est pas une comptabilité fournisseurs, et le relevé
+ * de prix papier suffit dans l'informel.
+ */
+export interface Supplier {
+  id: string;
+  user_id: string;
+  name: string;
+  phone: string | null;
+  address: string | null;
+  note: string | null;
   created_at: string;
   updated_at: string;
 }

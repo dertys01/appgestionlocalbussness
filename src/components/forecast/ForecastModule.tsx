@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { AlertTriangle, TrendingDown, CheckCircle, PackagePlus, RefreshCw } from 'lucide-react';
+import { AlertTriangle, TrendingDown, CheckCircle, PackagePlus, RefreshCw, Truck, MessageCircle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { RestockModal } from '@/components/products/RestockModal';
@@ -15,10 +15,19 @@ interface ProductForecast {
   avgPerDay: number;
   daysUntilStockout: number | null; // null = pas de ventes récentes
   suggestedReorder: number;
+  /** Fournisseur principal : « commander » n'a pas de sens sans savoir à qui. */
+  supplierName: string | null;
+  supplierPhone: string | null;
 }
 
 const ANALYSIS_DAYS = 30;
 const REORDER_HORIZON = 30; // vouloir avoir du stock pour 30 jours
+
+/** Ligne de products_with_supplier : un produit, plus son fournisseur résolu. */
+type ProductForecastRow = Product & {
+  supplier_name: string | null;
+  supplier_phone: string | null;
+};
 
 export function ForecastModule({ onRestock }: { onRestock: () => void }) {
   const { supabase } = useSupabase();
@@ -34,8 +43,10 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
     const since = new Date();
     since.setDate(since.getDate() - ANALYSIS_DAYS);
 
+    // La vue apporte le fournisseur résolu : pas de seconde requête, pas de
+    // raccordement par identifiant, et l'isolation vient de la RLS de la vue.
     const [productsRes, saleItemsRes] = await Promise.all([
-      supabase.from('products').select('*').order('name'),
+      supabase.from('products_with_supplier').select('*').order('name'),
       supabase
         .from('sale_items')
         .select('product_id, quantity, sale:sales!inner(created_at)')
@@ -63,7 +74,7 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
       }
     });
 
-    const result: ProductForecast[] = (products as Product[]).map((p) => {
+    const result: ProductForecast[] = (products as ProductForecastRow[]).map((p) => {
       const soldLast30Days = soldMap[p.id] ?? 0;
       const avgPerDay = soldLast30Days / ANALYSIS_DAYS;
       const daysUntilStockout =
@@ -73,7 +84,15 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
         Math.ceil(avgPerDay * REORDER_HORIZON) - p.stock_qty
       );
 
-      return { product: p, soldLast30Days, avgPerDay, daysUntilStockout, suggestedReorder };
+      return {
+        product: p,
+        soldLast30Days,
+        avgPerDay,
+        daysUntilStockout,
+        suggestedReorder,
+        supplierName: p.supplier_name ?? null,
+        supplierPhone: p.supplier_phone ?? null,
+      };
     });
 
     // Trier par urgence : d'abord ceux qui vont manquer bientôt
@@ -210,6 +229,29 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
                       {f.suggestedReorder > 0 && (
                         <div className="mt-2 text-xs text-indigo-600 font-medium">
                           💡 Commander ~{f.suggestedReorder} unités pour 30j ({formatCFA(f.suggestedReorder * f.product.price_buy)})
+                        </div>
+                      )}
+
+                      {/* Le fournisseur ne sert qu'ici : « commander » sans savoir
+                          à qui aboutit à ouvrir le carnet. Le lien WhatsApp est
+                          direct — c'est déjà le canal de la cible. */}
+                      {f.supplierName && (
+                        <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+                          <span className="text-xs text-slate-400 flex items-center gap-1">
+                            <Truck className="h-3 w-3 shrink-0" />
+                            {f.supplierName}
+                          </span>
+                          {f.supplierPhone && (
+                            <a
+                              href={`https://wa.me/${f.supplierPhone.replace(/[^0-9]/g, '')}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-emerald-600 hover:text-emerald-700 font-medium inline-flex items-center gap-1"
+                            >
+                              <MessageCircle className="h-3 w-3" />
+                              Commander
+                            </a>
+                          )}
                         </div>
                       )}
                     </div>
