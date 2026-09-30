@@ -13,8 +13,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'SUPABASE_SERVICE_ROLE_KEY non configuré' }, { status: 500 });
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const stripe = new Stripe(stripeKey, { apiVersion: '2026-03-25.dahlia' as any });
+    const stripe = new Stripe(stripeKey, { apiVersion: '2026-03-25.dahlia' });
     const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
     const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
     const PRICE_IDS: Record<string, string> = {

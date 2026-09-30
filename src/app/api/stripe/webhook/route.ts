@@ -2,13 +2,29 @@ import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { createClient } from '@supabase/supabase-js';
 
+type Plan = 'free' | 'starter' | 'pro';
+
+function normalizePlan(raw: unknown): Plan {
+  return raw === 'starter' || raw === 'pro' ? raw : 'free';
+}
+
+/**
+ * Depuis l'API Stripe 2026-03-25, `current_period_end` n'existe plus sur
+ * l'objet `Subscription` : la période est portée par chaque `SubscriptionItem`.
+ * Lire `sub.current_period_end` renvoie `undefined` et faisait planter
+ * `toISOString()` — le client était débité mais restait sur le plan Free.
+ */
+function subscriptionPeriodEnd(sub: { items?: { data?: Array<{ current_period_end?: number }> } }): string | null {
+  const ts = sub.items?.data?.[0]?.current_period_end;
+  return typeof ts === 'number' && Number.isFinite(ts) ? new Date(ts * 1000).toISOString() : null;
+}
+
 export async function POST(req: NextRequest) {
   const stripeKey = process.env.STRIPE_SECRET_KEY;
   const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
   const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   if (!stripeKey) return NextResponse.json({ error: 'STRIPE_SECRET_KEY manquant' }, { status: 500 });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const stripe = new Stripe(stripeKey, { apiVersion: '2026-03-25.dahlia' as any });
+  const stripe = new Stripe(stripeKey, { apiVersion: '2026-03-25.dahlia' });
   const body = await req.text();
   const sig = req.headers.get('stripe-signature') ?? '';
 
@@ -26,6 +42,7 @@ export async function POST(req: NextRequest) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const eventData = event.data.object as any;
   const orgId = eventData.metadata?.org_id ?? null;
+  const activeStatuses = ['active', 'trialing'];
 
   // Log l'événement reçu (idempotent via event_id unique)
   await adminClient.from('webhook_events').upsert({
@@ -41,7 +58,7 @@ export async function POST(req: NextRequest) {
     switch (event.type) {
       case 'checkout.session.completed': {
         if (!orgId) break;
-        const plan = eventData.metadata?.plan ?? 'free';
+        const plan = normalizePlan(eventData.metadata?.plan);
         const subId = eventData.subscription as string;
         const sub = await stripe.subscriptions.retrieve(subId);
 
@@ -51,8 +68,7 @@ export async function POST(req: NextRequest) {
           stripe_subscription_id: subId,
           plan,
           status: sub.status,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          current_period_end: new Date((sub as any).current_period_end * 1000).toISOString(),
+          current_period_end: subscriptionPeriodEnd(sub),
           updated_at: new Date().toISOString(),
         }, { onConflict: 'org_id' });
 
@@ -62,22 +78,20 @@ export async function POST(req: NextRequest) {
 
       case 'customer.subscription.updated': {
         if (!orgId) break;
-        const rawPlan = eventData.metadata?.plan;
-        const plan = rawPlan === 'starter' || rawPlan === 'pro' ? rawPlan : 'free';
+        const plan = normalizePlan(eventData.metadata?.plan);
         const status = eventData.status as string;
 
         await adminClient.from('subscriptions').upsert({
           org_id: orgId,
+          stripe_customer_id: (eventData.customer as string) ?? null,
           stripe_subscription_id: eventData.id,
           plan,
           status,
-          current_period_end: eventData.current_period_end
-            ? new Date(eventData.current_period_end * 1000).toISOString()
-            : null,
+          current_period_end: subscriptionPeriodEnd(eventData),
           updated_at: new Date().toISOString(),
         }, { onConflict: 'org_id' });
 
-        const effectivePlan = (status === 'active' || status === 'trialing') ? plan : 'free';
+        const effectivePlan = activeStatuses.includes(status) ? plan : 'free';
         await adminClient.from('organizations').update({ plan: effectivePlan }).eq('id', orgId);
         break;
       }
