@@ -39,6 +39,13 @@ interface POSModuleProps {
 
 type PaymentMethod = 'cash' | 'momo';
 
+/**
+ * Nombre de cartes produits rendues d'un coup. 60 tient sur deux écrans de
+ * téléphone en colonne double, soit environ 2 000 nœuds DOM pour la grille —
+ * au-delà, le défilement saccade sur un appareil d'entrée de gamme.
+ */
+const PRODUCT_PAGE_SIZE = 60;
+
 interface ReceiptState {
   saleId: string;
   /** Numéro de facture calculé par le serveur (Pro uniquement). */
@@ -75,6 +82,14 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
   const [cart, setCart] = useState<CartItem[]>([]);
   const [scanError, setScanError] = useState('');
   const [search, setSearch] = useState('');
+  const [visibleCount, setVisibleCount] = useState(PRODUCT_PAGE_SIZE);
+  // Une recherche remet la tranche au début : sans cela, taper « Nokia » après
+  // avoir déroulé 400 produits affiche une grille vide alors qu'il y en a 3.
+  const [lastSearch, setLastSearch] = useState('');
+  if (search !== lastSearch) {
+    setLastSearch(search);
+    setVisibleCount(PRODUCT_PAGE_SIZE);
+  }
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [clientName, setClientName] = useState('');
   const [clientPhone, setClientPhone] = useState('');
@@ -95,6 +110,13 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
           (p.category ?? '').toLowerCase().includes(q))
     );
   }, [products, search]);
+
+  // Rendu par tranches. La recherche porte sur tout le catalogue : une caissière
+  // qui tape « Nokia » doit le trouver même si la carte est à la position 800.
+  const visibleProducts = useMemo(
+    () => filtered.slice(0, visibleCount),
+    [filtered, visibleCount]
+  );
 
   const total = useMemo(
     () => cart.reduce((sum, item) => sum + item.product.price_sell * item.quantity, 0),
@@ -247,8 +269,21 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
           />
         </div>
 
+        {/* Le compteur évite qu'un commerçant cherche un produit absent en
+            croyant qu'il n'existe pas : avec 1 000 références, une grille
+            tronquée sans indication paraît vide. */}
+        <div className="flex items-center justify-between text-xs text-slate-400">
+          <span>
+            {filtered.length} produit{filtered.length > 1 ? 's' : ''}
+            {search.trim() && ` pour « ${search.trim()} »`}
+          </span>
+          {visibleProducts.length < filtered.length && (
+            <span>affichage par tranches</span>
+          )}
+        </div>
+
         <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
-          {filtered.map((p) => {
+          {visibleProducts.map((p) => {
             const inCart = cart.find((i) => i.product.id === p.id);
             return (
               <button
@@ -273,10 +308,26 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
 
           {filtered.length === 0 && (
             <div className="col-span-full text-center text-slate-400 py-12">
-              Aucun produit disponible
+              {search.trim() ? 'Aucun produit ne correspond à cette recherche' : 'Aucun produit disponible'}
             </div>
           )}
         </div>
+
+        {/* Pagination par tranches plutôt que rendu de 1 000 cartes : le DOM
+            devient inutilisable sur un téléphone, et une caissière doit
+            trouver un produit en deux secondes. La recherche porte toujours
+            sur le catalogue entier, pas sur la tranche affichée. */}
+        {visibleProducts.length < filtered.length && (
+          <button
+            onClick={() => setVisibleCount((n) => n + PRODUCT_PAGE_SIZE)}
+            className="w-full py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-600 transition-colors"
+          >
+            Afficher plus de produits
+            <span className="text-slate-400 font-normal">
+              {' '}({visibleProducts.length} / {filtered.length})
+            </span>
+          </button>
+        )}
       </div>
 
       {/* ── Panier ── */}

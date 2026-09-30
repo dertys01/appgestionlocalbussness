@@ -7,9 +7,15 @@ import {
 } from 'recharts';
 import { TrendingUp, ShoppingCart, CreditCard, Smartphone, RefreshCw } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
+import { PeriodPicker } from '@/components/ui/PeriodPicker';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
-import type { Sale, SaleItem } from '@/types';
+import { PLAN_LIMITS } from '@/lib/utils/plans';
+import {
+  buildBuckets, bucketFor, bucketKey, daysBetween, rangeFromDays, toISODate,
+  type DateRange,
+} from '@/lib/utils/period';
+import type { Plan, Sale, SaleItem } from '@/types';
 
 interface SaleWithItems extends Sale {
   sale_items: SaleItem[];
@@ -18,23 +24,31 @@ interface SaleWithItems extends Sale {
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
 export function ReportsModule() {
-  const { supabase } = useSupabase();
+  const { supabase, plan } = useSupabase();
+  // Le plan borne l'historique : un compte Free ne peut pas demander un an,
+  // même si le sélecteur le propose. La limite est déjà appliquée côté
+  // SalesHistory ; elle doit l'être partout.
+  const maxDays = PLAN_LIMITS[plan as Plan].salesHistoryDays;
   const [sales, setSales] = useState<SaleWithItems[]>([]);
   const [loading, setLoading] = useState(false);
-  const [period, setPeriod] = useState<7 | 30>(7);
+  const [period, setPeriod] = useState<DateRange>(() => rangeFromDays(7));
   const [error, setError] = useState('');
 
   const fetchSales = async () => {
     setLoading(true);
     setError('');
-    const since = new Date();
-    since.setDate(since.getDate() - period);
 
     try {
+      // Bornes locales converties en UTC : la période estinclusive des deux
+      // journées, sinon la dernière est amputée du jour courant.
+      const from = new Date(`${period.from}T00:00:00`);
+      const to = new Date(`${period.to}T23:59:59.999`);
+
       const { data, error: queryErr } = await supabase
         .from('sales')
         .select('*, sale_items(*)')
-        .gte('created_at', since.toISOString())
+        .gte('created_at', from.toISOString())
+        .lte('created_at', to.toISOString())
         .order('created_at');
 
       // L'error était ignorée : un échec de réseau affichait des rapports vides
@@ -54,19 +68,20 @@ export function ReportsModule() {
   // Les agrégats sont mémorisés : sans useMemo ils recalculaient sur chaque
   // rendu, y compris les resize/hover internes de recharts, en repassant
   // sur tout le tableau des ventes et des lignes de vente.
+  //
+  // Regroupement par jour, semaine ou mois selon l'amplitude : 365 barres
+  // journalières sont illisibles sur un téléphone, et la requête elle-même
+  // commence à coûter cher sur un an d'historique.
   const salesByDay = useMemo(() => {
-    const map: Record<string, number> = {};
-    for (let i = period - 1; i >= 0; i--) {
-      const d = new Date();
-      d.setDate(d.getDate() - i);
-      const key = d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
-      map[key] = 0;
-    }
+    const span = daysBetween(period.from, period.to);
+    const bucket = bucketFor(span);
+    const totals = new Map<string, number>();
     for (const s of sales) {
-      const key = new Date(s.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
-      if (key in map) map[key] += s.total_amount;
+      const key = bucketKey(toISODate(new Date(s.created_at)), bucket);
+      totals.set(key, (totals.get(key) ?? 0) + s.total_amount);
     }
-    return Object.entries(map).map(([date, total]) => ({ date, total }));
+    return buildBuckets(period, bucket, (key) => totals.get(key) ?? 0)
+      .map((p) => ({ date: p.label, total: p.value }));
   }, [sales, period]);
 
   const topProducts = useMemo(() => {
@@ -115,26 +130,12 @@ export function ReportsModule() {
       )}
 
       {/* Sélecteur période + refresh */}
-      <div className="flex items-center justify-between">
-        <div className="flex gap-2">
-          {([7, 30] as const).map((p) => (
-            <button
-              key={p}
-              onClick={() => setPeriod(p)}
-              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                period === p
-                  ? 'bg-indigo-600 text-white'
-                  : 'border border-slate-200 text-slate-500 hover:bg-slate-50'
-              }`}
-            >
-              {p} jours
-            </button>
-          ))}
-        </div>
+      <div className="flex items-start justify-between gap-3">
+        <PeriodPicker value={period} onChange={setPeriod} maxDays={maxDays} />
         <button
           onClick={fetchSales}
           disabled={loading}
-          className="p-2 text-slate-400 hover:text-indigo-600 disabled:opacity-40"
+          className="p-2 text-slate-400 hover:text-indigo-600 disabled:opacity-40 shrink-0"
         >
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
         </button>

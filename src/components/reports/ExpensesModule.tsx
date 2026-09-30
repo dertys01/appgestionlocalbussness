@@ -9,6 +9,9 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
+import { PeriodPicker } from '@/components/ui/PeriodPicker';
+import { PLAN_LIMITS } from '@/lib/utils/plans';
+import { rangeFromDays, todayISO, type DateRange } from '@/lib/utils/period';
 import { formatCFA } from '@/lib/utils/currency';
 import { logActivity } from '@/lib/utils/activity';
 
@@ -36,31 +39,16 @@ interface ExpenseCategory {
   sort_order: number;
 }
 
-type Period = 7 | 30 | 90;
-
-const PERIODS: { value: Period; label: string }[] = [
-  { value: 7, label: '7 jours' },
-  { value: 30, label: '30 jours' },
-  { value: 90, label: '90 jours' },
-];
-
 /** Date du jour au format YYYY-MM-DD, en heure locale. */
 function today(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-function isoDaysAgo(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  return todayISO();
 }
 
 export function ExpensesModule() {
-  const { supabase, canManageProducts, ownerId, actorName, user } = useSupabase();
+  const { supabase, canManageProducts, ownerId, actorName, user, plan } = useSupabase();
   const canEdit = canManageProducts;
 
-  const [period, setPeriod] = useState<Period>(30);
+  const [period, setPeriod] = useState<DateRange>(() => rangeFromDays(30));
   const [flow, setFlow] = useState<CashFlowDay[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [categories, setCategories] = useState<ExpenseCategory[]>([]);
@@ -76,14 +64,16 @@ export function ExpensesModule() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Pagination de la liste des charges : voir le rendu.
+  const [shownExpenses, setShownExpenses] = useState(50);
 
   const load = useCallback(async () => {
     if (!user) return;
     setLoading(true);
     setError('');
 
-    const from = isoDaysAgo(period - 1);
-    const to = today();
+    const from = period.from;
+    const to = period.to;
 
     try {
       const [flowRes, expRes, catRes] = await Promise.all([
@@ -121,6 +111,13 @@ export function ExpensesModule() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Changer de periode remet la liste au debut : sinon on arrive sur une
+  // periode plus courte avec la pagination deja ouverte, et le bouton
+  // « Afficher plus » propose un nombre de lignes qui n'existe plus.
+  useEffect(() => {
+    setShownExpenses(50);
+  }, [period.from, period.to]);
 
   /**
    * Seed du plan de comptes, une seule fois.
@@ -251,23 +248,16 @@ export function ExpensesModule() {
   return (
     <div className="space-y-5">
       {/* Sélecteur de période */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-2">
         <p className="text-sm text-slate-500">
           Combien vous <strong>gagnez vraiment</strong> après vos charges
         </p>
-        <div className="flex gap-1 rounded-lg bg-slate-100 p-0.5 text-sm">
-          {PERIODS.map((p) => (
-            <button
-              key={p.value}
-              onClick={() => setPeriod(p.value)}
-              className={`px-3 py-1 rounded-md font-medium transition-colors ${
-                period === p.value ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
+        <PeriodPicker
+          value={period}
+          onChange={setPeriod}
+          maxDays={PLAN_LIMITS[plan].salesHistoryDays}
+          className="bg-slate-100 rounded-lg p-1 self-start"
+        />
       </div>
 
       {/* Synthèse */}
@@ -454,7 +444,7 @@ export function ExpensesModule() {
             </div>
           ) : (
             <div className="divide-y divide-slate-100">
-              {expenses.map((exp) => (
+              {expenses.slice(0, shownExpenses).map((exp) => (
                 <div key={exp.id} className="flex items-center gap-3 py-2.5">
                   <div className="flex-1 min-w-0">
                     <div className="text-sm font-medium text-slate-800 truncate">{exp.label}</div>
@@ -487,6 +477,18 @@ export function ExpensesModule() {
                   )}
                 </div>
               ))}
+
+              {/* Sur un an, une boutique saisit des centaines de charges : tout
+                  afficher d'un bloc rend le montant du haut introuvable. On
+                  pagine par paliers, le total restant inchangé. */}
+              {shownExpenses < expenses.length && (
+                <button
+                  onClick={() => setShownExpenses((n) => n + 50)}
+                  className="w-full py-2.5 text-xs text-indigo-600 hover:text-indigo-800 font-medium"
+                >
+                  Afficher plus ({expenses.length - shownExpenses} restante(s))
+                </button>
+              )}
             </div>
           )}
         </CardContent>
