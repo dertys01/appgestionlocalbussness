@@ -11,6 +11,8 @@ interface SupabaseContextType {
   loading: boolean;
   ownerId: string | null;
   isEmployee: boolean;
+  /** Vrai si l'utilisateur peut écrire dans le catalogue (RLS products_*) */
+  canManageProducts: boolean;
   actorName: string | null;
   org: Organization | null;
   plan: Plan;
@@ -25,6 +27,10 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [ownerId, setOwnerId] = useState<string | null>(null);
   const [isEmployee, setIsEmployee] = useState(false);
+  // Miroir de la policy RLS can_manage_products() : un employé peut lire le
+  // catalogue et encaisser, pas l'écrire. Sans ce garde-fou l'UI proposerait
+  // des actions que la base refuse (cf. supabase/migration_roles.sql).
+  const [canManageProducts, setCanManageProducts] = useState(false);
   const [actorName, setActorName] = useState<string | null>(null);
   const [org, setOrg] = useState<Organization | null>(null);
   const [plan, setPlan] = useState<Plan>('free');
@@ -53,9 +59,9 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data } = await (supabase as any)
         .from('business_members')
-        .select('owner_id, member_name')
+        .select('owner_id, member_name, role')
         .eq('member_id', u.id)
-        .maybeSingle() as { data: { owner_id: string; member_name: string } | null };
+        .maybeSingle() as { data: { owner_id: string; member_name: string; role: string } | null };
 
       let resolvedOwnerId: string;
       let resolvedName: string;
@@ -66,6 +72,9 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
         setOwnerId(resolvedOwnerId);
         setIsEmployee(true);
         setActorName(resolvedName);
+        // Rôle 'owner' ou 'manager' requis pour gérer le catalogue ; sinon
+        // simple caissier.
+        setCanManageProducts(['owner', 'manager'].includes(data.role ?? 'employee'));
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await (supabase as any).from('activity_logs').insert({
           business_owner_id: resolvedOwnerId,
@@ -80,6 +89,7 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
         resolvedName = u.email ?? u.id;
         setOwnerId(resolvedOwnerId);
         setIsEmployee(false);
+        setCanManageProducts(true);
         setActorName(resolvedName);
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         await (supabase as any).from('activity_logs').insert({
@@ -97,37 +107,73 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
   };
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => {
-      const u = data.user ?? null;
-      setUser(u);
-      if (u) {
-        resolveMembership(u).finally(() => setLoading(false));
-      } else {
+    // Une session locale peut être invalide (projet Supabase mis en pause puis
+    // repris, jeton expiré, refresh token révoqué) : getUser() rejette alors.
+    // Sans ce catch, setLoading(false) n'était jamais appelé et l'application
+    // restait bloquée sur le spinner au lieu de proposer la reconnexion.
+    let cancelled = false;
+
+    const clearSession = () => {
+      setUser(null);
+      setOwnerId(null);
+      setIsEmployee(false);
+      setCanManageProducts(false);
+      setActorName(null);
+      setOrg(null);
+      setPlan('free');
+    };
+
+    supabase.auth
+      .getUser()
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) {
+          // Le refresh token stocké ne vaut plus rien : on le purge pour éviter
+          // de boucler sur la même erreur à chaque rechargement.
+          console.warn('[auth] session invalide, déconnexion', error.message);
+          supabase.auth.signOut().catch(() => {});
+          clearSession();
+          setLoading(false);
+          return;
+        }
+        const u = data.user ?? null;
+        setUser(u);
+        if (u) resolveMembership(u).finally(() => { if (!cancelled) setLoading(false); });
+        else setLoading(false);
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        console.warn('[auth] échec getUser', e);
+        clearSession();
         setLoading(false);
-      }
-    });
+      });
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      // SIGNED_OUT est émis aussi quand un refresh échoue : c'est le chemin
+      // de sortie propre vers l'écran de connexion.
+      if (event === 'SIGNED_OUT') {
+        clearSession();
+        setLoading(false);
+        return;
+      }
+      if (event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED') return;
+
       const u = session?.user ?? null;
       setUser(u);
       if (u && event === 'SIGNED_IN') {
         setLoading(true);
-        resolveMembership(u).finally(() => setLoading(false));
-      }
-      if (!u) {
-        setOwnerId(null);
-        setIsEmployee(false);
-        setActorName(null);
-        setOrg(null);
-        setPlan('free');
+        resolveMembership(u).finally(() => { if (!cancelled) setLoading(false); });
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      cancelled = true;
+      subscription.unsubscribe();
+    };
   }, [supabase]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <SupabaseContext.Provider value={{ supabase, user, loading, ownerId, isEmployee, actorName, org, plan, refreshOrg }}>
+    <SupabaseContext.Provider value={{ supabase, user, loading, ownerId, isEmployee, canManageProducts, actorName, org, plan, refreshOrg }}>
       {children}
     </SupabaseContext.Provider>
   );

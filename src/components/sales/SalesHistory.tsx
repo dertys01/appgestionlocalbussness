@@ -8,8 +8,8 @@ import { Button } from '@/components/ui/button';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
 import { toCSV, downloadCSV } from '@/lib/utils/export';
-import { isFeatureAllowed } from '@/lib/utils/plans';
-import type { Sale, SaleItem } from '@/types';
+import { isFeatureAllowed, PLAN_LIMITS, PLAN_LABELS } from '@/lib/utils/plans';
+import type { Plan, Sale, SaleItem } from '@/types';
 
 interface SaleWithItems extends Sale {
   sale_items: SaleItem[];
@@ -42,6 +42,19 @@ function getStartDate(filter: DateFilter): string | null {
   return null;
 }
 
+/**
+ * Date de début la plus ancienne que le plan autorise. `salesHistoryDays`
+ * existait dans PLAN_LIMITS mais n'était lu nulle part : un compte Free
+ * obtenait un historique illimité.
+ */
+function getPlanFloor(plan: Plan): string | null {
+  const days = PLAN_LIMITS[plan].salesHistoryDays;
+  if (days === Infinity) return null;
+  const floor = new Date();
+  floor.setDate(floor.getDate() - days);
+  return floor.toISOString();
+}
+
 export function SalesHistory() {
   const { supabase, plan } = useSupabase();
   const [sales, setSales] = useState<SaleWithItems[]>([]);
@@ -49,29 +62,51 @@ export function SalesHistory() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [filter, setFilter] = useState<DateFilter>('7d');
   const [currentPage, setCurrentPage] = useState(1);
+  const [error, setError] = useState('');
 
-  const fetchSales = async (f: DateFilter = filter) => {
+  const fetchSales = async (f: DateFilter) => {
     setLoading(true);
-    let query = supabase
-      .from('sales')
-      .select('*, sale_items(*)')
-      .order('created_at', { ascending: false });
+    setError('');
+    try {
+      let query = supabase
+        .from('sales')
+        .select('*, sale_items(*)')
+        .order('created_at', { ascending: false });
 
-    const start = getStartDate(f);
-    if (start) query = query.gte('created_at', start);
+      const start = getStartDate(f);
+      if (start) query = query.gte('created_at', start);
 
-    const { data } = await query;
-    setSales((data as SaleWithItems[]) ?? []);
-    setCurrentPage(1);
-    setLoading(false);
+      // Plafond du plan appliqué en plus du filtre choisi : « Tout » reste
+      // borné à salesHistoryDays pour les plans limités.
+      const floor = getPlanFloor(plan);
+      if (floor) {
+        query = start && start > floor ? query.gte('created_at', start) : query.gte('created_at', floor);
+      }
+
+      const { data, error: queryErr } = await query;
+      // L'error était ignorée : un échec de réseau s'affichait comme
+      // « Aucune vente sur cette période ».
+      if (queryErr) throw new Error(queryErr.message);
+
+      setSales((data as SaleWithItems[]) ?? []);
+      setCurrentPage(1);
+    } catch (e) {
+      setError((e as Error).message);
+      setSales([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  useEffect(() => { fetchSales(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // La requête dépend du filtre ET du plan : l'ancien `[]` ne refetchait pas
+  // si le plan changeait (upgrade/downgrade en cours de session).
+  useEffect(() => { fetchSales(filter); }, [filter, plan]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleFilterChange = (f: DateFilter) => {
-    setFilter(f);
-    fetchSales(f);
-  };
+  const handleFilterChange = (f: DateFilter) => setFilter(f);
+
+  // « Tout » demande un horizon illimité alors que le plan en impose un.
+  const historyFloor = getPlanFloor(plan);
+  const isTruncatedByPlan = filter === 'all' && historyFloor !== null;
 
   const totalPeriode = sales.reduce((sum, s) => sum + s.total_amount, 0);
   const totalPages = Math.max(1, Math.ceil(sales.length / PAGE_SIZE));
@@ -100,6 +135,19 @@ export function SalesHistory() {
         ))}
       </div>
 
+      {isTruncatedByPlan && (
+        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          Le plan {PLAN_LABELS[plan]} donne accès à {PLAN_LIMITS[plan].salesHistoryDays} jours
+          d&apos;historique. Les ventes plus anciennes ne sont pas affichées.
+        </p>
+      )}
+
+      {error && (
+        <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+          Impossible de charger les ventes : {error}
+        </p>
+      )}
+
       {/* Résumé */}
       <div className="grid grid-cols-2 gap-3">
         <Card className="border-indigo-100 bg-indigo-50">
@@ -119,7 +167,7 @@ export function SalesHistory() {
       {/* Actions */}
       <div className="flex items-center gap-3">
         <button
-          onClick={() => fetchSales()}
+          onClick={() => fetchSales(filter)}
           disabled={loading}
           className="flex items-center gap-2 text-sm text-slate-500 hover:text-indigo-600 disabled:opacity-40"
         >
@@ -154,11 +202,11 @@ export function SalesHistory() {
       </div>
 
       {/* Liste des ventes */}
-      {sales.length === 0 && !loading ? (
+      {sales.length === 0 && !loading && !error ? (
         <div className="text-center text-slate-400 py-12 text-sm">
           Aucune vente sur cette période
         </div>
-      ) : (
+      ) : sales.length > 0 ? (
         <div className="space-y-2">
           {paginated.map((sale) => {
             const isOpen = expanded === sale.id;
@@ -207,7 +255,7 @@ export function SalesHistory() {
             );
           })}
         </div>
-      )}
+      ) : null}
 
       {/* Pagination */}
       {totalPages > 1 && (

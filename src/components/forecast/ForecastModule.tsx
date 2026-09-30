@@ -24,28 +24,41 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
   const { supabase } = useSupabase();
   const [forecasts, setForecasts] = useState<ProductForecast[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const [restockProduct, setRestockProduct] = useState<Product | null>(null);
 
-  const fetchForecasts = async () => {
+  const fetchForecasts = async (cancelled = false) => {
     setLoading(true);
+    setError('');
 
     const since = new Date();
     since.setDate(since.getDate() - ANALYSIS_DAYS);
 
-    const [{ data: products }, { data: saleItems }] = await Promise.all([
+    const [productsRes, saleItemsRes] = await Promise.all([
       supabase.from('products').select('*').order('name'),
       supabase
         .from('sale_items')
-        .select('product_id, quantity, sales(created_at)')
-        .gte('sales.created_at', since.toISOString()),
+        .select('product_id, quantity, sale:sales!inner(created_at)')
+        .gte('sale.created_at', since.toISOString()),
     ]);
 
+    // Les erreurs étaient ignorées : un échec de sale_items faisait passer
+    // chaque produit en « Pas de données » (silencieusement), et celui de
+    // products figeait l'écran sur le chargement.
+    if (productsRes.error) { setError(productsRes.error.message); setLoading(false); return; }
+    if (saleItemsRes.error) { setError(saleItemsRes.error.message); setLoading(false); return; }
+
+    const products = productsRes.data;
+    const saleItems = saleItemsRes.data;
     if (!products) { setLoading(false); return; }
 
-    // Calcule les quantités vendues par produit
+    // Calcule les quantités vendues par produit.
+    // La clé est `sale` (alias posé dans le select) ; `!inner` garantit que
+    // seules les lignes dont la vente est dans la période reviennent, donc le
+    // test de présence est redondant — conservé par sécurité.
     const soldMap: Record<string, number> = {};
-    (saleItems ?? []).forEach((item) => {
-      if (item.sales) {
+    (saleItems ?? []).forEach((item: { product_id: string; quantity: number; sale?: unknown }) => {
+      if (item.sale) {
         soldMap[item.product_id] = (soldMap[item.product_id] ?? 0) + item.quantity;
       }
     });
@@ -71,11 +84,18 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
       return a.daysUntilStockout - b.daysUntilStockout;
     });
 
+    if (cancelled) return;
     setForecasts(result);
     setLoading(false);
   };
 
-  useEffect(() => { fetchForecasts(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  // Chargement asynchrone encapsulé : aucun setState synchrone dans le corps de
+  // l'effet, et le résultat est ignoré si le composant a été démonté entre-temps.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => { await fetchForecasts(cancelled); })();
+    return () => { cancelled = true; };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const urgent = forecasts.filter((f) => f.daysUntilStockout !== null && f.daysUntilStockout <= 7);
   const warning = forecasts.filter((f) => f.daysUntilStockout !== null && f.daysUntilStockout > 7 && f.daysUntilStockout <= 14);
@@ -103,13 +123,19 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
           Basé sur les ventes des <strong>30 derniers jours</strong>
         </p>
         <button
-          onClick={fetchForecasts}
+          onClick={() => fetchForecasts()}
           disabled={loading}
           className="p-2 text-slate-400 hover:text-indigo-600 disabled:opacity-40"
         >
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
         </button>
       </div>
+
+      {error && (
+        <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+          Impossible de calculer les prévisions : {error}
+        </p>
+      )}
 
       {/* Résumé */}
       <div className="grid grid-cols-3 gap-3">

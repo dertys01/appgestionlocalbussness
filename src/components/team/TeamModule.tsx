@@ -18,13 +18,19 @@ const ACTION_LABELS: Record<string, { label: string; color: string }> = {
   product_add:            { label: 'Produit ajouté',  color: 'bg-emerald-100 text-emerald-700' },
   product_edit:           { label: 'Produit modifié', color: 'bg-amber-100 text-amber-700' },
   product_delete:         { label: 'Produit supprimé',color: 'bg-red-100 text-red-700' },
+  product_archive:        { label: 'Produit archivé', color: 'bg-slate-200 text-slate-600' },
+  expense:                { label: 'Dépense',        color: 'bg-orange-100 text-orange-700' },
   restock:                { label: 'Réappro.',        color: 'bg-blue-100 text-blue-700' },
   inventory_adjustment:   { label: 'Inventaire',      color: 'bg-purple-100 text-purple-700' },
 };
 
 export function TeamModule() {
   const { supabase, user, isEmployee, plan } = useSupabase();
-  const [panel, setPanel] = useState<Panel>('team');
+  // Un employé n'a accès qu'au journal : le panneau démarre directement dessus.
+  // Sans cela, l'effet de chargement ne déclenchait que fetchMembers() et
+  // fetchLogs() n'était jamais appelé — le journal restait vide pour tous les
+  // employés, et l'appel /api/employees était gaspillé.
+  const [panel, setPanel] = useState<Panel>(isEmployee ? 'logs' : 'team');
   const [members, setMembers] = useState<BusinessMember[]>([]);
   const [logs, setLogs] = useState<ActivityLog[]>([]);
   const [loadingMembers, setLoadingMembers] = useState(false);
@@ -75,31 +81,49 @@ export function TeamModule() {
 
   const [logsPage, setLogsPage] = useState(0);
   const [hasMoreLogs, setHasMoreLogs] = useState(false);
+  const [logsError, setLogsError] = useState('');
   const LOGS_PER_PAGE = 50;
 
   const fetchLogs = async (page = 0) => {
     if (!user) return;
     setLoadingLogs(true);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data } = await (supabase as any)
-      .from('activity_logs')
-      .select('*')
-      .order('created_at', { ascending: false })
-      .range(page * LOGS_PER_PAGE, (page + 1) * LOGS_PER_PAGE);
-    const rows = (data as ActivityLog[]) ?? [];
-    setHasMoreLogs(rows.length === LOGS_PER_PAGE + 1);
-    const displayRows = rows.slice(0, LOGS_PER_PAGE);
-    setLogs(page === 0 ? displayRows : (prev) => [...prev, ...displayRows]);
-    setLogsPage(page);
-    setLoadingLogs(false);
+    setLogsError('');
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as any)
+        .from('activity_logs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .range(page * LOGS_PER_PAGE, (page + 1) * LOGS_PER_PAGE);
+
+      if (error) throw new Error(error.message);
+
+      const rows = (data as ActivityLog[]) ?? [];
+      setHasMoreLogs(rows.length > LOGS_PER_PAGE);
+      const displayRows = rows.slice(0, LOGS_PER_PAGE);
+      setLogs(page === 0 ? displayRows : (prev) => [...prev, ...displayRows]);
+      setLogsPage(page);
+    } catch (e) {
+      // L'error était ignorée et loadingLogs restait bloqué à true en cas de
+      // rejet : l'écran restait sur « Chargement... » indéfiniment.
+      setLogsError((e as Error).message);
+      setHasMoreLogs(false);
+    } finally {
+      setLoadingLogs(false);
+    }
   };
 
   const loadMoreLogs = () => fetchLogs(logsPage + 1);
 
   useEffect(() => {
+    if (isEmployee) {
+      // Employé : jamais la liste d'équipe (et jamais l'appel API correspondant).
+      fetchLogs(0);
+      return;
+    }
     if (panel === 'team') fetchMembers();
     else { setLogs([]); setLogsPage(0); fetchLogs(0); }
-  }, [panel, user]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [panel, user, isEmployee]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -114,45 +138,69 @@ export function TeamModule() {
     }
 
     setAdding(true);
-    const { data: { session } } = await supabase.auth.getSession();
-    const res = await fetch('/api/employees', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session?.access_token}`,
-      },
-      body: JSON.stringify({ name, email, password }),
-    });
-    const json = await res.json();
-    setAdding(false);
+    setFormError('');
+    try {
+      // getToken() rafraîchit la session si le jeton a expiré ; getSession()
+      // seul renvoyait un access_token périmé → 401 incompréhensible.
+      const token = await getToken();
+      if (!token) throw new Error('Session expirée. Veuillez vous reconnecter.');
 
-    if (!res.ok) { setFormError(json.error); return; }
+      const res = await fetch('/api/employees', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
+        },
+        body: JSON.stringify({ name, email, password }),
+      });
+      // Une réponse non JSON (502, page d'erreur Vercel) faisait exploser res.json()
+      // et laissait `adding` bloqué à true.
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(json?.error ?? `Erreur serveur (${res.status})`);
 
-    setFormSuccess(`✅ ${name} peut maintenant se connecter avec ses identifiants`);
-    setName(''); setEmail(''); setPassword('');
-    fetchMembers();
+      setFormSuccess(`${name} peut maintenant se connecter avec ses identifiants`);
+      setName(''); setEmail(''); setPassword('');
+      fetchMembers();
+    } catch (e) {
+      setFormError((e as Error).message);
+    } finally {
+      setAdding(false);
+    }
   };
 
   const handleDelete = async (memberId: string) => {
     setConfirmDeleteId(null);
-    const { data: { session } } = await supabase.auth.getSession();
     setDeletingId(memberId);
-    const res = await fetch(`/api/employees/${memberId}`, {
-      method: 'DELETE',
-      headers: { 'Authorization': `Bearer ${session?.access_token}` },
-    });
-    if (!res.ok) {
-      const json = await res.json();
-      setFetchError(json.error ?? 'Erreur lors de la suppression');
+    setFetchError('');
+    try {
+      const token = await getToken();
+      if (!token) throw new Error('Session expirée. Veuillez vous reconnecter.');
+
+      const res = await fetch(`/api/employees/${memberId}`, {
+        method: 'DELETE',
+        headers: { 'Authorization': `Bearer ${token}` },
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(json?.error ?? `Erreur serveur (${res.status})`);
+
+      await fetchMembers();
+    } catch (e) {
+      setFetchError((e as Error).message);
+      await fetchMembers();
+    } finally {
+      setDeletingId(null);
     }
-    setDeletingId(null);
-    fetchMembers();
   };
 
   if (isEmployee) {
     // Les employés voient uniquement le journal
     return (
       <div className="space-y-4">
+        {logsError && (
+          <p className="text-red-500 text-xs rounded-lg bg-red-50 border border-red-200 px-3 py-2">
+            {logsError}
+          </p>
+        )}
         <LogsPanel logs={logs} loading={loadingLogs} onRefresh={() => fetchLogs(0)} hasMore={hasMoreLogs} onLoadMore={loadMoreLogs} />
       </div>
     );

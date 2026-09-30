@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend,
@@ -22,26 +22,39 @@ export function ReportsModule() {
   const [sales, setSales] = useState<SaleWithItems[]>([]);
   const [loading, setLoading] = useState(false);
   const [period, setPeriod] = useState<7 | 30>(7);
+  const [error, setError] = useState('');
 
   const fetchSales = async () => {
     setLoading(true);
+    setError('');
     const since = new Date();
     since.setDate(since.getDate() - period);
 
-    const { data } = await supabase
-      .from('sales')
-      .select('*, sale_items(*)')
-      .gte('created_at', since.toISOString())
-      .order('created_at');
+    try {
+      const { data, error: queryErr } = await supabase
+        .from('sales')
+        .select('*, sale_items(*)')
+        .gte('created_at', since.toISOString())
+        .order('created_at');
 
-    setSales((data as SaleWithItems[]) ?? []);
-    setLoading(false);
+      // L'error était ignorée : un échec de réseau affichait des rapports vides
+      // sans aucun message.
+      if (queryErr) throw new Error(queryErr.message);
+      setSales((data as SaleWithItems[]) ?? []);
+    } catch (e) {
+      setError((e as Error).message);
+      setSales([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => { fetchSales(); }, [period]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Ventes par jour ──
-  const salesByDay = (() => {
+  // Les agrégats sont mémorisés : sans useMemo ils recalculaient sur chaque
+  // rendu, y compris les resize/hover internes de recharts, en repassant
+  // sur tout le tableau des ventes et des lignes de vente.
+  const salesByDay = useMemo(() => {
     const map: Record<string, number> = {};
     for (let i = period - 1; i >= 0; i--) {
       const d = new Date();
@@ -49,46 +62,58 @@ export function ReportsModule() {
       const key = d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
       map[key] = 0;
     }
-    sales.forEach((s) => {
+    for (const s of sales) {
       const key = new Date(s.created_at).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
       if (key in map) map[key] += s.total_amount;
-    });
+    }
     return Object.entries(map).map(([date, total]) => ({ date, total }));
-  })();
+  }, [sales, period]);
 
-  // ── Top produits ──
-  const topProducts = (() => {
+  const topProducts = useMemo(() => {
     const map: Record<string, number> = {};
-    sales.forEach((s) =>
-      s.sale_items.forEach((i) => {
+    for (const s of sales) {
+      for (const i of s.sale_items) {
         map[i.product_name] = (map[i.product_name] ?? 0) + i.quantity;
-      })
-    );
+      }
+    }
     return Object.entries(map)
       .sort((a, b) => b[1] - a[1])
       .slice(0, 6)
       .map(([name, qty]) => ({ name, qty }));
-  })();
+  }, [sales]);
 
-  // ── Répartition paiement ──
-  const paymentData = (() => {
-    const cash = sales.filter((s) => s.payment_method === 'cash').reduce((s, v) => s + v.total_amount, 0);
-    const momo = sales.filter((s) => s.payment_method === 'momo').reduce((s, v) => s + v.total_amount, 0);
-    return [
-      { name: 'Espèces', value: cash },
-      { name: 'Mobile Money', value: momo },
-    ].filter((d) => d.value > 0);
-  })();
+  const { totalRevenu, cashTotal, momoTotal } = useMemo(() => {
+    let revenue = 0;
+    let cash = 0;
+    let momo = 0;
+    for (const s of sales) {
+      revenue += s.total_amount;
+      if (s.payment_method === 'cash') cash += s.total_amount;
+      else momo += s.total_amount;
+    }
+    return { totalRevenu: revenue, cashTotal: cash, momoTotal: momo };
+  }, [sales]);
 
-  // ── Stats globales ──
-  const totalRevenu = sales.reduce((s, v) => s + v.total_amount, 0);
   const totalTransactions = sales.length;
   const moyenneParVente = totalTransactions > 0 ? totalRevenu / totalTransactions : 0;
-  const cashTotal = sales.filter((s) => s.payment_method === 'cash').reduce((s, v) => s + v.total_amount, 0);
-  const momoTotal = sales.filter((s) => s.payment_method === 'momo').reduce((s, v) => s + v.total_amount, 0);
+
+  const paymentData = useMemo(
+    () =>
+      [
+        { name: 'Espèces', value: cashTotal },
+        { name: 'Mobile Money', value: momoTotal },
+      ].filter((d) => d.value > 0),
+    [cashTotal, momoTotal]
+  );
 
   return (
     <div className="space-y-5">
+      {error && (
+        <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+          Impossible de charger les rapports : {error}
+        </p>
+      )}
+
       {/* Sélecteur période + refresh */}
       <div className="flex items-center justify-between">
         <div className="flex gap-2">

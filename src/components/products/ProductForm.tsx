@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { logActivity } from '@/lib/utils/activity';
-import { canAddProduct } from '@/lib/utils/plans';
+import { canAddProduct, PLAN_LIMITS, PLAN_LABELS } from '@/lib/utils/plans';
 import type { Product } from '@/types';
 
 interface ProductFormProps {
@@ -23,39 +23,39 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
   const [categories, setCategories] = useState<string[]>([]);
 
   useEffect(() => {
-    supabase
-      .from('products')
-      .select('category')
-      .not('category', 'is', null)
-      .then(({ data }) => {
-        const unique = [...new Set((data ?? []).map((p) => p.category).filter(Boolean))] as string[];
-        setCategories(unique.sort());
-      });
+    // Le builder est un thenable sans .catch() : on enveloppe en async/await.
+    // Sans gestion d'erreur, un rejet réseau devenait une unhandled rejection.
+    const loadCategories = async () => {
+      const { data, error } = await supabase
+        .from('products')
+        .select('category')
+        .not('category', 'is', null);
+
+      if (error) {
+        // Non bloquant : le champ catégorie reste saisissable librement.
+        console.error('[ProductForm] chargement des catégories', error.message);
+        return;
+      }
+      const unique = [...new Set((data ?? []).map((p) => p.category).filter(Boolean))] as string[];
+      setCategories(unique.sort());
+    };
+
+    loadCategories();
   }, [supabase]);
 
-  const [form, setForm] = useState({
-    name: '',
-    sku: '',
-    category: '',
-    price_buy: '',
-    price_sell: '',
-    stock_qty: '',
-    min_stock_level: '5',
-  });
-
-  useEffect(() => {
-    if (product) {
-      setForm({
-        name: product.name,
-        sku: product.sku ?? '',
-        category: product.category ?? '',
-        price_buy: String(product.price_buy),
-        price_sell: String(product.price_sell),
-        stock_qty: String(product.stock_qty),
-        min_stock_level: String(product.min_stock_level),
-      });
-    }
-  }, [product]);
+  // Initialisé une seule fois depuis `product` : le modal est monté à chaque
+  // ouverture (page.tsx le rend conditionnellement), donc pas besoin de
+  // resynchroniser via un effet — ce qui évitait un setState en cascade et
+  // la brief|display d'un formulaire vide avant remplissage.
+  const [form, setForm] = useState(() => ({
+    name: product?.name ?? '',
+    sku: product?.sku ?? '',
+    category: product?.category ?? '',
+    price_buy: product ? String(product.price_buy) : '',
+    price_sell: product ? String(product.price_sell) : '',
+    stock_qty: product ? String(product.stock_qty) : '',
+    min_stock_level: product ? String(product.min_stock_level) : '5',
+  }));
 
   const set = (key: string, value: string) =>
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -69,16 +69,28 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
       return;
     }
 
-    // Vérification limite de plan (uniquement pour les nouveaux produits)
+    // Vérification limite de plan (uniquement pour les nouveaux produits).
+    // Les limites viennent de PLAN_LIMITS : elles étaient recopiées en dur ici
+    // (`plan === 'free' ? 30 : 200`), ce qui donnait 200 pour le plan Pro qui
+    // n'en a pas.
     if (!product && !canAddProduct(plan, currentProductCount)) {
-      setError(`Limite atteinte. Votre plan ${plan} autorise au maximum ${plan === 'free' ? 30 : 200} produits. Passez au plan supérieur dans Paramètres.`);
+      const max = PLAN_LIMITS[plan].products;
+      setError(
+        max === Infinity
+          ? 'Limite atteinte.'
+          : `Limite atteinte. Votre plan ${PLAN_LABELS[plan]} autorise au maximum ${max} produits. Passez au plan supérieur dans Paramètres.`
+      );
       return;
     }
 
     setLoading(true);
 
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user || !ownerId) { setLoading(false); return; }
+    if (!user || !ownerId) {
+      setError('Session expirée, reconnectez-vous.');
+      setLoading(false);
+      return;
+    }
 
     const payload = {
       name: form.name.trim(),

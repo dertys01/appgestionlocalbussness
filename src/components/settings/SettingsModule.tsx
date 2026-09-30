@@ -75,46 +75,58 @@ export function SettingsModule() {
     setBillingError('');
     setLoadingCheckout(targetPlan);
 
-    const { data: { session } } = await supabase.auth.getSession();
-    const res = await fetch('/api/stripe/checkout', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${session?.access_token}`,
-      },
-      body: JSON.stringify({ plan: targetPlan }),
-    });
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/stripe/checkout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({ plan: targetPlan }),
+      });
 
-    const json = await res.json();
-    setLoadingCheckout(null);
+      // res.json() non gardé : une réponse non JSON (502, page d'erreur Vercel)
+      // faisait une exception et laissait le bouton bloqué en chargement.
+      const json = await res.json().catch(() => null);
 
-    if (!res.ok) {
-      setBillingError(json.error ?? 'Erreur lors de la création du paiement');
-      return;
+      if (!res.ok) {
+        setBillingError(json?.error ?? `Erreur serveur (${res.status})`);
+        return;
+      }
+      if (json?.url) window.location.href = json.url;
+      else setBillingError('Aucun lien de paiement reçu.');
+    } catch (e) {
+      setBillingError((e as Error).message);
+    } finally {
+      setLoadingCheckout(null);
     }
-
-    if (json.url) window.location.href = json.url;
   };
 
   const openPortal = async () => {
     setBillingError('');
     setLoadingPortal(true);
 
-    const { data: { session } } = await supabase.auth.getSession();
-    const res = await fetch('/api/stripe/portal', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${session?.access_token}` },
-    });
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/stripe/portal', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${session?.access_token}` },
+      });
 
-    const json = await res.json();
-    setLoadingPortal(false);
+      const json = await res.json().catch(() => null);
 
-    if (!res.ok) {
-      setBillingError(json.error ?? 'Erreur');
-      return;
+      if (!res.ok) {
+        setBillingError(json?.error ?? `Erreur serveur (${res.status})`);
+        return;
+      }
+      if (json?.url) window.location.href = json.url;
+      else setBillingError('Aucun lien de portail reçu.');
+    } catch (e) {
+      setBillingError((e as Error).message);
+    } finally {
+      setLoadingPortal(false);
     }
-
-    if (json.url) window.location.href = json.url;
   };
 
   const limits = PLAN_LIMITS[plan];

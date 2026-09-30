@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import {
   ShoppingCart,
   Plus,
@@ -22,35 +22,62 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { formatCFA } from '@/lib/utils/currency';
 import { generateWhatsAppReceiptLink } from '@/lib/utils/whatsapp';
 import { logActivity } from '@/lib/utils/activity';
-import { printReceipt, buildInvoiceNumber } from '@/lib/utils/print';
+import { printReceipt } from '@/lib/utils/print';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import type { Product, CartItem } from '@/types';
 
 interface POSModuleProps {
   products: Product[];
   onSaleComplete?: () => void;
+  /**
+   * Produit à ajouter au panier (issu du scanner de la page parente).
+   * Le panier vit dans ce composant : sans cette prop, un scan depuis la
+   * barre latérale changeait d'onglet mais ne remplissait rien.
+   */
+  addToCartRequest?: { productId: string; token: number } | null;
 }
 
 type PaymentMethod = 'cash' | 'momo';
 
 interface ReceiptState {
   saleId: string;
+  /** Numéro de facture calculé par le serveur (Pro uniquement). */
+  invoiceNumber: string | null;
   waLink: string;
   items: CartItem[];
   total: number;
   paymentMethod: PaymentMethod;
   clientName: string;
+  clientPhone: string;
   amountGiven: number;
   change: number;
   date: Date;
 }
 
-export function POSModule({ products, onSaleComplete }: POSModuleProps) {
-  const { supabase, ownerId, actorName, org, plan } = useSupabase();
+/**
+ * Les exceptions de `create_sale` (supabase/migration_sales_rpc.sql) sont
+ * rédigées pour être affichables telles quelles à la caissière. Les autres
+ * messages (réseau, PostgREST) ne le sont pas.
+ */
+function readableSaleError(message: string): string {
+  if (/^(Stock insuffisant|Produit introuvable|Panier vide|Moyen de paiement invalide)/.test(message)) {
+    return message;
+  }
+  if (message === 'Non authentifié') return 'Session expirée, reconnectez-vous.';
+  if (/Failed to fetch|NetworkError|fetch failed/i.test(message)) {
+    return "Connexion impossible. Vérifiez votre réseau et réessayez — la vente n'a pas été enregistrée.";
+  }
+  return "La vente n'a pas été enregistrée. Aucune modification n'a été appliquée.";
+}
+
+export function POSModule({ products, onSaleComplete, addToCartRequest }: POSModuleProps) {
+  const { supabase, ownerId, actorName, org } = useSupabase();
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [scanError, setScanError] = useState('');
   const [search, setSearch] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash');
   const [clientName, setClientName] = useState('');
+  const [clientPhone, setClientPhone] = useState('');
   const [amountGiven, setAmountGiven] = useState('');
   const [loading, setLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState('');
@@ -62,6 +89,7 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
     return products.filter(
       (p) =>
         p.stock_qty > 0 &&
+        p.is_active !== false && // archivé : hors caisse
         (p.name.toLowerCase().includes(q) ||
           (p.sku ?? '').toLowerCase().includes(q) ||
           (p.category ?? '').toLowerCase().includes(q))
@@ -86,6 +114,24 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
     });
   }, []);
 
+  // Demande d'ajout venue du scanner (page parente). Le `token` permet de
+  // re-scanner deux fois le même SKU : comparer la seule valeur de productId
+  // ferait ignorer le second scan.
+  useEffect(() => {
+    if (!addToCartRequest) return;
+    const product = products.find((p) => p.id === addToCartRequest.productId);
+    if (!product) {
+      setScanError('Produit introuvable.');
+      return;
+    }
+    if (product.stock_qty <= 0) {
+      setScanError(`« ${product.name} » est en rupture de stock.`);
+      return;
+    }
+    setScanError('');
+    addToCart(product);
+  }, [addToCartRequest, products, addToCart]);
+
   const updateQty = useCallback((productId: string, delta: number) => {
     setCart((prev) =>
       prev
@@ -105,110 +151,83 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
     setLoading(true);
     setCheckoutError('');
 
-    let saleId: string | null = null;
-
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user || !ownerId) throw new Error('Non authentifié');
-
-      // 1. Créer la vente (user_id = ownerId pour isoler les données par business)
-      const { data: sale, error: saleErr } = await supabase
-        .from('sales')
-        .insert({
-          user_id: ownerId,
-          total_amount: total,
-          payment_method: paymentMethod,
-          client_name: clientName.trim() || null,
-        })
-        .select()
-        .single();
-
-      if (saleErr) throw saleErr;
-      saleId = sale.id;
-
-      // 2. Insérer les sale_items — si échec, on annule la vente
-      const items = cart.map((i) => ({
-        sale_id: sale.id,
-        product_id: i.product.id,
-        product_name: i.product.name,
-        quantity: i.quantity,
-        unit_price: i.product.price_sell,
-        subtotal: i.product.price_sell * i.quantity,
-      }));
-
-      const { error: itemsErr } = await supabase.from('sale_items').insert(items);
-      if (itemsErr) {
-        await supabase.from('sales').delete().eq('id', sale.id);
-        throw itemsErr;
-      }
-
-      // 3. Mise à jour du stock + stock_logs
-      for (const item of cart) {
-        const newQty = item.product.stock_qty - item.quantity;
-
-        const { error: stockErr } = await supabase
-          .from('products')
-          .update({ stock_qty: newQty })
-          .eq('id', item.product.id);
-
-        if (!stockErr) {
-          await supabase.from('stock_logs').insert({
-            user_id: ownerId,
-            product_id: item.product.id,
-            product_name: item.product.name,
-            movement_type: 'sale',
-            quantity_change: -item.quantity,
-            stock_before: item.product.stock_qty,
-            stock_after: newQty,
-            reference_id: sale.id,
-          });
-        }
-      }
-
-      // 4. Journal d'activité
-      const itemsDesc = cart.map((i) => `${i.quantity}x ${i.product.name}`).join(', ');
-      await logActivity({
-        ownerId,
-        actorId: user.id,
-        actorEmail: user.email ?? '',
-        actorName,
-        action: 'sale',
-        description: `Vente ${formatCFA(total)} (${paymentMethod === 'cash' ? 'Espèces' : 'MoMo'}) — ${itemsDesc}`,
-        metadata: { sale_id: sale.id, total, payment_method: paymentMethod },
-      });
-
-      // 5. Générer le lien WhatsApp
-      const waLink = generateWhatsAppReceiptLink({
-        items: items.map((i) => ({
-          product_name: i.product_name,
+      // Toute l'écriture passe par une unique fonction SQL atomique : vente,
+      // lignes, décrément de stock et journal — ou rien du tout.
+      // Voir supabase/migration_sales_rpc.sql.
+      // Seul product_id et quantity sont envoyés : le prix, le total et le
+      // numéro de facture sont recalculés côté serveur.
+      const { data, error: saleErr } = await supabase.rpc('create_sale', {
+        p_items: cart.map((i) => ({
+          product_id: i.product.id,
           quantity: i.quantity,
-          unit_price: i.unit_price,
-          subtotal: i.subtotal,
         })),
-        total,
-        paymentMethod,
-        date: new Date(),
+        p_payment_method: paymentMethod,
+        p_client_name: clientName.trim() || null,
       });
+
+      if (saleErr) throw new Error(readableSaleError(saleErr.message));
+      if (!data || typeof data !== 'object') throw new Error("La vente n'a pas pu être enregistrée.");
+
+      // Total et numéro de facture sont ceux retenus par le serveur.
+      const saleId = String(data.id);
+      const serverTotal = Number(data.total_amount ?? total);
+      const invoiceNumber = (data.invoice_number as string | null) ?? null;
+
+      // Journal d'activité : best-effort, ne doit pas faire échouer l'encaissement
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user && ownerId) {
+        const itemsDesc = cart.map((i) => `${i.quantity}x ${i.product.name}`).join(', ');
+        await logActivity({
+          ownerId,
+          actorId: user.id,
+          actorEmail: user.email ?? '',
+          actorName,
+          action: 'sale',
+          description: `Vente ${formatCFA(serverTotal)} (${paymentMethod === 'cash' ? 'Espèces' : 'MoMo'}) — ${itemsDesc}`,
+          metadata: { sale_id: saleId, total: serverTotal, payment_method: paymentMethod },
+        });
+      }
+
+      // Lien WhatsApp. businessName et phone n'étaient jamais transmis : tous
+      // les reçus disaient « Notre Boutique » et s'ouvraient sans destinataire.
+      const waLink = generateWhatsAppReceiptLink(
+        {
+          items: cart.map((i) => ({
+            product_name: i.product.name,
+            quantity: i.quantity,
+            unit_price: i.product.price_sell,
+            subtotal: i.product.price_sell * i.quantity,
+          })),
+          total: serverTotal,
+          paymentMethod,
+          date: new Date(),
+          businessName: org?.name,
+        },
+        clientPhone.trim() || undefined
+      );
 
       const given = parseFloat(amountGiven) || 0;
-      const saleDate = new Date();
       setReceipt({
-        saleId: sale.id,
+        saleId,
+        invoiceNumber,
         waLink,
         items: [...cart],
-        total,
+        total: serverTotal,
         paymentMethod,
         clientName: clientName.trim(),
+        clientPhone: clientPhone.trim(),
         amountGiven: given,
-        change: paymentMethod === 'cash' && given >= total ? given - total : 0,
-        date: saleDate,
+        change: paymentMethod === 'cash' && given >= serverTotal ? given - serverTotal : 0,
+        date: new Date(),
       });
       setCart([]);
       setClientName('');
+      setClientPhone('');
       setAmountGiven('');
       onSaleComplete?.();
     } catch (err) {
-      setCheckoutError('Erreur : ' + (err as Error).message);
+      setCheckoutError(err instanceof Error ? err.message : 'Erreur inconnue');
     } finally {
       setLoading(false);
     }
@@ -316,12 +335,26 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
           )}
         </div>
 
-        {/* Nom client (optionnel) */}
-        <div className="border-t border-slate-200 pt-3">
+        {scanError && (
+          <p className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
+            {scanError}
+          </p>
+        )}
+
+        {/* Nom + téléphone client (optionnel) */}
+        <div className="border-t border-slate-200 pt-3 space-y-2">
           <Input
             placeholder="Nom du client (optionnel)"
             value={clientName}
             onChange={(e) => setClientName(e.target.value)}
+            className="text-sm"
+          />
+          <Input
+            type="tel"
+            inputMode="tel"
+            placeholder="Téléphone WhatsApp (optionnel)"
+            value={clientPhone}
+            onChange={(e) => setClientPhone(e.target.value)}
             className="text-sm"
           />
         </div>
@@ -428,8 +461,13 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
                 className="flex items-center justify-center gap-2 rounded-xl bg-[#25D366] text-white font-semibold py-3 hover:bg-[#1ebe5d] transition-colors"
               >
                 <Share2 className="h-4 w-4" />
-                Partager le reçu WhatsApp
+                {receipt?.clientPhone ? 'Envoyer le reçu WhatsApp' : 'Partager le reçu WhatsApp'}
               </a>
+              {!receipt?.clientPhone && (
+                <p className="text-xs text-slate-400 text-center -mt-1">
+                  Renseignez un téléphone ci-dessus pour envoyer directement au client.
+                </p>
+              )}
 
               {/* Reçu simple — tous les plans */}
               <Button
@@ -444,20 +482,16 @@ export function POSModule({ products, onSaleComplete }: POSModuleProps) {
                 Imprimer le reçu
               </Button>
 
-              {/* Facture normalisée — Pro uniquement */}
-              {plan === 'pro' ? (
+              {/* Facture normalisée — Pro uniquement.
+                  Le numéro est attribué par create_sale au moment de l'encaissement
+                  (incrément atomique côté serveur), il n'est plus recalculé ici. */}
+              {receipt?.invoiceNumber ? (
                 <Button
                   variant="outline"
                   className="w-full gap-2 border-amber-300 text-amber-700 hover:bg-amber-50"
-                  onClick={async () => {
+                  onClick={() => {
                     if (!receipt || !org) return;
-                    const invoiceNumber = buildInvoiceNumber(org);
-                    // Incrémenter le compteur dans la DB
-                    await supabase
-                      .from('organizations')
-                      .update({ invoice_counter: org.invoice_counter + 1 } as Record<string, unknown>)
-                      .eq('id', org.id);
-                    printReceipt({ ...receipt, org, invoiceNumber });
+                    printReceipt({ ...receipt, org });
                   }}
                 >
                   <FileText className="h-4 w-4" />

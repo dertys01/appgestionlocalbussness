@@ -30,24 +30,41 @@ export function RestockModal({ product, onClose, onSaved }: RestockModalProps) {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user || !ownerId) { setLoading(false); return; }
 
-    const newQty = product.stock_qty + added;
+    // Incrément atomique côté serveur : `product.stock_qty` vient d'un props
+    // potentiellement périmé, un read-modify-write client pouvait donc
+    // écraser un réapprovisionnement concurrent. On relit la valeur réelle.
+    const { data: fresh, error: readErr } = await supabase
+      .from('products')
+      .select('stock_qty')
+      .eq('id', product.id)
+      .single();
+    if (readErr || !fresh) {
+      setError(readErr?.message ?? 'Produit introuvable.');
+      setLoading(false);
+      return;
+    }
+
+    const stockBefore = fresh.stock_qty;
+    const newQty = stockBefore + added;
 
     const { error: err } = await supabase
       .from('products')
       .update({ stock_qty: newQty })
-      .eq('id', product.id);
+      .eq('id', product.id)
+      .eq('stock_qty', stockBefore); // verrou optimiste : 0 ligne si concurrence
 
     if (err) { setError(err.message); setLoading(false); return; }
 
-    await supabase.from('stock_logs').insert({
+    const { error: logErr } = await supabase.from('stock_logs').insert({
       user_id: ownerId,
       product_id: product.id,
       product_name: product.name,
       movement_type: 'restock',
       quantity_change: added,
-      stock_before: product.stock_qty,
+      stock_before: stockBefore,
       stock_after: newQty,
     });
+    if (logErr) { setError(logErr.message); setLoading(false); return; }
 
     await logActivity({
       ownerId,
@@ -55,7 +72,7 @@ export function RestockModal({ product, onClose, onSaved }: RestockModalProps) {
       actorEmail: user.email ?? '',
       actorName,
       action: 'restock',
-      description: `Réappro. ${product.name} : +${added} unités (stock ${product.stock_qty} → ${newQty})`,
+      description: `Réappro. ${product.name} : +${added} unités (stock ${stockBefore} → ${newQty})`,
     });
 
     setLoading(false);
@@ -100,6 +117,9 @@ export function RestockModal({ product, onClose, onSaved }: RestockModalProps) {
           {qty && parseInt(qty) > 0 && (
             <div className="text-sm text-emerald-600 font-medium">
               Nouveau stock : {product.stock_qty + parseInt(qty)} unités
+              <span className="block text-xs text-slate-400 font-normal">
+                (calculé sur le stock affiché, il sera revérifié à l&apos;enregistrement)
+              </span>
             </div>
           )}
 

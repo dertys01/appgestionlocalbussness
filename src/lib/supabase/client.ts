@@ -1,7 +1,16 @@
 import { createClient as createSupabaseClient } from '@supabase/supabase-js';
 
-const SUPABASE_URL = 'https://lmygvpruffpspixrsixh.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxteWd2cHJ1ZmZwc3BpeHJzaXhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQxMjMyMzQsImV4cCI6MjA4OTY5OTIzNH0.41qxcJZZtucXBYk8JDQo9WtiS6dITqK6xzI_PiPqKwk';
+// La clé anon est publique par nature, mais la garder en dur ici figeait le
+// projet Supabase dans le code : le pointer ailleurs, ou faire tourner une
+// seconde branche (staging, preview Vercel) exigeait une modification source.
+const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+const SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+  throw new Error(
+    'NEXT_PUBLIC_SUPABASE_URL et NEXT_PUBLIC_SUPABASE_ANON_KEY doivent être définies (voir .env.local.example).'
+  );
+}
 
 let clientInstance: ReturnType<typeof createSupabaseClient> | null = null;
 

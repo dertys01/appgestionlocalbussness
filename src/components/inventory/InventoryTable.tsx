@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/table';
 import { formatCFA } from '@/lib/utils/currency';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
+import { logActivity } from '@/lib/utils/activity';
 import { toCSV, downloadCSV } from '@/lib/utils/export';
 import { isFeatureAllowed } from '@/lib/utils/plans';
 import type { Product } from '@/types';
@@ -31,7 +32,7 @@ type SortKey = 'name' | 'stock_qty' | 'price_sell' | 'category';
 type SortDir = 'asc' | 'desc';
 
 export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }: InventoryTableProps) {
-  const { supabase, plan } = useSupabase();
+  const { supabase, plan, canManageProducts, ownerId, actorName } = useSupabase();
 
   const handleExport = () => {
     const csv = toCSV(products as unknown as Record<string, unknown>[], [
@@ -49,22 +50,32 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 20;
 
   const toggleSort = (key: SortKey) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
     else { setSortKey(key); setSortDir('asc'); }
+    // Reset fait dans le gestionnaire d'événement plutôt que dans un effet :
+    // évite un setState en cascade après le rendu.
+    setCurrentPage(1);
   };
+
+  const handleSearch = (value: string) => {
+    setSearch(value);
+    setCurrentPage(1);
+  };;
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
     return products
       .filter(
         (p) =>
-          p.name.toLowerCase().includes(q) ||
-          (p.sku ?? '').toLowerCase().includes(q) ||
-          (p.category ?? '').toLowerCase().includes(q)
+          p.is_active !== false && // archivé : masqué du catalogue
+          (p.name.toLowerCase().includes(q) ||
+            (p.sku ?? '').toLowerCase().includes(q) ||
+            (p.category ?? '').toLowerCase().includes(q))
       )
       .sort((a, b) => {
         const va = a[sortKey] ?? '';
@@ -76,23 +87,81 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
   }, [products, search, sortKey, sortDir]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
-  const paginated = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  // currentPage est dérivé, pas stocké : la recherche ou le tri change la
+  // longueur de `filtered`, et une page devenue hors bornes produisait un
+  // tableau vide sans message. Le clamp évite l'effet de resynchronisation.
+  const safePage = Math.min(currentPage, totalPages);
+  const paginated = filtered.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
 
-  // Reset page quand la recherche change
-  useMemo(() => { setCurrentPage(1); }, [search, sortKey, sortDir]); // eslint-disable-line react-hooks/exhaustive-deps
+  /**
+   * Archivage, pas suppression.
+   * Le DELETE direct échouait sur tout produit ayant déjà été vendu (FK
+   * sale_items / stock_logs sans ON DELETE CASCADE) et le message conseillait
+   * « désactivez-le » alors qu'aucune colonne n'existait : chemin mort.
+   * archive_product() refuse proprement si le produit a un historique de
+   * ventes, et le journal d'activité trace l'opération.
+   */
+  const handleArchive = async (product: Product) => {
+    if (!window.confirm(
+      `Archiver "${product.name}" ?\n\n` +
+      `Il disparaîtra de la caisse et de l'inventaire.\n` +
+      `Si le produit a déjà été vendu, l'archivage sera refusé pour préserver l'historique.`
+    )) return;
 
-  const handleDelete = async (product: Product) => {
-    if (!window.confirm(`Supprimer "${product.name}" ? Cette action est irréversible.`)) return;
     setDeletingId(product.id);
-    await supabase.from('products').delete().eq('id', product.id);
-    setDeletingId(null);
-    onRefresh();
+    setDeleteError('');
+
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as any).rpc('archive_product', { p_product_id: product.id });
+      if (error) throw new Error(error.message);
+
+      // Le journal était claimed mais jamais écrit sur suppression.
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user && ownerId) {
+        await logActivity({
+          ownerId,
+          actorId: user.id,
+          actorEmail: user.email ?? '',
+          actorName,
+          action: 'product_archive',
+          description: `Produit archivé : ${product.name}`,
+          metadata: { product_id: product.id },
+        });
+      }
+      onRefresh();
+    } catch (e) {
+      setDeleteError(readableArchiveError((e as Error).message, product.name));
+    } finally {
+      setDeletingId(null);
+    }
   };
+
+  /** Traduit les exceptions de archive_product() en messages utilisables. */
+  function readableArchiveError(message: string, name: string): string {
+    if (/Impossible d.archiver/i.test(message)) {
+      // Le motif contient le nombre de ventes et le nom du produit.
+      const nb = message.match(/apparaît dans (\d+) vente/);
+      return `« ${name} » ne peut pas être archivé : il figure dans ${nb ? nb[1] : 'plusieurs'} vente(s). Mettez son stock à 0 et renommez-le « ${name} (épuisé) ».`;
+    }
+    if (/Droits insuffisants/.test(message)) {
+      return 'Seul le patron peut archiver un produit.';
+    }
+    if (/Failed to fetch|NetworkError/i.test(message)) {
+      return 'Connexion impossible. Vérifiez votre réseau et réessayez.';
+    }
+    return message;
+  }
 
   const lowStock = products.filter((p) => p.stock_qty < p.min_stock_level).length;
 
   return (
     <div className="space-y-4">
+      {deleteError && (
+        <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
+          {deleteError}
+        </div>
+      )}
       {/* Alerte stock */}
       {lowStock > 0 && (
         <div className="flex items-center gap-2 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-red-700 text-sm">
@@ -108,7 +177,7 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
           <Input
             placeholder="Rechercher..."
             value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            onChange={(e) => handleSearch(e.target.value)}
             className="pl-9"
           />
         </div>
@@ -118,10 +187,14 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
             <span className="hidden sm:inline">CSV</span>
           </Button>
         )}
-        <Button onClick={onAdd} className="bg-indigo-600 hover:bg-indigo-700 gap-2 shrink-0">
-          <Plus className="h-4 w-4" />
-          <span className="hidden sm:inline">Ajouter</span>
-        </Button>
+        {/* Un caissier n'a pas les droits d'écriture sur le catalogue (RLS
+            products_insert/update/delete) : on ne propose pas le bouton. */}
+        {canManageProducts && (
+          <Button onClick={onAdd} className="bg-indigo-600 hover:bg-indigo-700 gap-2 shrink-0">
+            <Plus className="h-4 w-4" />
+            <span className="hidden sm:inline">Ajouter</span>
+          </Button>
+        )}
       </div>
 
       {/* Tableau */}
@@ -182,30 +255,34 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
                       )}
                     </TableCell>
                     <TableCell>
-                      <div className="flex items-center justify-center gap-1">
-                        <button
-                          onClick={() => onRestock(p)}
-                          title="Réapprovisionner"
-                          className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50"
-                        >
-                          <PackagePlus className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => onEdit(p)}
-                          title="Modifier"
-                          className="p-1.5 rounded-lg text-indigo-600 hover:bg-indigo-50"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </button>
-                        <button
-                          onClick={() => handleDelete(p)}
-                          disabled={deletingId === p.id}
-                          title="Supprimer"
-                          className="p-1.5 rounded-lg text-red-400 hover:bg-red-50 disabled:opacity-40"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      </div>
+                      {canManageProducts ? (
+                        <div className="flex items-center justify-center gap-1">
+                          <button
+                            onClick={() => onRestock(p)}
+                            title="Réapprovisionner"
+                            className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50"
+                          >
+                            <PackagePlus className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => onEdit(p)}
+                            title="Modifier"
+                            className="p-1.5 rounded-lg text-indigo-600 hover:bg-indigo-50"
+                          >
+                            <Pencil className="h-4 w-4" />
+                          </button>
+                          <button
+                            onClick={() => handleArchive(p)}
+                            disabled={deletingId === p.id}
+                            title="Archiver"
+                            className="p-1.5 rounded-lg text-red-400 hover:bg-red-50 disabled:opacity-40"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-xs text-slate-300">—</span>
+                      )}
                     </TableCell>
                   </TableRow>
                 );
@@ -222,16 +299,16 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
         {totalPages > 1 && (
           <div className="flex items-center gap-2">
             <button
-              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              disabled={currentPage === 1}
+              onClick={() => setCurrentPage(Math.max(1, safePage - 1))}
+              disabled={safePage === 1}
               className="px-2 py-1 text-xs rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50"
             >
               ←
             </button>
-            <span className="text-xs text-slate-500">{currentPage} / {totalPages}</span>
+            <span className="text-xs text-slate-500">{safePage} / {totalPages}</span>
             <button
-              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-              disabled={currentPage === totalPages}
+              onClick={() => setCurrentPage(Math.min(totalPages, safePage + 1))}
+              disabled={safePage === totalPages}
               className="px-2 py-1 text-xs rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50"
             >
               →
