@@ -113,7 +113,15 @@ CREATE TRIGGER sale_items_freeze_cost
 -- Une fonction SECURITY INVOKER s'exécute avec les droits de l'appelant :
 -- PostgREST applique donc les policies RLS de products et de sale_items, qui
 -- gèrent déjà l'isolation. Aucun filtre à maintenir ici.
-CREATE OR REPLACE FUNCTION get_product_profitability()
+--
+-- ⚠ DROP avant CREATE : la signature de retour a changé (avg_sold_price,
+--   discount_given, units_sold_at_loss pour le prix négocié). PostgreSQL refuse
+--   en 42P13 de remplacer une fonction dont le type de retour diffère — les
+--   paramètres OUT font partie de la signature. Le DROP doit précéder, sinon
+--   le script s'interrompt et le reste de la migration n'est pas appliqué.
+DROP FUNCTION IF EXISTS get_product_profitability();
+
+CREATE FUNCTION get_product_profitability()
 RETURNS TABLE (
   id                 uuid,
   name               text,
