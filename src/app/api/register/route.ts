@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { requireEnv } from '@/lib/utils/server';
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-const ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+// Validées AVANT tout appel réseau : createClient(URL, undefined) produisait
+// une erreur d'en-tête invalide dont le message affichait la clé utilisée.
+const SUPABASE_URL = requireEnv('NEXT_PUBLIC_SUPABASE_URL');
+const SERVICE_ROLE_KEY = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
+const ANON_KEY = requireEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY');
 
 const MAX_ATTEMPTS_PER_HOUR = 3;
 
@@ -119,6 +122,14 @@ export async function POST(req: NextRequest) {
       refresh_token: session.session.refresh_token,
     });
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    // `String(e)` renvoyait l'erreur brute du client Supabase, qui inclut
+    // l'en-tête Authorization — donc la clé service role exposée à l'écran
+    // (visible sur la capture « Headers.append: "Bearer eyJ…" is an invalid
+    // header value »). On ne renvoie plus que le type d'erreur.
+    console.error('[register] échec inattendu', e instanceof Error ? e.message : e);
+    return NextResponse.json(
+      { error: 'Erreur interne du serveur. Réessayez dans un moment.' },
+      { status: 500 }
+    );
   }
 }

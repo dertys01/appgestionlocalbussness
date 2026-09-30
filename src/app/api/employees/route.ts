@@ -1,15 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { PLAN_LIMITS } from '@/lib/utils/plans';
+import { serverError, requireEnv } from '@/lib/utils/server';
 import type { Plan } from '@/types';
 
-const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPABASE_URL = requireEnv('NEXT_PUBLIC_SUPABASE_URL');
+const SERVICE_ROLE_KEY = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
 
 function getAdminClient() {
-  if (!SERVICE_ROLE_KEY) {
-    throw new Error('SUPABASE_SERVICE_ROLE_KEY non configuré');
-  }
   return createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
@@ -33,7 +31,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ members: data ?? [] });
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    return NextResponse.json(serverError('employees', e), { status: 500 });
   }
 }
 
@@ -113,6 +111,6 @@ export async function POST(req: NextRequest) {
       member: { id: newUser.user.id, email, name },
     });
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    return NextResponse.json(serverError('employees', e), { status: 500 });
   }
 }

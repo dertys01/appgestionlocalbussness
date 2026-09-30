@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
+import { serverError, requireEnv } from '@/lib/utils/server';
 import { createClient } from '@supabase/supabase-js';
 
 export async function POST(req: NextRequest) {
   try {
-    const stripeKey = process.env.STRIPE_SECRET_KEY;
-    const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const stripeKey = requireEnv('STRIPE_SECRET_KEY');
+    const SERVICE_ROLE_KEY = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
     if (!stripeKey) {
       return NextResponse.json({ error: 'STRIPE_SECRET_KEY non configuré' }, { status: 500 });
     }
@@ -14,7 +15,7 @@ export async function POST(req: NextRequest) {
     }
 
     const stripe = new Stripe(stripeKey, { apiVersion: '2026-03-25.dahlia' });
-    const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+    const SUPABASE_URL = requireEnv('NEXT_PUBLIC_SUPABASE_URL');
     const APP_URL = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000';
     const PRICE_IDS: Record<string, string> = {
       starter: process.env.STRIPE_PRICE_STARTER ?? '',
@@ -67,6 +68,6 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ url: session.url });
   } catch (e) {
-    return NextResponse.json({ error: String(e) }, { status: 500 });
+    return NextResponse.json(serverError('stripe.checkout', e), { status: 500 });
   }
 }

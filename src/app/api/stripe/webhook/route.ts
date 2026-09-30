@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
+import { requireEnv } from '@/lib/utils/server';
 import { createClient } from '@supabase/supabase-js';
 
 type Plan = 'free' | 'starter' | 'pro';
@@ -20,9 +21,9 @@ function subscriptionPeriodEnd(sub: { items?: { data?: Array<{ current_period_en
 }
 
 export async function POST(req: NextRequest) {
-  const stripeKey = process.env.STRIPE_SECRET_KEY;
-  const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
-  const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const stripeKey = requireEnv('STRIPE_SECRET_KEY');
+  const SERVICE_ROLE_KEY = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
+  const SUPABASE_URL = requireEnv('NEXT_PUBLIC_SUPABASE_URL');
   if (!stripeKey) return NextResponse.json({ error: 'STRIPE_SECRET_KEY manquant' }, { status: 500 });
   const stripe = new Stripe(stripeKey, { apiVersion: '2026-03-25.dahlia' });
   const body = await req.text();
@@ -106,7 +107,11 @@ export async function POST(req: NextRequest) {
       }
     }
   } catch (e) {
-    processError = String(e);
+    // Stocké dans webhook_events, jamais renvoyé au client — mais la table est
+    // lisible par la service role. On conserve le type d'erreur, pas la pile
+    // complète : le message brut du client Supabase contient l'en-tête
+    // Authorization.
+    processError = e instanceof Error ? e.message : 'erreur inconnue';
     console.error('[Webhook] Erreur traitement', event.type, e);
   }
 
