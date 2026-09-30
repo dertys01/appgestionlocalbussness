@@ -139,6 +139,30 @@ La séparation est appliquée en base (`can_manage_products()`) et reflétée da
 l'interface via `canManageProducts`. Le rôle se règle dans `business_members.role`
 (`'employee'`, `'manager'`).
 
+## Périodes et affichage
+
+Les écrans Ventes, Rapports et Charges partagent un sélecteur unique
+(`src/components/ui/PeriodPicker.tsx`, logique dans `src/lib/utils/period.ts`) :
+7 jours, 30 jours, 90 jours, 6 mois, 1 an, plus un choix libre de dates. Toute
+période est ramenée à un an au maximum, et au plafond du plan
+(`salesHistoryDays`) s'il est plus bas — un compte Free ne voit proposer que
+7 et 30 jours.
+
+Les bornes sont incluses des deux côtés. Une période est calculée en heure
+locale puis rendue en `YYYY-MM-DD` : un `toISOString()` direct décale la
+journée autour de minuit, ce qui, sur un an, fausse le rapport.
+
+L'histogramme des Rapports se regroupe selon l'amplitude — par jour jusqu'à un
+mois, par semaine jusqu'à quatre mois, par mois au-delà. 365 barres
+journalières sont illisibles sur un téléphone, et un mois sans vente laisserait
+un trou dans le graphique.
+
+Deux listes sont rendues par tranches plutôt qu'en entier : les produits de la
+caisse (60 par tranche, `PRODUCT_PAGE_SIZE`) et les charges (50 par tranche,
+« Afficher plus »). La recherche porte toujours sur la liste entière, pas sur la
+tranche affichée ; le scanner cherche dans `products` complet et ajoute donc
+correctement un produit hors écran.
+
 ## Inviter un employé
 
 Le patron saisit une adresse email et reçoit un lien à transmettre ; l'employé
@@ -228,9 +252,11 @@ un utilisateur hors plan peut les rendre par d'autres moyens.
 ## Scripts
 
 ```bash
-npm run dev      # serveur de développement
-npm run build    # build de production
-npm run start    # démarre le build
-npm run lint     # ESLint
-npm run test:db  # tests des migrations (Postgres embarqué)
+npm run dev          # serveur de développement
+npm run build        # build de production
+npm run start        # démarre le build
+npm run lint         # ESLint
+npm run test:db      # tests des migrations (Postgres embarqué)
+npm run test:period  # tests de l'arithmétique des périodes
+npm test             # les deux suites
 ```

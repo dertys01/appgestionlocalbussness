@@ -6,84 +6,53 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
+import { PeriodPicker } from '@/components/ui/PeriodPicker';
 import { formatCFA } from '@/lib/utils/currency';
 import { toCSV, downloadCSV } from '@/lib/utils/export';
 import { isFeatureAllowed, PLAN_LIMITS, PLAN_LABELS } from '@/lib/utils/plans';
-import type { Plan, Sale, SaleItem } from '@/types';
+import { addDays, rangeFromDays, todayISO, type DateRange } from '@/lib/utils/period';
+import type { Sale, SaleItem } from '@/types';
 
 interface SaleWithItems extends Sale {
   sale_items: SaleItem[];
 }
 
-type DateFilter = 'today' | '7d' | '30d' | 'all';
 const PAGE_SIZE = 20;
-
-const FILTERS: { key: DateFilter; label: string }[] = [
-  { key: 'today', label: "Aujourd'hui" },
-  { key: '7d',    label: '7 jours' },
-  { key: '30d',   label: '30 jours' },
-  { key: 'all',   label: 'Tout' },
-];
-
-function getStartDate(filter: DateFilter): string | null {
-  const now = new Date();
-  if (filter === 'today') {
-    now.setHours(0, 0, 0, 0);
-    return now.toISOString();
-  }
-  if (filter === '7d') {
-    now.setDate(now.getDate() - 7);
-    return now.toISOString();
-  }
-  if (filter === '30d') {
-    now.setDate(now.getDate() - 30);
-    return now.toISOString();
-  }
-  return null;
-}
-
-/**
- * Date de début la plus ancienne que le plan autorise. `salesHistoryDays`
- * existait dans PLAN_LIMITS mais n'était lu nulle part : un compte Free
- * obtenait un historique illimité.
- */
-function getPlanFloor(plan: Plan): string | null {
-  const days = PLAN_LIMITS[plan].salesHistoryDays;
-  if (days === Infinity) return null;
-  const floor = new Date();
-  floor.setDate(floor.getDate() - days);
-  return floor.toISOString();
-}
 
 export function SalesHistory() {
   const { supabase, plan } = useSupabase();
   const [sales, setSales] = useState<SaleWithItems[]>([]);
   const [loading, setLoading] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [filter, setFilter] = useState<DateFilter>('7d');
+  const [filter, setFilter] = useState<DateRange>(() => rangeFromDays(7));
   const [currentPage, setCurrentPage] = useState(1);
   const [error, setError] = useState('');
 
-  const fetchSales = async (f: DateFilter) => {
+  const fetchSales = async (f: DateRange) => {
     setLoading(true);
     setError('');
     try {
-      let query = supabase
+      // Bornes incluses des deux côtés : sans le .lte, la journée du jour même
+      // disparaissait et l'écran affichait « aucune vente » après un encaissement.
+      const from = new Date(`${f.from}T00:00:00`);
+      const to = new Date(`${f.to}T23:59:59.999`);
+
+      // Plafond du plan appliqué en plus du filtre choisi : une période
+      // demandée au-delà de salesHistoryDays est ramenée dans les limites.
+      const planDays = PLAN_LIMITS[plan].salesHistoryDays;
+      const floor = planDays === Infinity
+        ? null
+        : new Date(`${addDays(todayISO(), -(planDays - 1))}T00:00:00`);
+
+      const effectiveFrom = floor && floor > from ? floor : from;
+
+      const { data, error: queryErr } = await supabase
         .from('sales')
         .select('*, sale_items(*)')
+        .gte('created_at', effectiveFrom.toISOString())
+        .lte('created_at', to.toISOString())
         .order('created_at', { ascending: false });
 
-      const start = getStartDate(f);
-      if (start) query = query.gte('created_at', start);
-
-      // Plafond du plan appliqué en plus du filtre choisi : « Tout » reste
-      // borné à salesHistoryDays pour les plans limités.
-      const floor = getPlanFloor(plan);
-      if (floor) {
-        query = start && start > floor ? query.gte('created_at', start) : query.gte('created_at', floor);
-      }
-
-      const { data, error: queryErr } = await query;
       // L'error était ignorée : un échec de réseau s'affichait comme
       // « Aucune vente sur cette période ».
       if (queryErr) throw new Error(queryErr.message);
@@ -102,11 +71,12 @@ export function SalesHistory() {
   // si le plan changeait (upgrade/downgrade en cours de session).
   useEffect(() => { fetchSales(filter); }, [filter, plan]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleFilterChange = (f: DateFilter) => setFilter(f);
+  const handleFilterChange = (f: DateRange) => setFilter(f);
 
-  // « Tout » demande un horizon illimité alors que le plan en impose un.
-  const historyFloor = getPlanFloor(plan);
-  const isTruncatedByPlan = filter === 'all' && historyFloor !== null;
+  // Le sélecteur est plafonné par le plan, donc une période tronquée ne peut
+  // venir que d'un changement de plan en cours de session.
+  const planDays = PLAN_LIMITS[plan].salesHistoryDays;
+  const isTruncatedByPlan = planDays !== Infinity;
 
   const totalPeriode = sales.reduce((sum, s) => sum + s.total_amount, 0);
   const totalPages = Math.max(1, Math.ceil(sales.length / PAGE_SIZE));
@@ -121,19 +91,12 @@ export function SalesHistory() {
   return (
     <div className="space-y-4">
       {/* Filtres */}
-      <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
-        {FILTERS.map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => handleFilterChange(key)}
-            className={`flex-1 py-1.5 text-xs font-medium rounded-lg transition-colors ${
-              filter === key ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <PeriodPicker
+        value={filter}
+        onChange={handleFilterChange}
+        maxDays={planDays}
+        className="bg-slate-100 rounded-xl p-1.5"
+      />
 
       {isTruncatedByPlan && (
         <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
