@@ -10,12 +10,24 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
+      # La clé anon était en dur dans ce fichier, et différait de celle de
+      # src/lib/supabase/client.ts : au premier changement de projet ou de clé,
+      # le ping partait avec des identifiants périmés.
       - name: Ping Supabase to prevent auto-pause
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
         run: |
+          if [ -z "$NEXT_PUBLIC_SUPABASE_URL" ] || [ -z "$NEXT_PUBLIC_SUPABASE_ANON_KEY" ]; then
+            echo "::error::variables NEXT_PUBLIC_SUPABASE_URL / NEXT_PUBLIC_SUPABASE_ANON_KEY absentes des secrets du dépôt"
+            exit 1
+          fi
+
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            "https://lmygvpruffpspixrsixh.supabase.co/rest/v1/products?select=id&limit=1" \
-            -H "apikey: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxteWd2cHJ1ZmZwc3BpeHJzaXhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQxMjMyMzQsImV4cCI6MjA4OTY5OTIzNH0.mn8BSN2KpWBMCfvXBWpNpFqE5LJkG-XfCzQVIr3tKvM" \
-            -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxteWd2cHJ1ZmZwc3BpeHJzaXhoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzQxMjMyMzQsImV4cCI6MjA4OTY5OTIzNH0.mn8BSN2KpWBMCfvXBWpNpFqE5LJkG-XfCzQVIr3tKvM")
+            "$NEXT_PUBLIC_SUPABASE_URL/rest/v1/products?select=id&limit=1" \
+            -H "apikey: $NEXT_PUBLIC_SUPABASE_ANON_KEY" \
+            -H "Authorization: Bearer $NEXT_PUBLIC_SUPABASE_ANON_KEY")
+
           echo "Supabase response: HTTP $STATUS"
           if [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 300 ]; then
             echo "✓ Supabase is alive"

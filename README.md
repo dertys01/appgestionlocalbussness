@@ -1,36 +1,171 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# GestionLocal — ERP/POS multi-tenant
 
-## Getting Started
+Application de gestion commerciale (caisse, stock, équipe, rapports) pour petites
+boutiques, avec abonnements Stripe. Supabase (Postgres + Auth + RLS) comme
+socle de données, Next.js 16 en App Router.
 
-First, run the development server:
+## Démarrage
 
 ```bash
+npm install
+cp .env.local.example .env.local   # puis renseigner les clés
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Variables d'environnement
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+| Variable | Rôle |
+|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | URL du projet Supabase |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Clé anon (côté navigateur) |
+| `SUPABASE_SERVICE_ROLE_KEY` | Clé service role — **serveur uniquement**, contourne la RLS |
+| `NEXT_PUBLIC_APP_URL` | Origine publique, utilisée par Stripe pour les redirections |
+| `STRIPE_SECRET_KEY` | Clé Stripe serveur |
+| `STRIPE_PRICE_STARTER`, `STRIPE_PRICE_PRO` | Identifiants de prix pour le checkout |
+| `STRIPE_WEBHOOK_SECRET` | Signature du webhook Stripe |
+| `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_PROJECT`, `SENTRY_AUTH_TOKEN` | Sentry |
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+> `src/lib/supabase/client.ts` lit l'URL et la clé anon depuis des constantes
+> en dur plutôt que `process.env`. C'est une clé publique par nature, mais la
+> remplacer suppose une modification de code : à basculer sur `NEXT_PUBLIC_*`
+> pour pouvoir faire tourner le projet sur un autre Supabase.
 
-## Learn More
+## Base de données
 
-To learn more about Next.js, take a look at the following resources:
+Les migrations sont des fichiers SQL appliqués dans l'éditeur Supabase, dans
+cet ordre. Elles ne sont pas versionnées automatiquement : c'est le premier
+point à vérifier après un `git pull`.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| Ordre | Fichier | Rôle |
+|---|---|---|
+| 1 | `schema.sql` | Tables `products`, `sales`, `sale_items`, `stock_logs` + RLS initiale |
+| 2 | `migration_team.sql` | `business_members`, `activity_logs`, `get_business_owner_id()` |
+| 3 | `migration_saas.sql` | `organizations`, `subscriptions` |
+| 4 | `migration_plan_limits.sql` | Trigger de limite de produits |
+| 5 | `migration_invoices.sql` | Champs de facturation |
+| 6 | `migration_webhook_logs.sql` | `webhook_events` |
+| 7 | `migration_indexes.sql` | Index |
+| 8 | `migration_sales_rpc.sql` | `create_sale()`, `bump_rate_limit()`, CHECK stock |
+| 9 | `migration_roles.sql` | Séparation des droits employé / patron |
+| 10 | `migration_profitability.sql` | Coût figé à la vente, `get_product_profitability()`, archivage |
+| 11 | `migration_expenses.sql` | Tables `expenses` / `expense_categories`, `get_cash_flow()` |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+> `migration_team.sql` doit précéder `migration_saas.sql` : la policy
+> « Employé lit l'org de son patron » référence `business_members`.
+> `migration_profitability.sql` doit suivre `migration_sales_rpc.sql` :
+> `create_sale()` écrit `sale_items.unit_cost`.
 
-## Deploy on Vercel
+### Tests
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+npm run test:db
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Le harnais applique les 9 migrations sur un Postgres réel (PGlite, WASM) puis
+vérifie le comportement : atomicité de `create_sale`, cas de stock insuffisant,
+isolation entre organisations, droits employé/patron, rate limiting. C'est le
+seul moyen fiable de valider du SQL avant de le pousser en production — un
+parser ne valide ni les policies RLS ni les corps PL/pgSQL.
+
+## Modèle de données
+
+`organizations.id` est l'`auth.users.id` du patron : il sert d'identifiant de
+tenant. Les employés sont liés via `business_members` (owner_id → member_id), et
+`get_business_owner_id()` fait le pont côté RLS.
+
+```
+organizations ──┬── products.user_id
+                ├── sales.user_id
+                ├── stock_logs.user_id
+                └── business_members.owner_id ──→ member_id (auth.users)
+```
+
+Un membre appartient à un seul business (index unique sur `member_id`).
+
+## Rôles
+
+| Capacité | Employé | Manager | Patron |
+|---|---|---|---|
+| Encaisser une vente | ✓ | ✓ | ✓ |
+| Lire le catalogue, l'inventaire | ✓ | ✓ | ✓ |
+| Créer / modifier / archiver un produit | ✗ | ✓ | ✓ |
+| Réapprovisionner, ajuster un inventaire | ✗ | ✓ | ✓ |
+| Inviter des employés | ✗ | ✗ | ✓ |
+| Facture normalisée, rapports, prévisions | selon le plan | selon le plan | selon le plan |
+
+## Rentabilité
+
+`Rapports → Rentabilité` affiche CA, coût des marchandises, marge brute et taux
+de marge par produit, via la fonction `get_product_profitability()`.
+
+C'est une fonction `SECURITY INVOKER` et non une vue, volontairement : une vue
+PostgREST s'exécute avec les droits de son propriétaire et contourne la RLS, ce
+qui obligerait à dupliquer la règle de tenancy dans la requête. Ici l'isolation
+est celle de `products`, donc une seule source de vérité.
+
+Deux règles à connaître :
+
+- **`sale_items.unit_cost` est figé à la vente.** Un trigger refuse sa
+  modification. Sans ce snapshot, la marge d'hier se recalculait avec le prix
+  d'achat d'aujourd'hui — silencieusement fausse.
+- **Un produit vendu ne peut pas être archivé.** `archive_product()` le refuse
+  et propose de le mettre en stock 0 puis de le renommer « … (épuisé) ». La
+  suppression définitive échouerait de toute façon (FK `sale_items` /
+  `stock_logs` sans `ON DELETE CASCADE`).
+
+Un produit sans prix d'achat apparaît avec une marge de 100 % et un avertissement :
+renseignez `price_buy` avant de conclure.
+
+## Charges et résultat net
+
+`Rapports → Charges` enregistre les dépenses (loyer, salaires, électricité…) et
+croise le chiffre d'affaires avec elles via `get_cash_flow(from, to)`.
+
+- Le plan de comptes est **par organisation** et seedé à la première visite
+  (11 catégories par défaut). `seed_expense_categories()` est idempotent.
+- Un employé **lit** les charges mais ne les saisit pas (même règle que le
+  catalogue). Le journal d'activité enregistre chaque saisie.
+- Un montant négatif ou un libellé vide sont refusés en base (`CHECK`).
+- `get_cash_flow()` ramène les ventes au jour **dans le fuseau de l'organisation**
+  (`organizations.timezone`, repli `Africa/Porto-Novo`) : une vente de 23 h 30
+  n'est pas datée au lendemain par erreur.
+
+Le résultat net affiché ne comprend ni les salaires implicites (bénévole) ni
+l'amortissement du stock. Tant qu'aucune charge n'est saisie, un bandeau le
+rappelle : le résultat net vaut alors le CA, ce qui ne prouve rien.
+
+La séparation est appliquée en base (`can_manage_products()`) et reflétée dans
+l'interface via `canManageProducts`. Le rôle se règle dans `business_members.role`
+(`'employee'`, `'manager'`).
+
+## Points d'attention
+
+**Les ventes passent par `create_sale()`.** Ne réintroduisez pas d'insertion
+directe dans `sales` / `sale_items` / `products` depuis le client : c'est ce qui
+permaitait auparavant de décrémenter le stock de façon non atomique et de
+présenter une vente partielle comme réussie. Le prix et le total sont recalculés
+côté serveur ; le client n'envoie que `product_id` et `quantity`.
+
+**Le rate limiting de `src/proxy.ts` ne fonctionne pas en serverless.** Le
+compteur vit en mémoire ; sur Vercel chaque instance est isolée et repart vide.
+Il protège `next dev` et les déploiements Node à instance unique. `/api/register`
+utilise `bump_rate_limit()` (table Postgres) et est réellement limité. Pour un
+vrai rempart sur les routes proxy : `@upstash/ratelimit` + Redis.
+
+**`salesHistoryDays` est appliqué côté client.** Le filtre borne la requête, mais
+un appel direct à l'API Supabase avec la clé anon peut contourner la limite. Un
+déploiement strict demanderait la même contrainte en RLS ou via une vue.
+
+**Les features `reports` et `forecast` sont verrouillées par l'interface
+seule.** Ce sont des composants client qui interrogent Supabase directement :
+un utilisateur hors plan peut les rendre par d'autres moyens.
+
+## Scripts
+
+```bash
+npm run dev      # serveur de développement
+npm run build    # build de production
+npm run start    # démarre le build
+npm run lint     # ESLint
+npm run test:db  # tests des migrations (Postgres embarqué)
+```
