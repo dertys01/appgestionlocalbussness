@@ -43,14 +43,25 @@ export function printReceipt(data: PrintData) {
     hour: '2-digit', minute: '2-digit',
   });
 
-  const rows = data.items.map((i) => [
-    `<tr>`,
-    `<td>${escapeHtml(i.product.name)}</td>`,
-    `<td style="text-align:center">${escapeHtml(i.quantity)}</td>`,
-    `<td style="text-align:right">${escapeHtml(fmtCFA(i.product.price_sell))}</td>`,
-    `<td style="text-align:right">${escapeHtml(fmtCFA(i.product.price_sell * i.quantity))}</td>`,
-    `</tr>`,
-  ].join('')).join('');
+  // Prix réellement encaissé, pas le prix catalogue : un reçu qui affiche
+  // 15 000 F pour une ligne négociée à 12 000 F est un reçu faux, et c'est
+  // le client qui le garde.
+  const rows = data.items.map((i) => {
+    const prix = i.unitPrice ?? i.product.price_sell;
+    const remise = i.product.price_sell - prix;
+    return [
+      `<tr>`,
+      `<td>${escapeHtml(i.product.name)}` +
+        (remise > 0
+          ? `<br><span style="color:#b45309">remise ${escapeHtml(fmtCFA(remise))}/u</span>`
+          : '') +
+        `</td>`,
+      `<td style="text-align:center">${escapeHtml(i.quantity)}</td>`,
+      `<td style="text-align:right">${escapeHtml(fmtCFA(prix))}</td>`,
+      `<td style="text-align:right">${escapeHtml(fmtCFA(prix * i.quantity))}</td>`,
+      `</tr>`,
+    ].join('');
+  }).join('');
 
   const vendorBlock = isNormalized ? [
     `<p class="bold fs13">FACTURE N° ${escapeHtml(data.invoiceNumber)}</p>`,

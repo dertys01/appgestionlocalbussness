@@ -15,6 +15,9 @@ const ORDER = [
   'migration_indexes.sql',
   'migration_sales_rpc.sql',
   'migration_roles.sql',
+  // Crée sale_items.list_price : doit précéder get_product_profitability(),
+  // qui lit cette colonne pour avg_sold_price et discount_given.
+  'migration_price_override.sql',
   // Doit suivre create_sale : la fonction écrit sale_items.unit_cost.
   'migration_profitability.sql',
   'migration_expenses.sql',
@@ -190,11 +193,26 @@ await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
   check('3a. numéro de facture Pro attribué', /^FAC-\d{4}-\d{5}$/.test(await invoiceOf(saleId)), await invoiceOf(saleId));
 }
 
-// 3b. Le prix client est ignoré (le serveur facture le prix en base)
+// 3b. Le prix catalogue reste la référence : il n'est jamais modifié par la vente.
+//
+// Cette règle a changé. create_sale() ignorait auparavant tout prix transmis
+// (test 3b d'origine : « prix forgé ignoré »), parce qu'un client ne doit pas
+// pouvoir facturer 1 FCFA. Mais dans un marché où le marchandage est la règle,
+// l'impossibilité de modifier un prix est un blocage, pas une protection.
+//
+// Le prix catalogue n'est donc plus imposé, mais il est conservé dans
+// sale_items.list_price : c'est la traçabilité qui remplace le verrou.
 {
   const res = await sale(`[{"product_id":"${P1}","quantity":1,"unit_price":1}]`, 'momo');
-  const total = Number((await q(`SELECT total_amount FROM sales WHERE id='${res.id}'`)).rows[0].total_amount);
-  check('3b. prix forgé ignoré (total = 7000)', total === 7000, `obtenu ${total}`);
+  const li = (await q(`SELECT unit_price, list_price FROM sale_items WHERE sale_id='${res.id}'`)).rows[0];
+  check('3b. prix convenu appliqué (1)', Number(li.unit_price) === 1, `obtenu ${li.unit_price}`);
+  check('3b2. prix catalogue conservé pour comparaison', Number(li.list_price) === 7000, `obtenu ${li.list_price}`);
+  check('3b3. remise restituée = 6 999', Number(res.discount_amount) === 6999, `obtenu ${res.discount_amount}`);
+
+  // Ce que la vente ne doit PAS pouvoir faire : sortir le stock d'un autre
+  // tenant, ou donner le stock. C'est la véritable surface d'attaque.
+  const vol = Number((await q(`SELECT total_amount FROM sales WHERE id='${res.id}'`)).rows[0].total_amount);
+  check('3b4. total = prix convenu × quantité', vol === 1, `obtenu ${vol}`);
 }
 
 // 3c. Numéro de facture unique et séquentiel
@@ -1010,6 +1028,139 @@ await q(`INSERT INTO products (id, user_id, name, price_buy, price_sell, stock_q
   await e('RESET ROLE');
   check('10k. la vue n\'expose aucun fournisseur d\'autre tenant',
     !noms.includes('GrossisteBidon'), noms.join(', '));
+}
+
+// ═══ 11. Prix négocié ═════════════════════════════════════
+// Cas réel de marché : « c'est le dernier prix ». Le prix catalogue reste la
+// référence et la remise doit rester traçable, sinon la caisse peut cacher du
+// chiffre d'affaires.
+console.log('\n▸ Prix négocié');
+
+const NEGO = 'd0d0d0d0-d0d0-d0d0-d0d0-d0d0d0d0d0d0';
+await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+await q(`INSERT INTO products (id, user_id, name, price_buy, price_sell, stock_qty)
+         VALUES ('${NEGO}', '${PATRON}', 'Article négocié', 4000, 10000, 100)`);
+
+const vendre = async (items) => {
+  const r = await q(`SELECT create_sale('${items}'::jsonb, 'cash', null) AS v`);
+  const b = r.rows[0]?.v;
+  return typeof b === 'string' ? JSON.parse(b) : b;
+};
+const ligne = (saleId) =>
+  q(`SELECT * FROM sale_items WHERE sale_id='${saleId}'`);
+
+{
+  // 1. Prix catalogue : le comportement historique doit être inchangé.
+  const v = await vendre(
+    JSON.stringify([{ product_id: NEGO, quantity: 2 }]));
+  const li = (await ligne(v.id)).rows[0];
+  check('11a. sans prix transmis : prix catalogue', Number(li.unit_price) === 10000, String(li.unit_price));
+  check('11b. list_price renseigné même sans remise', Number(li.list_price) === 10000, String(li.list_price));
+  check('11c. total = 2 × 10 000', Number(v.total_amount) === 20000, String(v.total_amount));
+  check('11d. aucune remise signalée', Number(v.discount_amount) === 0, String(v.discount_amount));
+}
+
+{
+  // 2. Le cas du marchandage : prix convenu inférieur au catalogue.
+  const v = await vendre(
+    JSON.stringify([{ product_id: NEGO, quantity: 2, unit_price: 8000 }]));
+  const li = (await ligne(v.id)).rows[0];
+  check('11e. prix convenu enregistré', Number(li.unit_price) === 8000, String(li.unit_price));
+  check('11f. prix catalogue conservé (remise traçable)', Number(li.list_price) === 10000, String(li.list_price));
+  check('11g. total recalculé sur le prix convenu', Number(v.total_amount) === 16000, String(v.total_amount));
+  check('11h. remise signalée = 4 000', Number(v.discount_amount) === 4000, String(v.discount_amount));
+  // La marge doit suivre le prix réellement encaissé, pas le catalogue.
+  check('11i. coût figé sur la ligne inchangé', Number(li.unit_cost) === 4000, String(li.unit_cost));
+}
+
+{
+  // 3. Revente à perte : autorisée, mais comptée.
+  const v = await vendre(
+    JSON.stringify([{ product_id: NEGO, quantity: 1, unit_price: 3000 }]));
+  const li = (await ligne(v.id)).rows[0];
+  check('11j. vente à perte autorisée (3 000 < coût 4 000)', Number(v.total_amount) === 3000, String(v.total_amount));
+  check('11k. vente à perte signalée (at_loss_count)', Number(v.at_loss_count) === 1, String(v.at_loss_count));
+  check('11l. coût figé malgré la perte', Number(li.unit_cost) === 4000, String(li.unit_cost));
+}
+
+{
+  // 4. Prix supérieur au catalogue : autorisé (vente flash, lot缺的).
+  const v = await vendre(
+    JSON.stringify([{ product_id: NEGO, quantity: 1, unit_price: 12000 }]));
+  const li = (await ligne(v.id)).rows[0];
+  check('11m. prix supérieur au catalogue accepté', Number(li.unit_price) === 12000, String(li.unit_price));
+  check('11n. remise = 0 (pas de remise, pas de majoration)', Number(v.discount_amount) === 0, String(v.discount_amount));
+}
+
+{
+  // 5. Garde-fous : ce qui n'a pas de sens marchand est refusé.
+  let msg = '';
+  try {
+    await vendre(JSON.stringify([{ product_id: NEGO, quantity: 1, unit_price: 0 }]));
+  } catch (e) { msg = e.message; }
+  check('11o. prix à 0 refusé', /Ligne de panier invalide/.test(msg), msg || 'accepté !');
+
+  msg = '';
+  try {
+    await vendre(JSON.stringify([{ product_id: NEGO, quantity: 1, unit_price: -500 }]));
+  } catch (e) { msg = e.message; }
+  check('11p. prix négatif refusé', /Ligne de panier invalide/.test(msg), msg || 'accepté !');
+
+  msg = '';
+  try {
+    await vendre(JSON.stringify([{ product_id: NEGO, quantity: 1, unit_price: 'gratuit' }]));
+  } catch (e) { msg = e.message; }
+  check('11q. prix non numérique refusé', /Ligne de panier invalide/.test(msg), msg || 'accepté !');
+}
+
+{
+  // 6. Deux prix différents pour le même article : ambigu, donc refusé.
+  //    Prendre le minimum ou le maximum permettrait de fabriquer un panier truqué.
+  let msg = '';
+  try {
+    await vendre(JSON.stringify([
+      { product_id: NEGO, quantity: 1, unit_price: 100 },
+      { product_id: NEGO, quantity: 1, unit_price: 9000 },
+    ]));
+  } catch (e) { msg = e.message; }
+  check('11r. deux prix pour le même article : refusé', /Deux prix différents/.test(msg), msg || 'accepté !');
+}
+
+{
+  // 7. Même article à deux lignes, même prix : l'agrégation doit encore
+  //    fonctionner, et le prix convenu être conservé.
+  const v = await vendre(JSON.stringify([
+    { product_id: NEGO, quantity: 2, unit_price: 7000 },
+    { product_id: NEGO, quantity: 1, unit_price: 7000 },
+  ]));
+  const li = (await ligne(v.id)).rows;
+  check('11s. lignes agrégées en une seule', li.length === 1, `${li.length} ligne(s)`);
+  check('11t. quantités cumulées (2 + 1 = 3)', Number(li[0].quantity) === 3, String(li[0].quantity));
+  check('11u. prix convenu conservé après agrégation', Number(li[0].unit_price) === 7000, String(li[0].unit_price));
+  check('11v. total = 3 × 7 000', Number(v.total_amount) === 21000, String(v.total_amount));
+}
+
+{
+  // 8. Le stock est décrémenté du montant réel, même avec un prix négocié.
+  //    Ventes abouties : 2 (11a) + 2 (11e) + 1 (11j) + 1 (11m) + 3 (11s) = 9.
+  //    Les ventes refusées (prix 0, négatif, non numérique, conflit) ne doivent
+  //    rien consommer : c'est le point qu'on vérifie ici.
+  const stock = (await q(`SELECT stock_qty FROM products WHERE id='${NEGO}'`)).rows[0].stock_qty;
+  check('11w. stock décrémenté du seul volume vendu (9 unités)',
+    Number(stock) === 100 - 9, `stock = ${stock}, attendu ${100 - 9}`);
+}
+
+{
+  // 9. Une remise ne doit pas pouvoir servir à sortir le stock d'un autre
+  //    tenant : le prix ne dispense pas de la validation de stock.
+  let refuse = false;
+  try {
+    await q(`SELECT set_config('request.jwt.claim.sub',
+      (SELECT owner_id FROM business_members LIMIT 1), false)`);
+    await vendre(JSON.stringify([{ product_id: NEGO, quantity: 1, unit_price: 100 }]));
+  } catch { refuse = true; }
+  await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+  check('11x. un employé ne vend pas un produit du patron', refuse);
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
