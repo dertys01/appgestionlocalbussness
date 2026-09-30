@@ -1,198 +1,389 @@
 -- ============================================================================
---  MIGRATION INVITATIONS — GestionLocal
+--  CORRECTIF MARGE — create_sale() ne figeait pas le coût
 --  À coller dans : Supabase Dashboard → SQL Editor → New query → Run
 --
---  1. employee_invitations — une invitation par employé, avec un jeton
---     aléatoire de 32 octets qui expire après 7 jours.
+--  POURQUOI
+--    Rapports → Rentabilité affiche « coût des marchandises 0 F », marge brute
+--    égale au chiffre d'affaires, taux 100 %, et un tiret « — » dans la colonne
+--    % de chaque produit.
 --
---  2. redeem_invitation() — consomme l'invitation et lie le compte à la
---     boutique, de façon atomique. Elle refuse :
---       · un jeton inconnu, révoqué, expiré ou déjà utilisé ;
---       · un compte dont l'email ne correspond PAS à celui invité — sans
---         cette vérification, un lien intercepté (WhatsApp, capture d'écran)
---         suffirait à s'attribuer la boutique d'autrui.
+--    La cause n'est pas une erreur de saisie : un produit sans prix d'achat
+--    donnerait 0, jamais NULL. Le NULL prouve que la colonne unit_cost
+--    n'était pas fournie à l'insertion.
 --
---  3. purge_accepted_invitations() — supprime les invitations consommées.
---     ⚠ Elle n'est pas programmée : appelez-la de temps en temps, ou
---       planifiez-la avec pg_cron.
+--    L'ordre des migrations masque le problème :
+--      · migration_sales_rpc.sql     définit create_sale()
+--      · migration_profitability.sql AJOUTE unit_cost et pose un trigger qui
+--                                   interdit ensuite de la modifier
+--    La deuxième ne redéfinit pas create_sale(). La version déployée écrivait
+--    déjà invoice_number mais pas unit_cost : chaque vente depuis insère une
+--    ligne sans coût, que le trigger interdit ensuite de corriger.
 --
---  Cette migration remplace la création directe d'un employé : le patron ne
---  fixe plus le mot de passe de son employé, c'est l'employé qui le choisit
---  depuis /invitation/<token>.
+--  CE QUE FAIT CE BLOC
+--    1. migration_profitability_fix.sql — remplit unit_cost des ventes
+--       existantes avec le prix d'achat actuel, puis recrée le trigger.
+--    2. migration_sales_rpc.sql — redéfinit create_sale() afin que chaque
+--       vente future fige son coût. CREATE OR REPLACE : sans risque.
 --
---  ⚠️  migration_invitations.sql n'est pas encore appliquée chez vous.
---     Appliquez ce bloc une fois. Le fichier est rejouable (idempotent) :
---     IF NOT EXISTS et CREATE OR REPLACE, avec DROP POLICY avant chaque CREATE.
+--    L'ordre importe : le remplissage doit passer AVANT que la fonction
+--    soit redéfinie, sans quoi de nouvelles ventes sans coût apparaîtraient.
+--
+--  ⚠ Le remplissage utilise le prix d'achat d'AUJOURD'HUI, pas celui du jour
+--    de la vente. Acceptable pour des ventes de test du jour ; sur une
+--    boutique avec de l'antériorité, il faut ressaisir les coûts historiques.
+--
+--  ⚠ Un produit retiré du catalogue laisse ses ventes sans coût, comptées à
+--    100 % de marge. Le fichier contient une requête pour les repérer.
+--
+--  Idempotent : peut être exécuté plusieurs fois sans effet de bord.
 -- ============================================================================
 
 
 -- ============================================================
--- MIGRATION INVITATIONS — GestionLocal
--- À exécuter dans Supabase SQL Editor, après migration_expenses.sql
+-- CORRECTIF MARGE — create_sale() ne figeait pas le coût
+-- À exécuter dans Supabase SQL Editor
 --
--- L'ajout d'un employé demandait au patron d'inventer un mot de passe et de
--- le transmettre par un canal non chiffré (WhatsApp, papier). C'est le chemin
--- le plus probable pour qu'un accès client soit compromis, et cela suppose
--- aussi que le commerce possède déjà une boîte mail.
+-- SYMPTÔME
+--   Rapports → Rentabilité affiche « coût des marchandises 0 F », une marge
+--   brute égale au chiffre d'affaires, un taux de 100 % et un tiret « — »
+--   dans la colonne % de chaque produit.
 --
--- On remplace ceflux par une invitation :
+-- CAUSE
+--   sale_items.unit_cost est à NULL sur toutes les ventes.
 --
---   1. Le patron saisit l'email, reçoit un lien à transmettre
---   2. L'employé ouvre le lien, choisit son propre mot de passe
---   3. redeem_invitation() lie le compte à la boutique, de façon atomique
+--   L'ordre d'application des migrations masque le problème :
+--     · migration_sales_rpc.sql     définit create_sale()
+--     · migration_profitability.sql AJOUTE la colonne unit_cost, remplit
+--                                  l'existant, et pose un trigger qui interdit
+--                                  de la modifier ensuite
 --
--- Le jeton ne transite jamais par l'API en clair après la création : il est
--- stocké tel quel, comme un secret à usage unique. La table est par ailleurs
--- inaccessible au client (RLS + RLS du patron), donc seul le service_role la
--- lit.
+--   La deuxième migration ne redéfinit pas create_sale(). Or la version de
+--   create_sale() déployée à l'époque écrivait déjà invoice_number mais pas
+--   encore unit_cost. Chaque vente depuis lors a donc inséré une ligne sans
+--   coût — et le trigger de figeage a ensuite interdit toute correction, ce
+--   qui est le comportement voulu pour une comptabilité mais masque ici un
+--   déploiement incomplet.
+--
+--   Ce n'est pas une erreur de saisie : un produit sans prix d'achat donnerait
+--   0, jamais NULL. Le NULL prouve que la colonne n'était pas fournie.
+--
+-- CORRECTIF — deux parties
+--   1. Ce fichier : remplir unit_cost des lignes existantes, puis recréer le
+--      trigger de figeage.
+--   2. migration_sales_rpc.sql, à réappliquer juste après : il redéfinit
+--      create_sale() pour qu'il fige désormais le coût.
+--
+-- ⚠ L'étape 1 utilise le prix d'achat d'AUJOURD'HUI, pas celui du jour de la
+--   vente : le historique devient approximatif. Acceptable pour des ventes de
+--   test du jour. Sur une boutique avec de l'antériorité, il faut ressaisir
+--   les coûts historiques.
 -- ============================================================
 
--- ─── 1. Les invitations ────────────────────────────────────
-CREATE TABLE IF NOT EXISTS employee_invitations (
-  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  owner_id    uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  email       text NOT NULL,
-  role        text NOT NULL DEFAULT 'employee' CHECK (role IN ('employee', 'manager')),
-  token       text NOT NULL UNIQUE,
-  expires_at  timestamptz NOT NULL DEFAULT (now() + interval '7 days'),
-  accepted_at timestamptz,
-  created_at  timestamptz NOT NULL DEFAULT now(),
+-- ─── 1. Remplissage des coûts manquants ───────────────────
+-- Le trigger interdit toute modification d'un coût déjà figé ; il refuse donc
+-- aussi le remplissage des lignes vides. On le retire, on remplit, on le recrée.
 
-  CONSTRAINT employee_invitations_email_lower CHECK (email = lower(btrim(email))),
-  CONSTRAINT employee_invitations_token_len   CHECK (length(token) >= 32)
+DROP TRIGGER IF EXISTS sale_items_freeze_cost ON sale_items;
+
+UPDATE sale_items si
+   SET unit_cost = p.price_buy,
+       product_id_archived = COALESCE(si.product_id_archived, si.product_id)
+  FROM products p
+ WHERE p.id = si.product_id
+   AND si.unit_cost IS NULL;
+
+-- Un produit supprimé (archivé puis retiré du catalogue) ne laisse plus de
+-- ligne à rejoindre : sa vente historique reste sans coût, donc comptée à
+-- 100 % de marge. Le signaler vaut mieux qu'un zéro silencieux.
+--
+-- SELECT p.name, count(*) AS ventes_sans_cout
+--   FROM sale_items si
+--   LEFT JOIN products p ON p.id = si.product_id
+--  WHERE si.unit_cost IS NULL
+--  GROUP BY p.name;
+
+DROP TRIGGER IF EXISTS sale_items_freeze_cost ON sale_items;
+CREATE TRIGGER sale_items_freeze_cost
+  BEFORE UPDATE ON sale_items
+  FOR EACH ROW EXECUTE FUNCTION freeze_sale_item_cost();
+
+
+-- ─── 2. create_sale() doit de nouveau figer le coût ───────
+-- Réappliquez migration_sales_rpc.sql juste après ce fichier. Il est
+-- idempotent (CREATE OR REPLACE partout) et redéfinit create_sale() avec
+-- l'insertion de unit_cost qui manquait à la version déployée.
+--
+-- Vérification après coup :
+--
+--   SELECT count(*) FILTER (WHERE unit_cost IS NULL) AS sans_cout,
+--          count(*) AS total
+--     FROM sale_items;
+
+
+-- ============================================================
+-- MIGRATION VENTE TRANSACTIONNELLE — GestionLocal
+-- À exécuter dans Supabase SQL Editor
+--
+-- Remplace le flux client (INSERT sales + INSERT sale_items + boucle
+-- sequentielle UPDATE products / INSERT stock_logs) par une unique
+-- fonction atomique. Corrige :
+--   * les ventes partiellement appliquees (stock non decremente alors que
+--     l'UI affichait « Vente enregistree ») ;
+--   * les lost updates entre deux caisses (lecture-modification-ecriture) ;
+--   * les 2N allers-retours reseau d'un panier de N lignes (1 seul) ;
+--   * le compteur de facture lu-modifie-ecrit depuis le client.
+-- ============================================================
+
+-- ─── 1. Numéro de facture persisté sur la vente ─────────────
+-- Avant, le numéro n'était jamais stocké : il était calculé à l'impression
+-- depuis un compteur en base, si bien que deux factures imprimées depuis le
+-- même état de page portaient le même numéro, et qu'aucune facture n'était
+-- rattachable à sa vente.
+ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_number text;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_invoice_number
+  ON sales(invoice_number) WHERE invoice_number IS NOT NULL;
+
+-- ─── 2. Filet de sécurité sur le stock ─────────────────────
+-- NOT VALID : la contrainte est bien appliquée aux INSERT/UPDATE futurs,
+-- mais on ne scanne pas l'existant (le plan peut contenir des données
+-- négatives à cause de l'ancien flux client non transactionnel).
+-- Après avoir nettoyé :  ALTER TABLE products VALIDATE CONSTRAINT products_stock_qty_non_negative;
+ALTER TABLE products DROP CONSTRAINT IF EXISTS products_stock_qty_non_negative;
+ALTER TABLE products ADD CONSTRAINT products_stock_qty_non_negative
+  CHECK (stock_qty >= 0) NOT VALID;
+
+-- ─── 3. Rate limiting distribué ────────────────────────────
+-- Remplace le compteur en mémoire de /api/register, qui était recréé vide à
+-- chaque invocation serverless et ne limitait donc rien en production.
+CREATE TABLE IF NOT EXISTS rate_limits (
+  key        text PRIMARY KEY,
+  count      integer NOT NULL DEFAULT 0,
+  reset_at   timestamptz NOT NULL
 );
 
-ALTER TABLE employee_invitations ENABLE ROW LEVEL SECURITY;
-
--- Le patron voit et gère ses invitations. Un employé n'en a pas : get_business_owner_id()
--- renverrait son patron, il pourrait donc lire les invitations de la boutique
--- et s'inviter lui-même. On vérifie explicitement qu'il est le patron.
-DROP POLICY IF EXISTS "invitations_owner_read" ON employee_invitations;
-CREATE POLICY "invitations_owner_read" ON employee_invitations
-  FOR SELECT USING (auth.uid() = owner_id);
-
-DROP POLICY IF EXISTS "invitations_owner_write" ON employee_invitations;
-CREATE POLICY "invitations_owner_write" ON employee_invitations
-  FOR ALL USING (auth.uid() = owner_id) WITH CHECK (auth.uid() = owner_id);
-
--- Index sur owner_id : le patron liste ses invitations à chaque affichage.
-CREATE INDEX IF NOT EXISTS idx_employee_invitations_owner
-  ON employee_invitations(owner_id, created_at DESC);
-
-
--- ─── 2. Remboursement atomique ──────────────────────────────
--- L'employé s'inscrit depuis un lien ; cette fonction consume l'invitation et
--- crée le lien de membre en une transaction. FOR UPDATE sérialise deux
--- usages simultanés du même lien : le second reçoit "déjà utilisée" au lieu de
--- créer un second membre.
---
--- SECURITY DEFINER est nécessaire : l'appelant n'est pas encore membre de la
--- équipe, donc la policy member_view_own ne lui accorde rien. La fonction
--- est révoquée au public et accordée au service_role, qui est le seul à
--- l'appeler (la route d'acceptation, via la clé service role).
-CREATE OR REPLACE FUNCTION redeem_invitation(
-  p_token       text,
-  p_member_id   uuid,
-  p_member_name text
+-- Nettoyage opportuniste : supprime les lignes expirées lors de l'appel suivant.
+CREATE OR REPLACE FUNCTION bump_rate_limit(
+  p_key             text,
+  p_max             integer,
+  p_window_seconds  integer
 )
-RETURNS TABLE (owner_id uuid, email text, member_name text)
+RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-  v_inv employee_invitations%ROWTYPE;
+  v_now    timestamptz := now();
+  v_count  integer;
 BEGIN
-  SELECT * INTO v_inv
-    FROM employee_invitations
-    WHERE token = p_token
-    FOR UPDATE;
+  -- Verrou de ligne : deux inscriptions simultanées depuis la même IP
+  -- sérialisent ici au lieu de lire/écrire en même temps.
+  INSERT INTO rate_limits (key, count, reset_at)
+  VALUES (p_key, 1, v_now + make_interval(secs => p_window_seconds))
+  ON CONFLICT (key) DO UPDATE
+    SET count = CASE
+                  WHEN rate_limits.reset_at <= v_now THEN 1
+                  ELSE rate_limits.count + 1
+                END,
+        reset_at = CASE
+                     WHEN rate_limits.reset_at <= v_now
+                       THEN v_now + make_interval(secs => p_window_seconds)
+                     ELSE rate_limits.reset_at
+                   END
+  RETURNING count INTO v_count;
 
-  IF NOT FOUND THEN
-    RAISE EXCEPTION 'Cette invitation est introuvable ou a été révoquée.'
-      USING ERRCODE = 'P0002';
+  RETURN v_count > p_max;
+END;
+$$;
+
+-- Purge des compteurs expirés (appelable par un cron ; sans effet ici).
+CREATE OR REPLACE FUNCTION purge_rate_limits()
+RETURNS integer
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  WITH deleted AS (
+    DELETE FROM rate_limits WHERE reset_at <= now() RETURNING 1
+  )
+  SELECT count(*)::integer FROM deleted;
+$$;
+
+REVOKE ALL ON FUNCTION bump_rate_limit(text, integer, integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION bump_rate_limit(text, integer, integer) TO service_role;
+GRANT EXECUTE ON FUNCTION purge_rate_limits() TO service_role;
+
+-- ─── 4. Politique DELETE manquante sur le journal ──────────
+-- activity_logs n'avait qu'une policy INSERT et une policy SELECT : la purge
+-- des logs de plus de 90 jours ne pouvait donc jamais aboutir.
+DROP POLICY IF EXISTS "activity_prune" ON activity_logs;
+CREATE POLICY "activity_prune" ON activity_logs
+  FOR DELETE USING (auth.uid() = business_owner_id);
+
+-- ─── 5. Fonction create_sale ───────────────────────────────
+-- Retourne l'identifiant de la vente, son numéro de facture (Pro) et son
+-- total — tous trois calculés côté serveur, pour que le client affiche
+-- exactement ce qui a été enregistré.
+CREATE OR REPLACE FUNCTION create_sale(
+  p_items          jsonb,
+  p_payment_method text,
+  p_client_name    text    DEFAULT NULL,
+  p_note           text    DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_owner      uuid;
+  v_sale_id    uuid;
+  v_ids        uuid[];
+  v_qtys       int[];
+  v_plan       text;
+  v_counter    int;
+  v_invoice    text;
+  v_name       text;
+  v_price      numeric(12,2);
+  v_cost       numeric(12,2);
+  v_stock      int;
+  v_qty        int;
+  v_total      numeric(12,2) := 0;
+  v_i          int;
+BEGIN
+  -- ── Locataire résolu côté serveur, jamais reçu du client ──
+  v_owner := get_business_owner_id();
+  IF v_owner IS NULL THEN
+    RAISE EXCEPTION 'Non authentifié' USING ERRCODE = '28000';
   END IF;
 
-  IF v_inv.accepted_at IS NOT NULL THEN
-    RAISE EXCEPTION 'Cette invitation a déjà été utilisée.'
-      USING ERRCODE = 'P0002';
+  IF p_items IS NULL OR jsonb_typeof(p_items) <> 'array' OR jsonb_array_length(p_items) = 0 THEN
+    RAISE EXCEPTION 'Panier vide' USING ERRCODE = '22023';
   END IF;
 
-  IF v_inv.expires_at < now() THEN
-    RAISE EXCEPTION 'Cette invitation a expiré. Demandez un nouveau lien à votre patron.'
-      USING ERRCODE = 'P0002';
+  IF p_payment_method IS NULL OR p_payment_method NOT IN ('cash', 'momo') THEN
+    RAISE EXCEPTION 'Moyen de paiement invalide : %', p_payment_method USING ERRCODE = '22023';
   END IF;
 
-  -- L'email saisi doit être celui invité : sinon un lien peut être intercepté
-  -- et réutilisé pour s'attribuer la boutique.
-  -- La colonne est qualifiée : « email » seul serait ambigu entre auth.users et
-  -- la table RETURNS (owner_id, email, member_name).
-  IF NOT EXISTS (
-    SELECT 1 FROM auth.users u
-    WHERE u.id = p_member_id
-      AND lower(btrim(u.email)) = v_inv.email
+  -- ── Valider chaque quantité AVANT toute écriture ──
+  IF EXISTS (
+    SELECT 1 FROM jsonb_array_elements(p_items) AS e
+    WHERE COALESCE(e->>'product_id', '') !~ '^[0-9a-fA-F-]{36}$'
+       OR COALESCE(e->>'quantity', '') !~ '^[0-9]+$'
+       OR (e->>'quantity')::int < 1
+       OR (e->>'quantity')::int > 100000
   ) THEN
-    RAISE EXCEPTION 'Ce lien invite uniquement %', v_inv.email
-      USING ERRCODE = 'P0002';
+    RAISE EXCEPTION 'Ligne de panier invalide' USING ERRCODE = '22023';
   END IF;
 
-  IF length(btrim(p_member_name)) = 0 THEN
-    RAISE EXCEPTION 'Le nom est obligatoire.' USING ERRCODE = '22023';
+  -- ── Agréger par produit ──
+  -- Indispensable : sans cela un panier contenant deux fois le même article
+  -- passerait la vérification de stock ligne par ligne (5 >= 4, puis 5 >= 4)
+  -- avant de décrémenter de 8 et de rendre le stock négatif.
+  SELECT array_agg(product_id ORDER BY product_id),
+         array_agg(quantity   ORDER BY product_id)
+    INTO v_ids, v_qtys
+    FROM (
+      SELECT (e->>'product_id')::uuid AS product_id,
+             SUM((e->>'quantity')::int)::int AS quantity
+        FROM jsonb_array_elements(p_items) AS e
+       GROUP BY 1
+    ) AS aggregated;
+
+  -- ── Verrouiller les lignes produits et valider le stock ──
+  -- FOR UPDATE sérialise les caisses concurrentes sur les mêmes articles.
+  -- Les verrous sont conservés jusqu'au COMMIT, donc la seconde boucle relit
+  -- des valeurs stables.
+  FOR v_i IN 1 .. COALESCE(array_length(v_ids, 1), 0) LOOP
+    SELECT p.name, p.price_sell, COALESCE(p.price_buy, 0), p.stock_qty
+      INTO v_name, v_price, v_cost, v_stock
+      FROM products p
+     WHERE p.id = v_ids[v_i]
+       AND p.user_id = v_owner
+       FOR UPDATE;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Produit introuvable : %', v_ids[v_i] USING ERRCODE = 'P0002';
+    END IF;
+
+    IF v_stock < v_qtys[v_i] THEN
+      RAISE EXCEPTION 'Stock insuffisant pour « % » (disponible : %, demandé : %)',
+        v_name, v_stock, v_qtys[v_i] USING ERRCODE = '23514';
+    END IF;
+
+    -- Le prix facturé est celui de la base, jamais celui transmis par le client.
+    v_total := v_total + v_price * v_qtys[v_i];
+  END LOOP;
+
+  -- ── Numéro de facture : incrément atomique (Pro uniquement) ──
+  -- `UPDATE ... RETURNING` pose un verrou de ligne : deux caisses qui
+  -- impriment en parallèle obtiennent deux numéros distincts.
+  SELECT o.plan INTO v_plan FROM organizations o WHERE o.id = v_owner;
+  v_invoice := NULL;
+
+  IF v_plan = 'pro' THEN
+    UPDATE organizations
+       SET invoice_counter = invoice_counter + 1
+     WHERE id = v_owner
+    RETURNING invoice_counter INTO v_counter;
+
+    v_invoice := 'FAC-' || to_char(now(), 'YYYY') || '-' || lpad(v_counter::text, 5, '0');
   END IF;
 
-  INSERT INTO business_members (owner_id, member_id, member_name, role)
-  SELECT v_inv.owner_id, p_member_id, btrim(p_member_name), v_inv.role
-  WHERE NOT EXISTS (
-    SELECT 1 FROM business_members x
-    WHERE x.owner_id = v_inv.owner_id AND x.member_id = p_member_id
+  -- ── En-tête de vente ──
+  INSERT INTO sales (
+    user_id, total_amount, payment_method, client_name, note, invoice_number
+  ) VALUES (
+    v_owner,
+    v_total,
+    p_payment_method,
+    NULLIF(btrim(COALESCE(p_client_name, '')), ''),
+    p_note,
+    v_invoice
+  )
+  RETURNING id INTO v_sale_id;
+
+  -- ── Lignes, décrément et journal de stock ──
+  FOR v_i IN 1 .. COALESCE(array_length(v_ids, 1), 0) LOOP
+    v_qty := v_qtys[v_i];
+
+    SELECT p.name, p.price_sell, COALESCE(p.price_buy, 0), p.stock_qty
+      INTO v_name, v_price, v_cost, v_stock
+      FROM products p
+     WHERE p.id = v_ids[v_i]
+       AND p.user_id = v_owner;
+
+    INSERT INTO sale_items (
+      sale_id, product_id, product_name, quantity, unit_price, subtotal, unit_cost
+    ) VALUES (
+      v_sale_id, v_ids[v_i], v_name, v_qty, v_price, v_price * v_qty, v_cost
+    );
+
+    UPDATE products SET stock_qty = stock_qty - v_qty WHERE id = v_ids[v_i];
+
+    INSERT INTO stock_logs (
+      user_id, product_id, product_name, movement_type,
+      quantity_change, stock_before, stock_after, reference_id
+    ) VALUES (
+      v_owner, v_ids[v_i], v_name, 'sale',
+      -v_qty, v_stock, v_stock - v_qty, v_sale_id
+    );
+  END LOOP;
+
+  RETURN jsonb_build_object(
+    'id',             v_sale_id,
+    'invoice_number', v_invoice,
+    'total_amount',   v_total
   );
-
-  UPDATE employee_invitations ei SET accepted_at = now() WHERE ei.id = v_inv.id;
-
-  RETURN QUERY SELECT v_inv.owner_id, v_inv.email, btrim(p_member_name);
 END;
 $$;
 
-REVOKE ALL ON FUNCTION redeem_invitation(text, uuid, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION redeem_invitation(text, uuid, text) TO service_role;
+-- Seuls les utilisateurs authentifiés peuvent encaisser.
+REVOKE ALL ON FUNCTION create_sale(jsonb, text, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION create_sale(jsonb, text, text, text) TO authenticated;
 
-COMMENT ON FUNCTION redeem_invitation(text, uuid, text) IS
-  'Consomme une invitation et lie le compte à la boutique. Vérifie que le compte '
-  'correspond à l''email invité, refuse une invitation déjà utilisée ou expirée. '
-  'Appelée uniquement par le service_role.';
+COMMENT ON FUNCTION create_sale(jsonb, text, text, text) IS
+  'Enregistre une vente de façon atomique : lignes, décrément de stock et journal. '
+  'Lève une exception si le stock est insuffisant — dans ce cas rien n''est écrit.';
 
-COMMENT ON TABLE employee_invitations IS
-  'Invitations d''équipe en attente. Le jeton est un secret à usage unique, '
-  'expirant après 7 jours ; il est transmis au patron pour un envoi WhatsApp '
-  'ou tout autre canal, jamais par email.';
-
-
--- ─── 3. Nettoyage ───────────────────────────────────────────
--- Les invitations acceptées ne servent plus à rien. Sans cette étape la table
--- grossit indéfiniment et conserve des emails d'employés partis.
--- Le token étant consommé et l'email de l'employé devenu inutile, la suppression est sans
--- risque : l'invitation n'a plus de valeur d'accès.
---
--- À appeler périodiquement (pg_cron côté Supabase, ou à la main) :
---
---   SELECT purge_accepted_invitations();
---
-CREATE OR REPLACE FUNCTION purge_accepted_invitations(p_days int DEFAULT 7)
-RETURNS bigint
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-  v_deleted bigint;
-BEGIN
-  DELETE FROM employee_invitations
-    WHERE accepted_at IS NOT NULL
-      AND accepted_at < now() - make_interval(days => p_days);
-  GET DIAGNOSTICS v_deleted = ROW_COUNT;
-  RETURN v_deleted;
-END;
-$$;
-
-REVOKE ALL ON FUNCTION purge_accepted_invitations(int) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION purge_accepted_invitations(int) TO service_role;
