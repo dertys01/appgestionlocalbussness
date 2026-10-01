@@ -3347,7 +3347,17 @@ GRANT EXECUTE ON FUNCTION pay_customer_debt(uuid, numeric, text, text) TO authen
 -- le prix est 130 000, l'acompte 50 000 et le reste 80 000, la dette est 80 000
 -- parce que amount_received vaut 50 000, pas parce qu'on a soustrait 50 000 d'un
 -- journal. Un seul calcul, aucune répartition à reconstituer.
-CREATE OR REPLACE FUNCTION get_customer_debts()
+--
+-- ⚠ DROP avant CREATE, et c'est obligatoire : ajouter total_paid au RETURNS
+--   TABLE change le type de retour. Les paramètres OUT font partie de la
+--   signature, donc PostgreSQL refuse en 42P13 « cannot change return type of
+--   existing function » et interrompt le script AU MILIEU — les GRANT et les
+--   COMMENT qui suivent ne sont jamais appliqués, et la fonction reste celle
+--   d'avant. C'est l'erreur 42P13 déjà documentée dans le README, rencontrée
+--   une fois de plus parce que le piège est réel et non théorique.
+DROP FUNCTION IF EXISTS get_customer_debts();
+
+CREATE FUNCTION get_customer_debts()
 RETURNS TABLE (
   debt_id         uuid,
   phone           text,
