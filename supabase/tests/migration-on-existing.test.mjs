@@ -18,7 +18,7 @@ const ORDER = [
   'migration_weighted_sales.sql', 'migration_credit.sql', 'migration_partial_payment.sql',
   'migration_profitability.sql',
   'migration_expenses.sql', 'migration_invitations.sql', 'migration_profitability_fix.sql',
-  'migration_suppliers.sql', 'migration_credit_fns.sql',
+  'migration_suppliers.sql', 'migration_credit_fns.sql', 'migration_beta_program.sql',
 ];
 
 let failed = 0;

@@ -41,6 +41,9 @@ const ORDER = [
   'migration_profitability_fix.sql',
   'migration_suppliers.sql',
   'migration_credit_fns.sql',
+  // Doit etre applique apres organizations (schema.sql) : son trigger
+  // s'execute sur chaque creation de boutique.
+  'migration_beta_program.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -217,6 +220,16 @@ console.log(`\n▸ Rejouabilité (${REPLAYABLE.length} migrations incrémentales
 console.log('\n▸ Jeu de données');
 const PATRON = '11111111-1111-1111-1111-111111111111';
 const EMPLOYE = '22222222-2222-2222-2222-222222222222';
+
+// Le programme bêta est FERMÉ pendant toute la suite, sauf sa section dédiée.
+//
+// Sans cela, chaque INSERT INTO organizations du harnais consommerait une place
+// et passerait la boutique en Pro — y compris celles que la section sur le verrou
+// de plan crée volontairement en gratuit pour vérifier qu'il sont refusées. Le
+// test échouerait non pas parce que le code est faux, mais parce qu'un programme
+// de test est ouvert. C'est le genre de couplings qui fait qu'un test rouge ne
+// veut plus rien dire.
+await e(`UPDATE beta_program SET open = false, slots_used = 0 WHERE id = 1`);
 
 await q(`INSERT INTO auth.users (id, email) VALUES ('${PATRON}', 'patron@test.ci'), ('${EMPLOYE}', 'employe@test.ci')`);
 await q(`UPDATE organizations SET plan = 'pro' WHERE id = '${PATRON}'`);
@@ -2050,6 +2063,179 @@ const acompter = async (qty, tel, avance) => {
   } catch { refuse = true; }
   check('17ap. encaisser plus que le prix : refusé par la contrainte', refuse);
 }
+// ═══ 18. Programme bêta ═══════════════════════════════════
+// Dix comptes en accès complet, pour tester en conditions réelles. Le mécanisme
+// est volontairement un budget de places et non un code : il n'y a rien à
+// distribuer, donc rien à trouver, et le onzième compte s'inscrit normalement en
+// gratuit.
+console.log('\n▸ Programme bêta');
+
+{
+  // Le harnais a fermé le programme. On le rouvre avec un budget connu.
+  await e(`UPDATE beta_program
+              SET open = true, slots_total = 3, slots_used = 0, note = 'test'
+            WHERE id = 1`);
+
+  const st0 = (await q(`SELECT * FROM beta_status()`)).rows[0];
+  check('18a. programme ouvert, 3 places, 0 prise',
+    st0.open === true && st0.slots_total === 3 && st0.slots_used === 0,
+    JSON.stringify(st0));
+  check('18b. places restantes = 3', Number(st0.remaining) === 3, String(st0.remaining));
+
+  const inscrire = async (n) => {
+    // 11 zéros + le chiffre : le dernier groupe d'un UUID fait 12 caractères.
+    // Un de moins et PostgreSQL refuse l'identifiant — pour une raison qui n'a
+    // rien à voir avec ce qu'on teste.
+    const uid = `f1f1f1f1-0000-4000-8000-00000000000${n}`;
+    await q(`INSERT INTO auth.users (id, email) VALUES ('${uid}', 'beta${n}@test.ci')`);
+    await q(`INSERT INTO organizations (id, name, slug)
+             VALUES ('${uid}', 'Boutique Beta ${n}', 'beta-${n}')`);
+    // Un article, pour prouver que le compte hors plafond peut vendre. Une boutique
+    // sans produit ne prouve rien sur la caisse.
+    await q(`INSERT INTO products (id, user_id, name, price_buy, price_sell, stock_qty)
+             VALUES ('a1a1a1a1-0000-4000-8000-00000000000${n}', '${uid}',
+                     'Article beta', 4000, 10000, 20)`);
+    const o = (await q(`SELECT plan FROM organizations WHERE id='${uid}'`)).rows[0];
+    return { uid, plan: o.plan };
+  };
+
+  // 1. Le point central : une inscription ordinaire devient Pro, sans que
+  //    l'application ait eu à le demander ni à le savoir.
+  const b1 = await inscrire(1);
+  check('18c. le 1er compte bêta passe en Pro', b1.plan === 'pro', b1.plan);
+
+  const acc1 = (await q(`SELECT * FROM beta_access WHERE user_id='${b1.uid}'`)).rows[0];
+  check('18d. il est enregistré dans beta_access', !!acc1, '(absent)');
+  check('18e. son email est récupéré depuis auth.users', acc1?.email === 'beta1@test.ci',
+    String(acc1?.email));
+
+  const b2 = await inscrire(2);
+  const b3 = await inscrire(3);
+  check('18f. les 2e et 3e comptes passent en Pro', b2.plan === 'pro' && b3.plan === 'pro',
+    `${b2.plan} / ${b3.plan}`);
+
+  const st1 = (await q(`SELECT * FROM beta_status()`)).rows[0];
+  check('18g. 3 places sur 3 consommées',
+    st1.slots_used === 3 && st1.remaining === 0,
+    `utilisées ${st1.slots_used}, restantes ${st1.remaining}`);
+
+  // 2. LE PLAFOND. Le 4e compte s'inscrit normalement, en gratuit. C'est la
+  //    propriété qui rend le programme sûr : sans elle, le nombre « dix » ne
+  //    serait qu'une intention.
+  const b4 = await inscrire(4);
+  check('18h. le 4e compte est en gratuit (plafond atteint)', b4.plan === 'free', b4.plan);
+  const pasAcc = (await q(
+    `SELECT count(*)::int c FROM beta_access WHERE user_id='${b4.uid}'`)).rows[0].c;
+  check('18i. le 4e n\'est pas enregistré comme bêta', pasAcc === 0, `${pasAcc}`);
+
+  // Le refus ne doit rien casser : la boutique existe et la caisse fonctionne.
+  // Vérifié ici parce que le cas du compte juste après le plafond est le plus
+  // fréquent — dix potes, puis un onzième qui tombe sur un écran verrouillé.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${b4.uid}', false)`);
+  const v = await q(`SELECT create_sale(
+    '[{"product_id":"a1a1a1a1-0000-4000-8000-000000000004","quantity":1}]'::jsonb,
+    'cash', null, null) AS v`);
+  check('18j. le compte hors plafond peut quand même vendre', !!v.rows[0].v,
+    JSON.stringify(v.rows[0]).slice(0, 110));
+  await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+}
+
+{
+  // 3. Fermer le programme : plus aucune attribution, même si le budget
+  //    permettrait encore des places. C'est le geste qui rend le programme
+  //    vraiment fermé.
+  await e(`UPDATE beta_program SET open = false WHERE id = 1`);
+  const uid = `f1f1f1f1-0000-4000-8000-000000000009`;
+  await q(`INSERT INTO auth.users (id, email) VALUES ('${uid}', 'beta9@test.ci')`);
+  await q(`INSERT INTO organizations (id, name, slug)
+           VALUES ('${uid}', 'Boutique Fermee', 'beta-fermee')`);
+  const o = (await q(`SELECT plan FROM organizations WHERE id='${uid}'`)).rows[0];
+  check('18k. programme fermé : inscription en gratuit', o.plan === 'free', o.plan);
+}
+
+{
+  // 4. Rouvrir avec un budget plus large, pour une deuxième vague.
+  await e(`UPDATE beta_program SET open = true, slots_total = 10, slots_used = 0 WHERE id = 1`);
+  const st = (await q(`SELECT * FROM beta_status()`)).rows[0];
+  check('18l. rouvrir avec 10 places', st.open === true && st.remaining === 10,
+    JSON.stringify(st));
+}
+
+{
+  // 5. Révoquer : tout le monde repasse en gratuit, et les retours sont
+  //    conservés. C'est le geste de fermeture réelle.
+  const msg = (await q(`SELECT revoke_all_beta() AS m`)).rows[0].m;
+  check('18m. révocation : message rendu', typeof msg === 'string' && msg.includes('gratuit'), String(msg));
+
+  const restants = (await q(
+    `SELECT count(*)::int c FROM organizations o
+       JOIN beta_access b ON b.user_id = o.id
+      WHERE o.plan = 'pro'`)).rows[0].c;
+  check('18n. plus aucune boutique bêta en Pro', restants === 0, `${restants}`);
+
+  // Les commentaires de retour survivent à la révocation : c'est tout l'intérêt
+  // de la table, sinon on jetterait le matériau du debriefing avec l'accès.
+  // Trois fiches : les trois comptes qui ont eu une place. Celui créé après le
+  // plafond, et celui créé programme fermé, n'en ont pas — c'est le but.
+  const notes = (await q(`SELECT count(*)::int c FROM beta_access`)).rows[0].c;
+  check('18o. les fiches bêta sont conservées', notes === 3, `${notes}`);
+
+  const st = (await q(`SELECT * FROM beta_status()`)).rows[0];
+  check('18p. compteur remis à zéro, programme fermé',
+    st.slots_used === 0 && st.open === false, JSON.stringify(st));
+}
+
+{
+  // 6. Un testeur ne doit pas pouvoir élargir son propre accès. Les tables sont
+  //    sans policy et en FORCE ROW LEVEL SECURITY ; seul le trigger, en SECURITY
+  //    DEFINER, écrit dedans.
+  const policies = (await q(
+    `SELECT count(*)::int c FROM pg_policies
+      WHERE tablename IN ('beta_program', 'beta_access')`)).rows[0].c;
+  check('18q. aucune policy RLS sur les tables bêta', policies === 0, `${policies} policy(s)`);
+
+  const forcee = (await q(
+    `SELECT relname, relforcerowsecurity FROM pg_class
+      WHERE relname IN ('beta_program', 'beta_access') ORDER BY relname`)).rows;
+  check('18r. RLS forcé sur les deux tables',
+    forcee.length === 2 && forcee.every((x) => x.relforcerowsecurity === true),
+    JSON.stringify(forcee));
+
+  // Un client authentifié ne doit pas pouvoir élargir son propre accès. On vérifie
+  // sous le rôle réel, sinon la RLS serait contournée par superuser.
+  //
+  // ⚠ Un UPDATE refusé par la RLS ne lève PAS d'erreur : la ligne est simplement
+  //   filtrée, donc « UPDATE ... WHERE id = 1 » ne modifie aucune ligne et
+  //   renvoie un compte de 0. Attendre une exception ferait échouer le test sur
+  //   la mauvaise raison et donnerait une fausse impression de sécurité : c'est
+  //   le compte de lignes qui prouve le blocage, pas l'absence d'erreur.
+  await e(`GRANT EXECUTE ON FUNCTION beta_status() TO authenticated`);
+  await e('SET ROLE authenticated');
+  let vu = null;
+  try {
+    vu = (await q(`SELECT * FROM beta_status()`)).rows[0];
+  } catch (err) { vu = { erreur: err.message }; }
+
+  let modifiees = -1;
+  try {
+    const r = await q(`UPDATE beta_program SET slots_total = 9999 WHERE id = 1`);
+    modifiees = r.affectedRows ?? r.rows?.length ?? -1;
+  } catch { modifiees = -2; }
+  await e('RESET ROLE');
+
+  check('18s. un client peut lire l\'état du programme (utile, inoffensif)',
+    !!vu && !('erreur' in (vu ?? {})), JSON.stringify(vu)?.slice(0, 80));
+  check('18t. un client NE PEUT PAS ajouter de places (RLS : 0 ligne touchée)',
+    modifiees === 0, `lignes modifiées = ${modifiees}`);
+
+  // Et la valeur n'a pas bougé, une fois revenu au rôle normal.
+  const cap = (await q(`SELECT slots_total FROM beta_program WHERE id = 1`)).rows[0].slots_total;
+  check('18u. le budget est intact', Number(cap) === 10, `${cap}`);
+}
+
+// Le harnais referme derrière lui : la section bêta est la seule qui ouvre le
+// programme, et un test qui suivrait ne doit pas hériter de l'état.
+await e(`UPDATE beta_program SET open = false WHERE id = 1`);
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
 process.exit(failures ? 1 : 0);
