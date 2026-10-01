@@ -151,7 +151,10 @@ const DERNIERE_VERSION = [
   // Fonctions redefinies par plusieurs migrations : seule la derniere compte.
   'migration_sales_rpc.sql',      // bump_rate_limit, purge_rate_limits
   'migration_price_override.sql', // create_sale (prix negocié)
-  'migration_weighted_sales.sql', // create_sale (NUMERIC) — doit rester en tete
+  'migration_weighted_sales.sql', // create_sale (NUMERIC) + vue fournisseur
+  // ⚠ suppliers passe après weighted_sales : celui-ci recrée
+  //   products_with_supplier, et il lui faut la table suppliers pour ce faire.
+  'migration_suppliers.sql',     // products_with_supplier (remise en état)
   'migration_profitability.sql',  // archive_product, restore_product, gel du cout
   'migration_expenses.sql',       // seed_expense_categories, get_cash_flow
   'migration_invitations.sql',    // redeem_invitation, purge_accepted_invitations

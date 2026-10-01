@@ -85,28 +85,39 @@ fonction après avoir tout rejoué, et vérifie que `create_sale()` est bien rev
 `migration_profitability.sql` (colonne `list_price`) et suivre
 `migration_price_override.sql` (dont elle reprend le prix négocié).
 
-**Les 15 migrations sont rejouables** : `IF NOT EXISTS` sur les tables et les
+**Les 18 migrations sont rejouables** : `IF NOT EXISTS` sur les tables et les
 index, `DROP … IF EXISTS` avant chaque policy, chaque trigger et chaque fonction
-dont la signature a changé. Recollé sur une base déjà peuplée, le fichier ne
-doit rien casser — c'est vérifié par un test qui applique chaque migration deux
-fois.
+dont la signature a changé.
 
-Trois refus de PostgreSQL à connaître, tous rencontrés par l'expérience :
+Deux tests distincts, parce qu'ils ne vérifient pas la même chose :
+
+- `test:db` part d'une base **neuve** et vérifie le comportement ;
+- `test:db:existing` rejoue toute la série **sur une base déjà peuplée** — le cas
+  réel d'un `APPLY_MIGRATIONS.sql` collé sur un projet existant.
+
+Le second existe parce que le premier ne voit pas certains défauts : une
+migration d'`ALTER` qui précède la création d'une vue passe sur une base neuve
+et échoue en 0A000 dès que la vue existe. C'est exactement ce qui s'est produit
+sur la vente au poids, où `products_with_supplier` bloquait la conversion de
+`products.stock_qty`.
+
+Quatre refus de PostgreSQL à connaître, tous rencontrés par l'expérience :
 
 | Code | Cause | Correctif |
 |---|---|---|
 | 42P07 | `CREATE TABLE` sur une table existante | `IF NOT EXISTS` |
 | 42710 | `CREATE POLICY` / `CREATE TRIGGER` déjà présents | `DROP … IF EXISTS` avant |
 | **42P13** | **`CREATE OR REPLACE FUNCTION` dont le `RETURNS TABLE` a changé** | **`DROP FUNCTION` avant** |
+| **0A000** | **`ALTER COLUMN TYPE` sur une colonne utilisée par une vue** | **`DROP VIEW` avant** |
 
-Le troisième est le plus piègeux : les paramètres `OUT` font partie de la
-signature, donc **ajouter une colonne à un `RETURNS TABLE` exige de supprimer la
-fonction**. `CREATE OR REPLACE` ne suffit pas, et l'erreur interrompt le script
-au milieu. `get_product_profitability()` a necessitate un `DROP` lors de
-l'ajout des colonnes de prix négocié.
+Les deux derniers sont les plus piégeux. Pour 42P13, les paramètres `OUT` font
+partie de la signature : **ajouter une colonne à un `RETURNS TABLE` exige de
+supprimer la fonction**. Pour 0A000, PostgreSQL refuse de changer le type d'une
+colonne dont dépend une vue — et l'ordre des fichiers masque le problème, puisque
+la vue est créée par une migration *suivante*.
 
-Un script qui analyse toutes les fonctions à `RETURNS TABLE` permet de
-détecter ce cas avant de le subir.
+Un script qui analyse toutes les fonctions à `RETURNS TABLE` permet de détecter
+le premier cas avant de le subir.
 
 > `migration_team.sql` doit précéder `migration_saas.sql` : la policy
 > « Employé lit l'org de son patron » référence `business_members`.

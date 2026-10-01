@@ -45,13 +45,17 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS unit text NOT NULL DEFAULT 'pce';
 -- NUMERIC(12,3) : 999 999 999,999 avant saturation. Un stock en sacs de riz
 -- comme un stock en kilos tiennent largement dedans.
 --
--- ⚠ Le type n'est changé QUE si la colonne est encore entière. Le faire deux
---   fois échoue en « cannot alter type of a column used by a view or rule » :
---   au second passage, get_product_profitability() existe et référence déjà
---   sale_items.quantity. Le garde rend la migration réellement rejouable, ce
---   que la version précédente n'était pas — le test de rejouabilité l'a attrapé
---   sur APPLY_MIGRATIONS.sql collé en double.
+-- ⚠ products_with_supplier doit être supprimée AVANT, et le défaut n'apparaît
+--   que sur une base déjà peuplée. Sur une base neuve, la vue est créée par
+--   migration_suppliers.sql, qui passe APRÈS ce fichier : l'ALTER réussit, et le
+--   test ne voit jamais le problème. Sur une base où la vue existe déjà, l'ALTER
+--   échoue en 0A000 « cannot alter type of a column used by a view or rule » et
+--   le script s'interrompt avant les migrations suivantes.
+--
+DROP VIEW IF EXISTS products_with_supplier;
 
+-- ⚠ Le type n'est changé QUE si la colonne est encore entière : le refaire
+--   échoue en 0A000 pour la même raison.
 DO $$
 DECLARE
   v_type text;
@@ -67,6 +71,59 @@ BEGIN
     ALTER TABLE stock_logs   ALTER COLUMN quantity_change TYPE NUMERIC(12,3),
                               ALTER COLUMN stock_before     TYPE NUMERIC(12,3),
                               ALTER COLUMN stock_after      TYPE NUMERIC(12,3);
+  END IF;
+END;
+$$;
+
+-- Recréation de la vue, dans le MÊME fichier.
+--
+--⚠ S'appuyer sur migration_suppliers.sql pour la reconstruire ne suffit pas :
+--   ce fichier est réappliqué seul (le test de rejouabilité le fait pour rétablir
+--   la dernière version de create_sale()), et supprime alors la vue sans que
+--   rien ne la remette. Le catalogue devient invisible, sans aucune
+--   erreur — le pire genre de panne. Un fichier de migration doit être
+--   autonome : il répare ce qu'il casse.
+--
+-- La création est conditionnelle : sur une base neuve, ni la table suppliers ni
+-- la colonne products.supplier_id n'existent encore, et la vue échouerait.
+DO $$
+BEGIN
+  IF to_regclass('public.suppliers') IS NOT NULL
+     AND EXISTS (SELECT 1 FROM information_schema.columns
+                  WHERE table_name = 'products' AND column_name = 'supplier_id') THEN
+    EXECUTE $vue$
+      CREATE OR REPLACE VIEW products_with_supplier
+      WITH (security_invoker = true)
+      AS
+      SELECT
+        p.id,
+        p.user_id,
+        p.name,
+        p.sku,
+        p.category,
+        p.price_buy,
+        p.price_sell,
+        p.stock_qty,
+        p.min_stock_level,
+        p.is_active,
+        p.created_at,
+        p.supplier_id,
+        s.name AS supplier_name,
+        s.phone AS supplier_phone
+      FROM products p
+      LEFT JOIN suppliers s ON s.id = p.supplier_id
+    $vue$;
+
+    EXECUTE $c$
+      COMMENT ON VIEW products_with_supplier IS
+        'Catalogue avec le fournisseur principal. Les produits sans fournisseur '
+        'sont conservés. security_invoker : l''isolation vient de la RLS de '
+        'products et suppliers, pas d''une vue qui la contournerait.'
+    $c$;
+
+    EXECUTE $g$ REVOKE ALL ON products_with_supplier FROM PUBLIC $g$;
+    EXECUTE $g$ GRANT SELECT ON products_with_supplier TO authenticated $g$;
+    EXECUTE $g$ GRANT SELECT ON products_with_supplier TO service_role $g$;
   END IF;
 END;
 $$;
