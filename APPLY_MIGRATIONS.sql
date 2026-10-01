@@ -2,7 +2,7 @@
 --  GESTIONLOCAL — SCHÉMA COMPLET
 --  À coller dans : Supabase Dashboard → SQL Editor → New query → Run
 --
---  Les 16 migrations concaténées, dans l'ordre d'application. Ce
+--  Les 18 migrations concaténées, dans l'ordre d'application. Ce
 --  fichier est pratique pour partir d'une base vide ; sur une base existante,
 --  préfère la migration concernée seule.
 --
@@ -1229,8 +1229,25 @@ BEGIN
     RAISE EXCEPTION 'Panier vide' USING ERRCODE = '22023';
   END IF;
 
-  IF p_payment_method IS NULL OR p_payment_method NOT IN ('cash', 'momo') THEN
+  -- 'credit' est accepté ici mais n'est pas un encaissement : la vente est
+  -- créée, le stock part, et c'est record_credit_sale() qui la marque non
+  -- encaissée et rattache le téléphone. Sans ce filet, un appel direct avec
+  -- 'credit' produirait une vente comptée comme encaissée sans dette derrière.
+  IF p_payment_method IS NULL
+     OR p_payment_method NOT IN ('cash', 'momo', 'credit') THEN
     RAISE EXCEPTION 'Moyen de paiement invalide : %', p_payment_method USING ERRCODE = '22023';
+  END IF;
+
+  IF p_payment_method = 'credit' AND current_setting('credit.internal', true) IS DISTINCT FROM '1' THEN
+    -- Garde-fou : create_sale() est exécutable par tout client authentifié. Un
+    -- appel direct avec 'credit' créerait une vente comptée comme encaissée,
+    -- sans dette derrière — exactement le trou que cette fonction comble.
+    --
+    -- record_credit_sale() pose credit.internal = '1' le temps de l'appel. Un
+    -- GUC n'est pas modifiable par un client SQL ordinaire : seule une fonction
+    -- SECURITY DEFINER peut le poser, et celle-ci l'est.
+    RAISE EXCEPTION 'Utilisez record_credit_sale() pour une vente à crédit'
+      USING ERRCODE = '22023';
   END IF;
 
   -- ── Valider chaque ligne AVANT toute écriture ──
@@ -1389,6 +1406,158 @@ COMMENT ON COLUMN products.unit IS
 
 
 -- ============================================================
+-- CRÉDIT CLIENT — le carnet de dette
+-- À exécuter dans Supabase SQL Editor
+--
+-- LE PROBLÈME
+--   « Je te dois 5 000, tu me paieras au prochain marché » représente une part
+--   considérable du chiffre d'affaires d'une boutique de quartier. Aujourd'hui
+--   create_sale() n'accepte que 'cash' et 'momo' : il n'y a aucune place pour une
+--   dette, et le carnet papier reste la seule source de vérité. La caisse ne sait
+--   rien de ce qu'elle a cédé, et ne peut pas le réclamer.
+--
+-- LE CHOIX COMPTABLE — RECETTE À L'ENCAISSEMENT
+--   Une vente à crédit N'ENTRE PAS dans le chiffre d'affaires tant qu'elle n'est
+--   pas réglée. C'est la solution prudente : un chiffre d'affaires gonflé par
+--   des dettes qu'on ne recouvrera pas donne une fausse lecture de la santé du
+--   commerce — et l'écran « Charges » calcule un résultat net à partir de ce
+--   chiffre. Un commerçant qui accorde 200 000 F de crédit se verrait ruiner sur
+--   le papier.
+--
+--   Conséquence assumée : les dettes apparaissent nulle part dans les rapports.
+--   Elles ont leur propre écran, qui est le bon endroit pour les suivre.
+--
+--   Le STOCK, lui, part immédiatement. La marchandise quitte la boutique, et
+--   Prévisions doit savoir qu'elle n'est plus là — sinon il recommandera de
+--   commander du stock déjà cédé.
+--
+-- CE QUI DISTINGUE LE STOCK DE L'ARGENT
+--   `sales.settled` sépare les deux : FALSE = les unités sont parties, l'argent
+--   n'est pas rentré. Les rapports de CA et de marge filtrent sur settled = true ;
+--   les quantités vendues comptent toutes, car c'est un fait physique.
+--
+-- ⚠ DEFAULT TRUE, et c'est volontaire : toutes les ventes existantes sont cash
+--   ou MoMo, donc encaissées. Sans ce défaut, le changement de colonne ferait
+--   disparaître tout l'historique du chiffre d'affaires.
+-- ============================================================
+
+-- ─── 1. Vente encaissée ou non ─────────────────────────────
+ALTER TABLE sales
+  ADD COLUMN IF NOT EXISTS settled boolean NOT NULL DEFAULT true;
+
+ALTER TABLE sales
+  ADD COLUMN IF NOT EXISTS client_phone text;
+
+COMMENT ON COLUMN sales.settled IS
+  'FALSE = vente à crédit : le stock est parti, l''argent n''est pas rentré. '
+  'Les rapports de chiffre d''affaires et de marge ne comptent que settled = true. '
+  'Défaut TRUE : les ventes cash et MoMo sont encaissées par nature.';
+
+-- Un numéro de téléphone est l'identité réelle d'un client d'informel — le nom
+-- change, « Maman Koffi » se mariera. La dette s'y rattache.
+--
+-- NOT VALID : la contrainte ne vérifie que les lignes neuves. Les ventes cash et
+-- MoMo existantes ont settled = true, donc la colonne client_phone reste NULL
+-- pour toutes — les valider retroactivement n'aurait aucun sens.
+--
+-- DROP préalable : une contrainte s'ajoute avec ALTER TABLE ADD CONSTRAINT, qui
+-- n'a pas de IF NOT EXISTS. Sans ce DROP, la seconde exécution échoue en
+-- 42710 et interrompt le script.
+ALTER TABLE sales DROP CONSTRAINT IF EXISTS sales_credit_needs_phone;
+ALTER TABLE sales ADD CONSTRAINT sales_credit_needs_phone
+  CHECK (settled OR client_phone IS NOT NULL) NOT VALID;
+
+-- Index partiel : seules les ventes à crédit portent un numéro, et c'est
+-- ~10 % des lignes sur un commerce qui prête.
+CREATE INDEX IF NOT EXISTS idx_sales_credit
+  ON sales(user_id, created_at DESC) WHERE NOT settled;
+
+CREATE INDEX IF NOT EXISTS idx_sales_settled
+  ON sales(user_id, settled, created_at DESC);
+
+
+-- ─── 2. Les dettes ─────────────────────────────────────────
+
+-- Un numéro par boutique : deux fiches pour le même numéro scinderait la dette
+-- en deux et le commerçant croirait avoir deux débiteurs.
+CREATE TABLE IF NOT EXISTS customer_debts (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  phone       text NOT NULL,
+  name        text,
+  note        text,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+  updated_at  timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT customer_debts_phone_unique UNIQUE (user_id, phone),
+  -- Le stock de chiffres suffit : la comparaison se fait sur la forme, pas sur
+  -- le format. '+229 97 00 00 00' et '22997000000' désignent le même client.
+  CONSTRAINT customer_debts_phone_digits CHECK (phone ~ '^[0-9]{8,15}$')
+);
+
+ALTER TABLE customer_debts ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "debts_read" ON customer_debts;
+CREATE POLICY "debts_read" ON customer_debts
+  FOR SELECT USING (user_id = get_business_owner_id());
+
+DROP POLICY IF EXISTS "debts_insert" ON customer_debts;
+CREATE POLICY "debts_insert" ON customer_debts
+  FOR INSERT WITH CHECK (can_manage_products() AND user_id = get_business_owner_id());
+
+DROP POLICY IF EXISTS "debts_update" ON customer_debts;
+CREATE POLICY "debts_update" ON customer_debts
+  FOR UPDATE USING (can_manage_products())
+  WITH CHECK (can_manage_products() AND user_id = get_business_owner_id());
+
+DROP POLICY IF EXISTS "debts_delete" ON customer_debts;
+CREATE POLICY "debts_delete" ON customer_debts
+  FOR DELETE USING (can_manage_products());
+
+CREATE INDEX IF NOT EXISTS idx_customer_debts_user ON customer_debts(user_id);
+
+DROP TRIGGER IF EXISTS customer_debts_updated_at ON customer_debts;
+CREATE TRIGGER customer_debts_updated_at
+  BEFORE UPDATE ON customer_debts
+  FOR EACH ROW EXECUTE FUNCTION update_org_timestamp();
+
+
+-- ─── 3. Les versements ────────────────────────────────────
+CREATE TABLE IF NOT EXISTS credit_payments (
+  id         uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  debt_id    uuid NOT NULL REFERENCES customer_debts(id) ON DELETE CASCADE,
+  user_id    uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  amount     numeric(12,2) NOT NULL,
+  day        date NOT NULL,
+  method     text NOT NULL DEFAULT 'cash',
+  note       text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT credit_payments_amount_positive CHECK (amount > 0),
+  CONSTRAINT credit_payments_method_valid   CHECK (method IN ('cash', 'momo'))
+);
+
+ALTER TABLE credit_payments ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "payments_read" ON credit_payments;
+CREATE POLICY "payments_read" ON credit_payments
+  FOR SELECT USING (user_id = get_business_owner_id());
+
+DROP POLICY IF EXISTS "payments_insert" ON credit_payments;
+CREATE POLICY "payments_insert" ON credit_payments
+  FOR INSERT WITH CHECK (can_manage_products() AND user_id = get_business_owner_id());
+
+-- Suppression interdite : effacer un versement ferait réapparaître une dette
+-- déjà encaissée. On ne corrige que par un nouveau versement.
+DROP POLICY IF EXISTS "payments_delete" ON credit_payments;
+CREATE POLICY "payments_delete" ON credit_payments
+  FOR DELETE USING (false);
+
+CREATE INDEX IF NOT EXISTS idx_credit_payments_debt ON credit_payments(debt_id, day DESC);
+CREATE INDEX IF NOT EXISTS idx_credit_payments_user ON credit_payments(user_id, day DESC);
+
+
+-- ============================================================
 -- MIGRATION PRODUITS ARCHIVÉS + MARGE — GestionLocal
 -- À exécuter dans Supabase SQL Editor, après migration_roles.sql
 --
@@ -1531,7 +1700,12 @@ RETURNS TABLE (
   discount_given     numeric,
   -- Volume vendu sous le prix d'achat, en unités. Non nul = du stock écoulé
   -- à perte, ce qu'un commerçant doit voir sans que la vente soit bloquée.
-  units_sold_at_loss bigint
+  units_sold_at_loss bigint,
+  -- Montant cédé à crédit et non encore encaissé, sur ce produit. N'entre pas
+  -- dans revenue ni gross_profit : la recette à l'encaissement est le choix
+  -- prudent, sinon un commerçant qui prête verrait son chiffre d'affaires
+  -- gonflé par une dette qu'il ne recouvrera peut-être jamais.
+  unsettled_credit numeric
 )
 LANGUAGE sql
 STABLE
@@ -1545,20 +1719,30 @@ AS $$
     COALESCE(p.price_buy, 0)                     AS unit_cost,
     p.price_sell                                 AS unit_price,
     p.stock_qty,
+    -- FAIT PHYSIQUE : tout ce qui est sorti, y compris cédé à crédit. Prévisions
+    -- s'en sert pour estimer la rotation, et la marchandise est bien partie.
     COALESCE(SUM(si.quantity), 0)                AS units_sold,
-    COALESCE(SUM(si.subtotal), 0)                AS revenue,
-    COALESCE(SUM(si.unit_cost * si.quantity), 0) AS cost_of_goods,
-    COALESCE(SUM(si.subtotal - si.unit_cost * si.quantity), 0) AS gross_profit,
+    -- FAIT FINANCIER : uniquement ce qui est encaissé. Une vente à crédit non
+    -- réglée n'est pas du chiffre d'affaires, sous peine de faire Mineur un
+    -- commerce dont le carnet de créances est troué.
+    COALESCE(SUM(si.subtotal) FILTER (WHERE s.settled), 0) AS revenue,
+    -- Le coût suit le chiffre d'affaires encaissé : on ne compte pas le coût
+    -- d'une marchandise que l'on n'a pas encore payée en encaissant.
+    COALESCE(SUM(si.unit_cost * si.quantity) FILTER (WHERE s.settled), 0) AS cost_of_goods,
+    COALESCE(SUM(si.subtotal - si.unit_cost * si.quantity) FILTER (WHERE s.settled), 0)
+                                                        AS gross_profit,
     CASE
-      WHEN COALESCE(SUM(si.subtotal), 0) > 0
+      WHEN COALESCE(SUM(si.subtotal) FILTER (WHERE s.settled), 0) > 0
         THEN ROUND(
-          100 * SUM(si.subtotal - si.unit_cost * si.quantity)
-          / SUM(si.subtotal), 1)
+          100 * SUM(si.subtotal - si.unit_cost * si.quantity) FILTER (WHERE s.settled)
+          / SUM(si.subtotal) FILTER (WHERE s.settled), 1)
       ELSE NULL
     END                                          AS margin_pct,
     CASE
-      WHEN COALESCE(SUM(si.quantity), 0) > 0
-        THEN ROUND(SUM(si.subtotal) / SUM(si.quantity), 2)
+      WHEN COALESCE(SUM(si.quantity) FILTER (WHERE s.settled), 0) > 0
+        THEN ROUND(
+          SUM(si.subtotal) FILTER (WHERE s.settled)
+          / SUM(si.quantity) FILTER (WHERE s.settled), 2)
       ELSE NULL
     END                                          AS avg_sold_price,
     -- list_price est NULL sur les ventes antérieures au prix négocié : on
@@ -1568,9 +1752,16 @@ AS $$
     ), 0)                                        AS discount_given,
     COALESCE(SUM(si.quantity) FILTER (
       WHERE si.unit_cost IS NOT NULL AND si.unit_price < si.unit_cost
-    ), 0)                                        AS units_sold_at_loss
+    ), 0)                                        AS units_sold_at_loss,
+    -- Informatif : ce qui reste dû sur ce produit. N'entre dans aucun total.
+    COALESCE(SUM(si.subtotal) FILTER (WHERE NOT s.settled), 0) AS unsettled_credit
   FROM products p
   LEFT JOIN sale_items si ON si.product_id = p.id
+  -- La jointure sur sales est nécessaire pour lire `settled`. LEFT JOIN et non
+  -- INNER : les produits sans vente doivent apparaître avec des zéros.
+  LEFT JOIN sales s ON s.id = si.sale_id
+  -- `settled` est dans un FILTER, pas dans un WHERE : le WHERE filtrerait les
+  -- lignes et les produits sans vente disparaîtraient du tableau de bord.
   -- Les produits archivés restent hors du tableau de bord : leur historique
   -- est conservé en base, ils ne sont plus pilotés.
   WHERE p.is_active
@@ -1751,6 +1942,10 @@ AS $$
     FROM sales s
     WHERE (s.created_at AT TIME ZONE (SELECT tz FROM bounds))::date
           BETWEEN p_from AND p_to
+      -- Recette à l'encaissement : une vente à crédit non réglée n'est pas du
+      -- chiffre d'affaires. Sans ce filtre, un commerçant qui prête verrait son
+      -- « résultat net » calculé par des sommes qu'il n'a jamais encaissées.
+      AND s.settled
     GROUP BY 1
   ),
   expenses_by_day AS (
@@ -2227,3 +2422,379 @@ GRANT SELECT ON products_with_supplier TO service_role;
 --
 --   SELECT count(*) AS triggers
 --     FROM pg_trigger WHERE tgname = 'suppliers_updated_at';
+
+
+-- ============================================================
+-- CRÉDIT CLIENT — fonctions
+-- À exécuter après migration_credit.sql
+--
+-- Trois opérations :
+--   1. record_credit_sale()  — une vente à crédit et sa fiche client
+--   2. pay_customer_debt()   — un encaissement, soldant les ventes par ordre
+--                              d'ancienneté
+--   3. get_customer_debts()  — le solde par client
+--
+-- L'ordre d'ancienneté est le bon ordre en informel : la dette la plus vieille
+-- est celle qu'il faut relancer en premier, et le commerçant ne raisonne pas
+-- par vente mais par « ce qu'il me doit au total ».
+-- ============================================================
+
+-- ─── 1. Normaliser un numéro ──────────────────────────────
+-- '+229 97 00 00 00', '22997000000' et '97000000' désignent le même client.
+-- Sans cela, « +229 97… » et « 97… » créeraient deux dettes distinctes pour une
+-- seule personne, et le commerçant croirait avoir deux débiteurs.
+--
+-- IMMUTABLE et sans accès table : accordable au client, qui normalise avant
+-- d'envoyer, sans aller-retour réseau à chaque saisie.
+CREATE OR REPLACE FUNCTION normalize_phone(p_phone text)
+RETURNS text
+LANGUAGE plpgsql
+IMMUTABLE
+AS $$
+DECLARE
+  v_digits text;
+BEGIN
+  v_digits := regexp_replace(COALESCE(p_phone, ''), '[^0-9]', '', 'g');
+
+  IF v_digits = '' THEN
+    RETURN NULL;
+  END IF;
+
+  -- 8 chiffres = numéro local béninois, on préfixe l'indicatif pays.
+  IF length(v_digits) = 8 THEN
+    v_digits := '229' || v_digits;
+  END IF;
+
+  IF length(v_digits) < 8 OR length(v_digits) > 15 THEN
+    RETURN NULL;
+  END IF;
+
+  RETURN v_digits;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION normalize_phone(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION normalize_phone(text) TO authenticated;
+GRANT EXECUTE ON FUNCTION normalize_phone(text) TO service_role;
+
+
+-- ─── 2. Enregistrer une vente à crédit ────────────────────
+-- Séparée de create_sale() volontairement : la vente à crédit a des contraintes
+-- propres — téléphone obligatoire, pas de recette immédiate — et les mélanger
+-- dans une fonction déjà surchargée rendrait les deux chemins illisibles.
+--
+-- La vente passe par create_sale() avec payment_method = 'credit', puis on
+-- marque settled = false. Le stock est donc décrémenté exactement comme pour
+-- une vente cash : la marchandise est partie.
+--
+-- SECURITY DEFINER : l'appelant n'est pas encore connu de la boutique, et
+-- create_sale() l'est déjà.
+CREATE OR REPLACE FUNCTION record_credit_sale(
+  p_items        jsonb,
+  p_client_name  text,
+  p_client_phone text,
+  p_note         text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_owner   uuid;
+  v_phone   text;
+  v_sale    jsonb;
+  v_sale_id uuid;
+  v_debt_id uuid;
+  v_total   numeric(12,2);
+  v_name    text;
+BEGIN
+  v_owner := get_business_owner_id();
+  IF v_owner IS NULL THEN
+    RAISE EXCEPTION 'Non authentifié' USING ERRCODE = '28000';
+  END IF;
+
+  IF btrim(COALESCE(p_client_name, '')) = '' THEN
+    RAISE EXCEPTION 'Indiquez le nom du client' USING ERRCODE = '22023';
+  END IF;
+
+  v_phone := normalize_phone(p_client_phone);
+  IF v_phone IS NULL THEN
+    -- Sans numéro, la dette n'est rattachable à personne et la relance WhatsApp
+    -- devient impossible. On refuse plutôt que d'accepter une dette orpheline
+    -- qu'on ne pourra pas suivre.
+    RAISE EXCEPTION 'Le numéro de téléphone est obligatoire pour une vente à crédit'
+      USING ERRCODE = '22023';
+  END IF;
+
+  -- Le nom va avec la vente : c'est ce que le commerçant voit sur son reçu, même
+  -- si le client change ensuite de nom d'enregistrement.
+  v_name := btrim(p_client_name);
+
+  -- create_sale() fait le travail lourd : atomicité, stock, coût figé, prix
+  -- négocié. On passe par lui plutôt que de dupliquer.
+  --
+  -- credit.internal lève le garde-fou qui refuse 'credit' : sans lui,
+  -- create_sale() ne pourrait pas être appelé avec ce moyen de paiement. Le GUC
+  -- est remis à NULL juste après — la transaction l'annulerait de toute façon,
+  -- mais le laisser posé ferait passer une vente à crédit encodée en dur pour un
+  -- appel direct suivant, dans la même session.
+  PERFORM set_config('credit.internal', '1', true);
+  v_sale := create_sale(p_items, 'credit', v_name, p_note);
+  PERFORM set_config('credit.internal', NULL, true);
+  v_sale_id := (v_sale->>'id')::uuid;
+  v_total := (v_sale->>'total_amount')::numeric(12,2);
+
+  UPDATE sales
+     SET settled = false,
+         client_phone = v_phone
+   WHERE id = v_sale_id;
+
+  -- Fiche client créée à la première dette, réutilisée ensuite. ON CONFLICT DO
+  -- UPDATE garde le nom à jour : « Maman Koffi » devient « Mme Koffi ».
+  INSERT INTO customer_debts (user_id, phone, name)
+  VALUES (v_owner, v_phone, v_name)
+  ON CONFLICT (user_id, phone) DO UPDATE
+    SET name = EXCLUDED.name,
+        updated_at = now();
+
+  SELECT id INTO v_debt_id
+    FROM customer_debts
+   WHERE user_id = v_owner AND phone = v_phone;
+
+  RETURN jsonb_build_object(
+    'id',              v_sale_id,
+    'total_amount',    v_total,
+    'invoice_number',  v_sale->>'invoice_number',
+    'debt_id',         v_debt_id,
+    'client_phone',    v_phone
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION record_credit_sale(jsonb, text, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION record_credit_sale(jsonb, text, text, text) TO authenticated;
+
+
+-- ─── 3. Encaisser un versement ────────────────────────────
+-- Solde les ventes les plus anciennes d'abord. Un règlement partiel est la
+-- norme : « je te paye 3 000 sur les 8 000 ».
+--
+-- L'algorithme est volontairement simple : on parcourt les ventes non soldées par
+-- ancienneté, et on rembourse chacune du reliquat de trésorerie. Ce qui reste à
+-- la fin est la dette. Une version plus savante répartirait au prorata, mais le
+-- commerçant ne raisonne pas en tantimes de ventes — il veut « ce qui reste ».
+--
+-- Le surplus va au crédit du client : il n'est ni perdu ni compté en recette. Le
+-- commerce l'inscrit en dette fournisseur, qui est une autre fonctionnalité.
+--
+-- SECURITY DEFINER : le solde croise sales et credit_payments sur le numéro de
+-- téléphone, ce qu'aucune policy RLS ne peut exprimer.
+CREATE OR REPLACE FUNCTION pay_customer_debt(
+  p_debt_id uuid,
+  p_amount  numeric(12,2),
+  p_method  text DEFAULT 'cash',
+  p_note    text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_owner        uuid;
+  v_phone        text;
+  v_user_id      uuid;
+  v_restant      numeric(12,2);
+  v_avant        numeric(12,2);
+  v_reglees      int := 0;
+  v_sale         record;
+BEGIN
+  v_owner := get_business_owner_id();
+  IF v_owner IS NULL THEN
+    RAISE EXCEPTION 'Non authentifié' USING ERRCODE = '28000';
+  END IF;
+
+  -- Sans FOR UPDATE explicite ici, deux caisses encaissant en même temps
+  -- pourraient toutes deux solder la même vente. Verrou de ligne sur la fiche.
+  SELECT phone, user_id INTO v_phone, v_user_id
+    FROM customer_debts
+   WHERE id = p_debt_id
+   FOR UPDATE;
+
+  IF NOT FOUND OR v_user_id <> v_owner THEN
+    -- Message identique à « introuvable » : un patron ne doit pas pouvoir
+    -- deviner l'existence d'une fiche d'un autre tenant.
+    RAISE EXCEPTION 'Client introuvable' USING ERRCODE = 'P0002';
+  END IF;
+
+  IF p_amount IS NULL OR p_amount <= 0 THEN
+    RAISE EXCEPTION 'Montant de versement invalide' USING ERRCODE = '22023';
+  END IF;
+
+  IF p_method IS NULL OR p_method NOT IN ('cash', 'momo') THEN
+    RAISE EXCEPTION 'Moyen de paiement invalide : %', p_method USING ERRCODE = '22023';
+  END IF;
+
+  -- Solde avant versement, et refus si le client ne doit rien : cela interdit
+  -- d'encaisser un règlement sur une fiche soldée, qui ferait réapparaître un
+  -- crédit que le commerçant croirait avoir perdu.
+  SELECT COALESCE(SUM(s.total_amount), 0) - COALESCE(
+    (SELECT SUM(cp.amount) FROM credit_payments cp
+      JOIN customer_debts d2 ON d2.id = cp.debt_id
+     WHERE d2.user_id = v_owner AND d2.phone = v_phone), 0
+  ) INTO v_avant
+    FROM sales s
+   WHERE s.user_id = v_owner AND s.client_phone = v_phone AND NOT s.settled;
+
+  IF v_avant <= 0 THEN
+    RAISE EXCEPTION 'Ce client n''a pas de dette en cours' USING ERRCODE = '22023';
+  END IF;
+
+  INSERT INTO credit_payments (debt_id, user_id, amount, day, method, note)
+  VALUES (p_debt_id, v_owner, p_amount, current_date, p_method,
+          NULLIF(btrim(COALESCE(p_note, '')), ''));
+
+  -- Rembourse chaque vente non soldée, de la plus ancienne à la plus récente.
+  --
+  -- La trésorerie disponible n'est PAS p_amount : c'est le cumul des versements
+  -- déjà faits, ce qui rend le calcul insensible à l'ordre des appels. Deux
+  -- versements de 8 000 et 12 000 sur une vente de 20 000 doivent la solder, que
+  -- le commerçant encaisse en une fois ou en trois.
+  --
+  -- On boucle sur un curseur simple, sans FOR UPDATE : le verrou utile est posé
+  -- sur la fiche client plus haut, ce qui sérialise deux caisses encaissant pour
+  -- le même client. Verrouiller aussi chaque ligne ici n'apporte rien et, dans un
+  -- FOR ... LOOP PL/pgSQL, n'itère pas sur la snapshot attendue.
+  v_restant := COALESCE(
+    (SELECT SUM(cp.amount) FROM credit_payments cp
+      JOIN customer_debts d4 ON d4.id = cp.debt_id
+     WHERE d4.user_id = v_owner AND d4.phone = v_phone), 0
+  ) - COALESCE(
+    (SELECT SUM(s4.total_amount) FROM sales s4
+      WHERE s4.user_id = v_owner
+        AND s4.client_phone = v_phone
+        AND NOT s4.settled
+        AND s4.created_at < (SELECT min(s5.created_at) FROM sales s5
+                             WHERE s5.user_id = v_owner
+                               AND s5.client_phone = v_phone
+                               AND NOT s5.settled)), 0
+  );
+
+  FOR v_sale IN
+    SELECT s.id, s.total_amount
+      FROM sales s
+     WHERE s.user_id = v_owner
+       AND s.client_phone = v_phone
+       AND NOT s.settled
+     ORDER BY s.created_at ASC
+  LOOP
+    EXIT WHEN v_restant <= 0;
+
+    IF v_restant >= v_sale.total_amount THEN
+      v_restant := v_restant - v_sale.total_amount;
+      UPDATE sales SET settled = true WHERE id = v_sale.id;
+      v_reglees := v_reglees + 1;
+    END IF;
+  END LOOP;
+
+  -- Solde final : ce qui n'a pas couvert une vente entière reste dû.
+  SELECT COALESCE(SUM(s.total_amount), 0) - COALESCE(
+    (SELECT SUM(cp.amount) FROM credit_payments cp
+      JOIN customer_debts d3 ON d3.id = cp.debt_id
+     WHERE d3.user_id = v_owner AND d3.phone = v_phone), 0
+  ) INTO v_restant
+    FROM sales s
+   WHERE s.user_id = v_owner AND s.client_phone = v_phone AND NOT s.settled;
+
+  UPDATE customer_debts SET updated_at = now() WHERE id = p_debt_id;
+
+  RETURN jsonb_build_object(
+    'debt_id',        p_debt_id,
+    'amount_paid',    p_amount,
+    'balance_before', v_avant,
+    'balance_after',  GREATEST(v_restant, 0),
+    'sales_settled',  v_reglees
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION pay_customer_debt(uuid, numeric, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION pay_customer_debt(uuid, numeric, text, text) TO authenticated;
+
+
+-- ─── 4. Les soldes ────────────────────────────────────────
+-- Fonction plutôt que vue : le solde croise les ventes non encaissées et les
+-- versements, et une vue SECURITY DEFINER contournerait la RLS de sales.
+-- SECURITY INVOKER : l'isolation vient de la RLS de sales et customer_debts.
+CREATE OR REPLACE FUNCTION get_customer_debts()
+RETURNS TABLE (
+  debt_id         uuid,
+  phone           text,
+  name            text,
+  total_due       numeric,
+  last_sale_at    timestamptz,
+  sales_count     bigint,
+  oldest_sale_at  timestamptz,
+  payments_count  bigint,
+  last_payment_at date
+)
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+AS $$
+  WITH dues AS (
+    SELECT
+      s.user_id,
+      s.client_phone,
+      SUM(s.total_amount) AS total_due,
+      COUNT(*)             AS sales_count,
+      MAX(s.created_at)    AS last_sale_at,
+      MIN(s.created_at)    AS oldest_sale_at
+    FROM sales s
+    WHERE NOT s.settled AND s.client_phone IS NOT NULL
+    GROUP BY s.user_id, s.client_phone
+  ), soldes AS (
+    SELECT
+      d.id,
+      d.user_id,
+      d.phone,
+      d.name,
+      GREATEST(
+        COALESCE(u.total_due, 0)
+        - COALESCE((
+            SELECT SUM(cp.amount) FROM credit_payments cp
+             WHERE cp.debt_id = d.id
+          ), 0),
+        0
+      ) AS total_due,
+      u.last_sale_at,
+      COALESCE(u.sales_count, 0) AS sales_count,
+      u.oldest_sale_at,
+      (SELECT COUNT(*) FROM credit_payments cp2 WHERE cp2.debt_id = d.id) AS payments_count,
+      (SELECT MAX(cp3.day) FROM credit_payments cp3 WHERE cp3.debt_id = d.id) AS last_payment_at
+    FROM customer_debts d
+    LEFT JOIN dues u ON u.user_id = d.user_id AND u.client_phone = d.phone
+  )
+  SELECT s.id, s.phone, s.name, s.total_due, s.last_sale_at, s.sales_count,
+         s.oldest_sale_at, s.payments_count, s.last_payment_at
+    FROM soldes s
+   WHERE s.user_id = get_business_owner_id()
+     -- Une dette soldée n'a plus rien à réclamer. Sans ce critère, la fiche
+     -- persiste et l'écran montre un client à 0 F comme s'il devait de l'argent.
+     AND s.total_due > 0
+   ORDER BY s.oldest_sale_at ASC NULLS LAST;
+$$;
+
+REVOKE ALL ON FUNCTION get_customer_debts() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION get_customer_debts() TO authenticated;
+
+COMMENT ON FUNCTION get_customer_debts() IS
+  'Soldes débiteurs, du plus ancien au plus récent. Une dette soldée n''apparaît '
+  'plus. Le client est identifié par son numéro de téléphone, pas par son nom.';
+
+COMMENT ON FUNCTION pay_customer_debt(uuid, numeric, text, text) IS
+  'Enregistre un versement et solde les ventes à crédit les plus anciennes '
+  'd''abord. Un règlement partiel est la norme. Le surplus reste au crédit du '
+  'client et n''est pas compté en recette.';

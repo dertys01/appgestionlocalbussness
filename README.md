@@ -49,14 +49,20 @@ point à vérifier après un `git pull`.
 | 9 | `migration_roles.sql` | Séparation des droits employé / patron |
 | 10 | `migration_price_override.sql` | Prix négocié par ligne, `sale_items.list_price` |
 | 11 | `migration_weighted_sales.sql` | Quantités décimales, `products.unit` |
-| 12 | `migration_profitability.sql` | Coût figé à la vente, `get_product_profitability()`, archivage |
-| 13 | `migration_expenses.sql` | Tables `expenses` / `expense_categories`, `get_cash_flow()` |
-| 14 | `migration_invitations.sql` | `employee_invitations`, `redeem_invitation()` |
-| 15 | `migration_profitability_fix.sql` | Remplit les `unit_cost` manquants, recrée le trigger |
-| 16 | `migration_suppliers.sql` | `suppliers`, `products.supplier_id`, `products_with_supplier` |
+| 12 | `migration_credit.sql` | `sales.settled`, `customer_debts`, `credit_payments` |
+| 13 | `migration_profitability.sql` | Coût figé à la vente, `get_product_profitability()`, archivage |
+| 14 | `migration_expenses.sql` | Tables `expenses` / `expense_categories`, `get_cash_flow()` |
+| 15 | `migration_invitations.sql` | `employee_invitations`, `redeem_invitation()` |
+| 16 | `migration_profitability_fix.sql` | Remplit les `unit_cost` manquants, recrée le trigger |
+| 17 | `migration_suppliers.sql` | `suppliers`, `products.supplier_id`, `products_with_supplier` |
+| 18 | `migration_credit_fns.sql` | `record_credit_sale()`, `pay_customer_debt()`, `get_customer_debts()` |
 
-`APPLY_MIGRATIONS.sql` concatène les 16 migrations pour partir d'une base
+`APPLY_MIGRATIONS.sql` concatène les 18 migrations pour partir d'une base
 vide. Sur une base existante, appliquer la seule migration concernée.
+
+`migration_credit.sql` doit précéder `migration_profitability.sql` et
+`migration_expenses.sql` : les deux filtrent sur `sales.settled` pour la recette
+à l'encaissement. `migration_credit_fns.sql` vient après `migration_credit.sql`.
 
 **L'ordre des migrations qui redéfinissent `create_sale()` est significatif.**
 Trois fichiers le font, en versions successives :
@@ -213,6 +219,63 @@ caisse (60 par tranche, `PRODUCT_PAGE_SIZE`) et les charges (50 par tranche,
 « Afficher plus »). La recherche porte toujours sur la liste entière, pas sur la
 tranche affichée ; le scanner cherche dans `products` complet et ajoute donc
 correctement un produit hors écran.
+
+## Crédit client
+
+« Je te dois 5 000, tu me paieras au prochain marché » représente une part
+considérable du chiffre d'affaires d'une boutique de quartier. L'écran
+**Dettes** suit ce carnet, que le papier ne permettait pas de contrôler.
+
+### Recette à l'encaissement
+
+Une vente à crédit **n'entre pas** dans le chiffre d'affaires tant qu'elle n'est
+pas réglée. C'est le choix prudent : un CA gonflé par des dettes qu'on ne
+recouvrera pas donne une fausse lecture de la santé du commerce, et l'écran
+« Charges » calcule un résultat net à partir de ce chiffre. Un commerçant qui
+accorde 200 000 F de crédit se verrait ruiner sur le papier.
+
+Le **stock, lui, part immédiatement** : la marchandise quitte la boutique, et
+Prévisions doit savoir qu'elle n'est plus là. `sales.settled` sépare les deux —
+`FALSE` = les unités sont parties, l'argent n'est pas rentré.
+
+Conséquence assumée : les dettes n'apparaissent dans aucun rapport financier.
+Elles ont leur écran, et `get_product_profitability()` expose
+`unsettled_credit` comme chiffre purement informatif.
+
+`DEFAULT TRUE` sur la colonne est volontaire : toutes les ventes existantes sont
+cash ou MoMo, donc encaissées. Sans ce défaut, le changement ferait disparaître
+tout l'historique du chiffre d'affaires.
+
+### Le client est son numéro
+
+Le téléphone est la clé d'identité, pas le nom — « Maman Koffi » se mariera.
+`normalize_phone()` réduit à l'indicatif pays : `+229 97 00 00 01`,
+`22997000001` et `97000001` désignent la même fiche. Sans cela, un client
+saisi de deux façons aurait deux dettes, et le commerçant croirait avoir deux
+débiteurs.
+
+Une vente à crédit **exige** un nom et un téléphone : sans numéro la dette est
+orpheline et la relance WhatsApp impossible.
+
+### Encaissement FIFO
+
+`pay_customer_debt()` solde les ventes les plus anciennes d'abord, et accepte
+le règlement partiel — la norme. La trésorerie disponible est le **cumul** des
+versements, pas le montant du dernier appel : deux versements de 8 000 et
+12 000 doivent solder une vente de 20 000, que le commerçant encaisse en une
+fois ou en trois.
+
+Le verrou est posé sur la fiche client, pas sur chaque ligne de vente. Un
+`FOR UPDATE` dans un `FOR … LOOP` PL/pgSQL n'itère pas sur la snapshot
+attendue — vérifié, l'`UPDATE` ne se fait pas.
+
+`create_sale()` **refuse** `payment_method = 'credit'` : un appel direct créerait
+une vente comptée comme encaissée, sans dette derrière. Seul `record_credit_sale()`
+passe, via un GUC `credit.internal` qu'un client SQL ordinaire ne peut pas
+poser.
+
+Les versements ne sont jamais supprimables : effacer un encaissement ferait
+réapparaître une dette que le commerçant croyait perdue.
 
 ## Vente au poids
 
