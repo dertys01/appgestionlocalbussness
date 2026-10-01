@@ -96,14 +96,38 @@ dont la signature a changé.
 Deux tests distincts, parce qu'ils ne vérifient pas la même chose :
 
 - `test:db` part d'une base **neuve** et vérifie le comportement ;
-- `test:db:existing` rejoue toute la série **sur une base déjà peuplée** — le cas
-  réel d'un `APPLY_MIGRATIONS.sql` collé sur un projet existant.
+- `test:db:existing` rejoue toute la série **sur une base déjà peuplée**, puis
+  **sur une base ramenée à la version précédente** — le cas réel d'un
+  `APPLY_MIGRATIONS.sql` collé sur un projet existant.
 
-Le second existe parce que le premier ne voit pas certains défauts : une
-migration d'`ALTER` qui précède la création d'une vue passe sur une base neuve
-et échoue en 0A000 dès que la vue existe. C'est exactement ce qui s'est produit
-sur la vente au poids, où `products_with_supplier` bloquait la conversion de
-`products.stock_qty`.
+### Le test de rejouabilité a une limite qu'il ne peut pas franchir
+
+Rejouer le **même** fichier ne prouve qu'une chose : que le fichier est
+idempotent. La signature de `get_customer_debts()` y est identique à chaque
+passage, donc rien ne peut mal tourner.
+
+Le risque réel est ailleurs : une fonction dont le `RETURNS TABLE` a changé
+**entre deux versions**. Le premier passage crée la forme nouvelle, le second la
+retrouve — jamais l'ancienne. Et la base de l'utilisateur, elle, a bien
+l'ancienne. C'est arrivé sur l'acompte : `get_customer_debts()` a gagné une
+colonne `total_paid`, 42P13 a interrompu le script au milieu, et **le test était
+vert**.
+
+`test:db:existing` simule donc le déploiement réel : il remet les fonctions dans
+leur forme d'avant, rejoue la série complète, et vérifie que la forme nouvelle a
+bien pris et que l'ancienne a disparu. Vérifié par `git stash` : sans le
+`DROP FUNCTION`, ce test reproduit exactement l'erreur de production.
+
+### Ce qu'un test de migration ne peut pas voir
+
+Une base neuve et une base rejouée partagent la même propriété : **elles sont
+produites par le fichier**. Le cas réel est une base produite par le fichier
+**précédent**. Toute divergence entre les deux versions échappe donc aux deux
+premiers tests.
+
+C'est le trou le plus structurel de cette chaîne, et il n'est pas fermé
+complètement : le test simule les changements connus, pas ceux qu'on n'a pas
+encore écrits.
 
 Quatre refus de PostgreSQL à connaître, tous rencontrés par l'expérience :
 
@@ -116,9 +140,17 @@ Quatre refus de PostgreSQL à connaître, tous rencontrés par l'expérience :
 
 Les deux derniers sont les plus piégeux. Pour 42P13, les paramètres `OUT` font
 partie de la signature : **ajouter une colonne à un `RETURNS TABLE` exige de
-supprimer la fonction**. Pour 0A000, PostgreSQL refuse de changer le type d'une
+supprimer la fonction**. Et l'erreur interrompt le script au milieu — les
+`GRANT` et les `COMMENT` qui suivent ne sont jamais appliqués, et la fonction
+reste celle d'avant. Pour 0A000, PostgreSQL refuse de changer le type d'une
 colonne dont dépend une vue — et l'ordre des fichiers masque le problème, puisque
 la vue est créée par une migration *suivante*.
+
+La même règle vaut pour un **paramètre ajouté** : `record_credit_sale()` a reçu
+`p_advance`. `CREATE OR REPLACE` crée alors une *surcharge*, et l'ancienne
+version à quatre arguments reste. PostgREST sert alors l'ancienne, et le client
+ne voit jamais son champ. Le `DROP FUNCTION` de l'ancienne arité est
+indispensable — `test:db:existing` le vérifie.
 
 Un script qui analyse toutes les fonctions à `RETURNS TABLE` permet de détecter
 le premier cas avant de le subir.
