@@ -51,6 +51,7 @@ point à vérifier après un `git pull`.
 | 11 | `migration_weighted_sales.sql` | Quantités décimales, `products.unit` |
 | 12 | `migration_credit.sql` | `sales.settled`, `customer_debts`, `credit_payments` |
 | 12b | `migration_plan_gate.sql` | `current_org_plan()`, `require_feature()`, `get_units_sold_since()` |
+| 12c | `migration_partial_payment.sql` | `sales.amount_received`, trigger de remplissage |
 | 13 | `migration_profitability.sql` | Coût figé à la vente, `get_product_profitability()`, archivage |
 | 14 | `migration_expenses.sql` | Tables `expenses` / `expense_categories`, `get_cash_flow()` |
 | 15 | `migration_invitations.sql` | `employee_invitations`, `redeem_invitation()` |
@@ -58,12 +59,14 @@ point à vérifier après un `git pull`.
 | 17 | `migration_suppliers.sql` | `suppliers`, `products.supplier_id`, `products_with_supplier` |
 | 18 | `migration_credit_fns.sql` | `record_credit_sale()`, `pay_customer_debt()`, `get_customer_debts()` |
 
-`APPLY_MIGRATIONS.sql` concatène les 18 migrations pour partir d'une base
+`APPLY_MIGRATIONS.sql` concatène les 20 migrations pour partir d'une base
 vide. Sur une base existante, appliquer la seule migration concernée.
 
-`migration_credit.sql` doit précéder `migration_profitability.sql` et
-`migration_expenses.sql` : les deux filtrent sur `sales.settled` pour la recette
-à l'encaissement. `migration_credit_fns.sql` vient après `migration_credit.sql`.
+`migration_partial_payment.sql` crée `sales.amount_received`, donc elle doit
+précéder `migration_profitability.sql` et `migration_expenses.sql`, qui lisent
+cette colonne. Son remplissage teste l'existence de `credit_payments` : sur une
+base neuve il n'a rien à faire, sur une base réelle il reconstitue la répartition
+des versements en FIFO.
 
 **L'ordre des migrations qui redéfinissent `create_sale()` est significatif.**
 Trois fichiers le font, en versions successives :
@@ -86,7 +89,7 @@ fonction après avoir tout rejoué, et vérifie que `create_sale()` est bien rev
 `migration_profitability.sql` (colonne `list_price`) et suivre
 `migration_price_override.sql` (dont elle reprend le prix négocié).
 
-**Les 18 migrations sont rejouables** : `IF NOT EXISTS` sur les tables et les
+**Les 20 migrations sont rejouables** : `IF NOT EXISTS` sur les tables et les
 index, `DROP … IF EXISTS` avant chaque policy, chaque trigger et chaque fonction
 dont la signature a changé.
 
@@ -290,6 +293,64 @@ derniers jours** dans le navigateur d'un client en plan gratuit — le chiffre
 d'affaires, jour par jour, produit par produit. `get_units_sold_since()` déplace
 l'agrégat en base : le client reçoit une ligne par produit, et le refus de plan
 protège les données, pas seulement l'affichage.
+
+## Acompte : payer une part, devoir le reste
+
+« Laisse-moi 50 000 sur 130 000 » est le geste le plus courant d'une boutique de
+quartier — plus courant que le crédit total. Le choix « Crédit » signifiait
+100 % à découvert : le commerçant devait soit encaisser tout et inventer un
+montant, soit laisser une dette plus grosse que la réalité. Aucune des deux
+n'était exploitable.
+
+### Une seule colonne décide de tout
+
+`sales.amount_received` porte ce qui est **réellement rentré**. Le chiffre
+d'affaires vaut `SUM(amount_received)`, sans exception. Il n'existe plus aucun
+filtre « vente encaissée ou non » dans les rapports : un rapport en base de
+caisse n'a pas besoin de savoir si une vente est soldée, seulement ce qu'elle a
+rapporté.
+
+| Vente | `amount_received` | Au chiffre d'affaires |
+|---|---|---|
+| Espèces, 130 000 | 130 000 | 130 000 |
+| Crédit sans acompte, 130 000 | 0 | 0 |
+| Crédit avec acompte de 50 000 | 50 000 | 50 000 |
+| Règlement de 80 000 plus tard | 130 000 | 130 000 |
+
+La caisse et le chiffre d'affaires ne peuvent donc pas diverger. C'est la
+propriété qui compte, et elle est vérifiée par test.
+
+La marge est reconnue au prorata — le ratio `amount_received / total_amount`
+s'applique au chiffre d'affaires comme au coût. Reconnaître la recette sans son
+coût ferait monter la marge à chaque vente à crédit, ce qui est l'inverse de la
+réalité. Le **taux** de marge, lui, est insensible au prorata : le ratio
+s'annule, donc une vente à moitié payée affiche le vrai taux du produit.
+
+### Le solde est vrai par construction
+
+`reste dû = SUM(total_amount - amount_received)` sur les ventes ouvertes. Plus
+aucune répartition de versements à reconstituer, donc plus rien qui puisse
+diverger entre ce que la fonction calcule et ce que la fonction affiche.
+`credit_payments` reste l'historique — date, moyen de paiement, acompte — mais
+plus l'état de la dette.
+
+Le FIFO distribue chaque versement sur la vente la plus ancienne, en prenant
+`total_amount - amount_received` : un acompte déjà versé est donc déduit, et
+deux versements de 8 000 puis 12 000 soldent une vente de 20 000 comme un seul
+de 20 000.
+
+### Un trou que seule la base pouvait fermer
+
+`amount_received` vaut 0 par défaut — c'est la seule valeur correcte pour un
+crédit. Mais une insertion directe en SQL (import, script de reprise, migration
+future) ne passe pas par `create_sale()`, et laissait donc une vente espèces
+payée à 0 : **elle disparaissait du chiffre d'affaires sans lever la moindre
+erreur**. Le trigger `fill_amount_received()` rattrape l'oubli, sans changer le
+défaut et sans toucher au crédit, dont le montant dépend de l'acompte — seul
+`record_credit_sale()` sait de combien il est.
+
+`VERIFIER.sql` surveille ce trigger : c'est le point le plus silencieux de la
+migration, donc celui qu'il faut regarder.
 
 ## Crédit client
 

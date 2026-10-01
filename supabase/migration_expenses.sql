@@ -158,15 +158,23 @@ AS $$
   sales_by_day AS (
     SELECT
       (s.created_at AT TIME ZONE (SELECT tz FROM bounds))::date AS d,
-      SUM(s.total_amount) AS revenue,
-      COUNT(*)           AS tx
+      -- Base de caisse, sans exception : le chiffre d'affaires est ce qui est
+      -- réellement rentré, et amount_received est la seule colonne qui le sait.
+      -- Une vente espèces vaut son prix, une vente à crédit vaut son acompte,
+      -- et un règlement encaissé aujourd'hui sur une vente d'hier est
+      -- imputé... à la date de la vente, pas à celle du versement.
+      --
+      -- Ce dernier point est un choix, et il faut le dire : le résultat net est
+      -- rattaché à la journée où la vente a eu lieu, même si l'argent est rentré
+      -- trois semaines plus tard. Rattacher au jour du versement donnerait un
+      -- résultat net qui bouge le jour où le client paie, sur une journée où
+      -- aucune vente n'a été faite — impossible à lire pour un commerçant, et
+      -- sans rapport avec ce que sa caisse contient réellement.
+      SUM(s.amount_received) AS revenue,
+      COUNT(*)              AS tx
     FROM sales s
     WHERE (s.created_at AT TIME ZONE (SELECT tz FROM bounds))::date
           BETWEEN p_from AND p_to
-      -- Recette à l'encaissement : une vente à crédit non réglée n'est pas du
-      -- chiffre d'affaires. Sans ce filtre, un commerçant qui prête verrait son
-      -- « résultat net » calculé par des sommes qu'il n'a jamais encaissées.
-      AND s.settled
     GROUP BY 1
   ),
   expenses_by_day AS (

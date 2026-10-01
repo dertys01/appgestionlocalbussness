@@ -33,6 +33,8 @@ const ORDER = [
   // Crée sales.settled : les deux migrations suivantes filtrent dessus pour la
   // recette à l'encaissement. Doit précéder profitability et expenses.
   'migration_credit.sql',
+  // Cree sales.amount_received, lu par les deux migrations suivantes.
+  'migration_partial_payment.sql',
   'migration_profitability.sql',
   'migration_expenses.sql',
   'migration_invitations.sql',
@@ -164,6 +166,7 @@ const DERNIERE_VERSION = [
   'migration_invitations.sql',    // redeem_invitation, purge_accepted_invitations
   'migration_roles.sql',          // can_manage_products
   'migration_credit_fns.sql',     // normalize_phone, record_credit_sale, pay, soldes
+  'migration_partial_payment.sql', // amount_received + remplissage des ventes
   // ⚠ migration_saas.sql est volontairement ABSENTE. Elle contient le seed
   //   « créer une organisation pour tout utilisateur Auth existant », qui
   //   n'est pas une redéfinition de fonction : la rejouer donnait une
@@ -655,12 +658,21 @@ const TODAY = '2026-06-15';
 
 // Le résultat net combine CA et charges
 {
-  // Vente datée du même jour que la dépense
+  // Insertion directe en SQL, sans passer par create_sale(). C'est le cas du
+  // trigger fill_amount_received() : sans lui, amount_received resterait à 0 et
+  // cette vente payée disparaîtrait du chiffre d'affaires sans lever la moindre
+  // erreur. Le test vérifie que le trigger rattrape l'oubli.
   const d = '2026-06-15';
   await q(`INSERT INTO sales (user_id, total_amount, payment_method, created_at)
            VALUES ('${PATRON}', 20000, 'cash', '${d}T10:00:00+00:00')`);
   await q(`INSERT INTO expenses (user_id,category,label,amount,day)
            VALUES ('${PATRON}','Électricité','EDF juin',15000,'${d}')`);
+
+  const saisi = (await q(`SELECT amount_received FROM sales
+     WHERE user_id = '${PATRON}' AND total_amount = 20000
+       AND created_at::text LIKE '${d}%'`)).rows[0];
+  check('7f0. insertion directe : amount_received renseigné par le trigger',
+    Number(saisi?.amount_received) === 20000, String(saisi?.amount_received));
 
   const row = (await q(`SELECT * FROM get_cash_flow('${d}', '${d}')`)).rows[0];
   check('7f. CA du jour = 20 000', Number(row.revenue) === 20000, `obtenu ${row.revenue}`);
@@ -1515,10 +1527,13 @@ const credit = async (qty, nom, tel) => {
     `SELECT (created_at AT TIME ZONE 'Africa/Porto-Novo')::date::text AS d
        FROM sales WHERE client_phone = '22997000001' LIMIT 1`)).rows[0].d;
   const ca = Number((await q(`SELECT * FROM get_cash_flow('${jour}', '${jour}')`)).rows[0]?.revenue ?? 0);
+  // Le cash-flow vaut SUM(amount_received) : c'est la définition. La vente à
+  // crédit du harnais est à 0 encaissé, donc elle n'entre pas — et c'est
+  // exactement ce que ce test vérifie.
   const encaisse = Number((await q(
-    `SELECT COALESCE(SUM(total_amount), 0) AS c FROM sales
-      WHERE settled AND (created_at AT TIME ZONE 'Africa/Porto-Novo')::date::text = '${jour}'`)).rows[0].c);
-  check('14t. le cash-flow = ventes encaissées du jour (crédit exclu)',
+    `SELECT COALESCE(SUM(amount_received), 0) AS c FROM sales
+      WHERE (created_at AT TIME ZONE 'Africa/Porto-Novo')::date::text = '${jour}'`)).rows[0].c);
+  check('14t. le cash-flow = encaissements du jour (crédit non réglé exclu)',
     Math.abs(ca - encaisse) < 1, `cash-flow ${ca} vs encaissé ${encaisse}`);
 }
 
@@ -1823,6 +1838,218 @@ await q(`SELECT create_sale(
 
 // Retour au patron Pro pour la suite de la suite.
 await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+
+// ═══ 17. Acompte ══════════════════════════════════════════
+// « Laisse-moi 50 000 sur 130 000 » est le geste le plus courant d'une boutique
+// de quartier. Avant, le choix « Crédit » signifiait 100 % à découvert : ou le
+// commerçant encaissait tout et inventait un montant, ou il laissait une dette
+// trop grosse. Aucune des deux ne décrivait la réalité.
+//
+// La règle : amount_received porte ce qui est réellement rentré, et le chiffre
+// d'affaires vaut SUM(amount_received). La caisse et le chiffre d'affaires ne
+// peuvent donc pas diverger.
+console.log('\n▸ Acompte');
+
+const ART_A = 'e0e0e0e0-0000-4000-8000-00000000000a';
+await q(`INSERT INTO products (id, user_id, name, price_buy, price_sell, stock_qty)
+         VALUES ('${ART_A}', '${PATRON}', 'Article acompte', 4000, 10000, 200)`);
+
+const acompter = async (qty, tel, avance) => {
+  const r = await q(`SELECT record_credit_sale(
+    '[{"product_id":"${ART_A}","quantity":${qty}}]'::jsonb, 'Avec acompte', '${tel}', null, ${avance}) AS v`);
+  const b = r.rows[0].v;
+  return typeof b === 'string' ? JSON.parse(b) : b;
+};
+
+{
+  const v = await acompter(13, '+229 94 00 00 01', 50000);
+  check('17a. vente avec acompte enregistrée', !!v?.id);
+  check('17b. prix = 130 000', Number(v.total_amount) === 130000, String(v.total_amount));
+  check('17c. acompte renvoyé (50 000)', Number(v.amount_advance) === 50000, String(v.amount_advance));
+  check('17d. reste dû renvoyé (80 000)', Number(v.amount_due) === 80000, String(v.amount_due));
+
+  const s = (await q(`SELECT amount_received, settled, payment_method
+                         FROM sales WHERE id='${v.id}'`)).rows[0];
+  check('17e. encaissé = 50 000', Number(s.amount_received) === 50000, String(s.amount_received));
+  check('17f. vente non soldée', s.settled === false);
+
+  // Le stock part, même avec acompte : la marchandise est partie.
+  const st = (await q(`SELECT stock_qty FROM products WHERE id='${ART_A}'`)).rows[0].stock_qty;
+  check('17g. le stock part quand même', Number(st) === 187, `stock = ${st}`);
+}
+
+{
+  // LE POINT CENTRAL : la caisse et le chiffre d'affaires concordent.
+  const prof = (await q(`SELECT * FROM get_product_profitability()`)).rows
+    .find((x) => x.name === 'Article acompte');
+  check('17h. CA = 50 000 (l\'acompte seulement)', Number(prof.revenue) === 50000, `obtenu ${prof.revenue}`);
+  check('17i. coût = 20 000 au prorata (5 000 x 5/13)', Math.abs(Number(prof.cost_of_goods) - 20000) < 1,
+    `obtenu ${prof.cost_of_goods}`);
+  check('17j. marge = 30 000 au prorata', Math.abs(Number(prof.gross_profit) - 30000) < 1,
+    `obtenu ${prof.gross_profit}`);
+
+  // Le taux de marge ne doit PAS être dégradé par l'encaissement partiel : le
+  // ratio s'annule, donc c'est le vrai taux du produit.
+  check('17k. taux de marge intact (60 %)', Number(prof.margin_pct) === 60, `obtenu ${prof.margin_pct}`);
+
+  // Les unités vendues restent un fait physique : 13 sont sorties.
+  check('17l. 13 unités vendues', Number(prof.units_sold) === 13, `obtenu ${prof.units_sold}`);
+
+  // Ce qui reste dû est 80 000, pas 130 000.
+  check('17m. crédit restant = 80 000', Math.abs(Number(prof.unsettled_credit) - 80000) < 1,
+    `obtenu ${prof.unsettled_credit}`);
+}
+
+{
+  // Le cash-flow du jour vaut l'acompte, pas le prix.
+  const jour = (await q(
+    `SELECT (created_at AT TIME ZONE 'Africa/Porto-Novo')::date::text AS d
+       FROM sales WHERE client_phone = '22994000001' LIMIT 1`)).rows[0].d;
+  const ca = Number((await q(`SELECT * FROM get_cash_flow('${jour}','${jour}')`)).rows[0]?.revenue ?? 0);
+  const attendu = Number((await q(
+    `SELECT COALESCE(SUM(amount_received),0) AS c FROM sales
+      WHERE (created_at AT TIME ZONE 'Africa/Porto-Novo')::date::text = '${jour}'`)).rows[0].c);
+  check('17n. résultat net = encaissements du jour', Math.abs(ca - attendu) < 1,
+    `cash-flow ${ca} vs encaissé ${attendu}`);
+}
+
+{
+  // La dette affichée au commerçant est bien de 80 000.
+  const dettes = (await q(`SELECT * FROM get_customer_debts()
+                            WHERE phone = '22994000001'`)).rows;
+  check('17o. dette = 80 000', Number(dettes[0].total_due) === 80000, `obtenu ${dettes[0].total_due}`);
+  check('17p. « déjà versé » = 50 000', Number(dettes[0].total_paid) === 50000,
+    `obtenu ${dettes[0].total_paid}`);
+  check('17q. l\'acompte est dans l\'historique des versements', Number(dettes[0].payments_count) === 1,
+    `${dettes[0].payments_count}`);
+}
+
+{
+  // Un règlement de 30 000 sur la dette de 80 000 : reste 50 000.
+  const d = (await q(`SELECT id FROM customer_debts WHERE phone='22994000001'`)).rows[0].id;
+  const r = await q(`SELECT pay_customer_debt('${d}', 30000, 'cash', null) AS v`);
+  const p = r.rows[0].v;
+  check('17r. solde avant = 80 000', Number(p.balance_before) === 80000, String(p.balance_before));
+  check('17s. solde après = 50 000', Number(p.balance_after) === 50000, String(p.balance_after));
+  check('17t. aucune vente soldée (règlement partiel)', Number(p.sales_settled) === 0,
+    String(p.sales_settled));
+
+  // Et la dette est exactement la somme de ce qui manque, sans répartition
+  // reconstituée : 130 000 − 80 000 encaissés.
+  const s = (await q(`SELECT amount_received FROM sales WHERE client_phone='22994000001'`)).rows[0];
+  check('17u. encaissé cumulé = 80 000', Number(s.amount_received) === 80000, String(s.amount_received));
+}
+
+{
+  // Le dernier versement solde : 130 000 = 50 000 + 30 000 + 50 000.
+  const d = (await q(`SELECT id FROM customer_debts WHERE phone='22994000001'`)).rows[0].id;
+  const r = await q(`SELECT pay_customer_debt('${d}', 50000, 'momo', 'solde') AS v`);
+  const p = r.rows[0].v;
+  check('17v. dette soldée', Number(p.balance_after) === 0, String(p.balance_after));
+  check('17w. une vente soldée', Number(p.sales_settled) === 1, String(p.sales_settled));
+
+  const s = (await q(`SELECT amount_received, total_amount, settled FROM sales
+                       WHERE client_phone='22994000001'`)).rows[0];
+  check('17x. encaissé = prix total', Number(s.amount_received) === 130000, String(s.amount_received));
+  check('17y. marquée soldée', s.settled === true);
+
+  // Le CA complet n'apparaît qu'ici, une fois l'argent rentré.
+  const prof = (await q(`SELECT * FROM get_product_profitability()`)).rows
+    .find((x) => x.name === 'Article acompte');
+  check('17z. CA complet après encaissement', Number(prof.revenue) === 130000, `obtenu ${prof.revenue}`);
+  check('17aa. plus de crédit en cours', Number(prof.unsettled_credit) === 0,
+    `obtenu ${prof.unsettled_credit}`);
+
+  // Et la fiche disparaît de l'écran Dettes.
+  const dettes = (await q(`SELECT * FROM get_customer_debts() WHERE phone='22994000001'`)).rows;
+  check('17ab. dette soldée : plus de débiteur listé', dettes.length === 0, `${dettes.length}`);
+}
+
+{
+  // Un acompte supérieur au prix, ou négatif : refusé. Un trop-perçu est un
+  // autre geste, il se fait sur l'écran Dettes.
+  let msg = '';
+  try { await acompter(1, '+229 94 00 00 09', 999999); } catch (e) { msg = e.message; }
+  check('17ac. acompte supérieur au prix : refusé', /dépasse le prix/.test(msg), msg || 'accepté !');
+
+  msg = '';
+  try { await acompter(1, '+229 94 00 00 09', -500); } catch (e) { msg = e.message; }
+  check('17ad. acompte négatif : refusé', /n\\'a pas être négative/.test(msg) || /negative|négative/.test(msg),
+    msg || 'accepté !');
+}
+
+{
+  // Un acompte de la totalité : c'est une vente cash qui a traîné. Elle doit
+  // être marquée soldée, sinon le client apparaît dans l'écran Dettes avec 0 F
+  // dû — un client fantôme.
+  const v = await acompter(1, '+229 94 00 00 10', 10000);
+  const s = (await q(`SELECT settled, amount_received FROM sales WHERE id='${v.id}'`)).rows[0];
+  check('17ae. acompte intégral = vente soldée', s.settled === true, `settled = ${s.settled}`);
+  check('17af. encaissé = 10 000', Number(s.amount_received) === 10000, String(s.amount_received));
+
+  const dettes = (await q(`SELECT * FROM get_customer_debts() WHERE phone='22994000010'`)).rows;
+  check('17ag. pas de client listé pour une dette nulle', dettes.length === 0, `${dettes.length}`);
+}
+
+{
+  // Répartition FIFO avec acompte : la dette la plus ancienne est soldée
+  // d'abord, même si une vente plus récente a reçu un acompte.
+  await acompter(1, '+229 94 00 00 20', 0);   // 10 000 dus, plus ancien
+  await acompter(1, '+229 94 00 00 20', 0);   // 10 000 dus, plus récent
+  const d = (await q(`SELECT id FROM customer_debts WHERE phone='22994000020'`)).rows[0].id;
+  const r = await q(`SELECT pay_customer_debt('${d}', 15000, 'cash', null) AS v`);
+  const p = r.rows[0].v;
+  check('17ah. FIFO : la plus ancienne vente est soldée', Number(p.sales_settled) === 1,
+    String(p.sales_settled));
+  check('17ai. reste dû = 5 000', Number(p.balance_after) === 5000, String(p.balance_after));
+
+  const ventes = (await q(`SELECT total_amount, amount_received, settled FROM sales
+                            WHERE client_phone='22994000020' ORDER BY created_at ASC`)).rows;
+  check('17aj. 1re vente : encaissée et soldée',
+    Number(ventes[0].amount_received) === 10000 && ventes[0].settled === true,
+    `${ventes[0].amount_received} / ${ventes[0].settled}`);
+  check('17ak. 2e vente : 5 000 encaissés, encore ouverte',
+    Number(ventes[1].amount_received) === 5000 && ventes[1].settled === false,
+    `${ventes[1].amount_received} / ${ventes[1].settled}`);
+}
+
+{
+  // Le trop-perçu ne devient pas du chiffre d'affaires. C'est de l'argent
+  // avancé par le client, pas une vente.
+  const d = (await q(`SELECT id FROM customer_debts WHERE phone='22994000020'`)).rows[0].id;
+  const r = await q(`SELECT pay_customer_debt('${d}', 20000, 'cash', null) AS v`);
+  const p = r.rows[0].v;
+  check('17al. trop-perçu : dette soldée', Number(p.balance_after) === 0, String(p.balance_after));
+  check('17am. trop-perçu : montant enregistré en totalité', Number(p.amount_paid) === 20000,
+    String(p.amount_paid));
+
+  const ventes = (await q(`SELECT SUM(amount_received) AS s FROM sales
+                            WHERE client_phone='22994000020'`)).rows[0];
+  check('17an. rien au-delà du prix réellement vendu', Number(ventes.s) === 20000,
+    `encaissé ${ventes.s}, vendu 20 000`);
+}
+
+{
+  // Une vente espèces porte bien son prix : c'est ce qui garantit que la caisse
+  // et le chiffre d'affaires concordent pour l'essentiel des ventes.
+  const r = await q(`SELECT create_sale(
+    '[{"product_id":"${ART_A}","quantity":2}]'::jsonb,'cash',null,null) AS v`);
+  const b = r.rows[0].v;
+  const o = typeof b === 'string' ? JSON.parse(b) : b;
+  const s = (await q(`SELECT amount_received, total_amount FROM sales WHERE id='${o.id}'`)).rows[0];
+  check('17ao. vente espèces : encaissé = prix', Number(s.amount_received) === Number(s.total_amount),
+    `${s.amount_received} / ${s.total_amount}`);
+}
+
+{
+  // La contrainte d'intégrité : on ne peut pas encaisser plus que le prix.
+  const v = await acompter(1, '+229 94 00 00 30', 0);
+  let refuse = false;
+  try {
+    await q(`UPDATE sales SET amount_received = total_amount + 1 WHERE id = '${v.id}'`);
+  } catch { refuse = true; }
+  check('17ap. encaisser plus que le prix : refusé par la contrainte', refuse);
+}
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
 process.exit(failures ? 1 : 0);

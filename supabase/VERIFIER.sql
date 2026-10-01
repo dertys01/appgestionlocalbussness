@@ -12,6 +12,7 @@ WITH attendus AS (
   -- Colonnes ajoutées par les dernières migrations
   SELECT 'sales.settled'              AS objet, 'colonne' AS type
   UNION ALL SELECT 'sales.client_phone',        'colonne'
+  UNION ALL SELECT 'sales.amount_received',     'colonne'
   UNION ALL SELECT 'products.unit',             'colonne'
   UNION ALL SELECT 'sale_items.list_price',     'colonne'
   UNION ALL SELECT 'products.supplier_id',      'colonne'
@@ -82,17 +83,17 @@ SELECT 'poids : sale_items.quantity' AS controle,
   FROM information_schema.columns
  WHERE table_name = 'sale_items' AND column_name = 'quantity'
 UNION ALL
-SELECT 'poids : products.stock_qty', data_type,
-       CASE WHEN data_type = 'numeric' THEN 'OK' ELSE 'A CORRIGER' END
+SELECT 'poids : products.stock_qty' AS controle, data_type AS valeur_attendue,
+       CASE WHEN data_type = 'numeric' THEN 'OK' ELSE 'A CORRIGER' END AS etat
   FROM information_schema.columns
  WHERE table_name = 'products' AND column_name = 'stock_qty'
 UNION ALL
 -- B. La vue doit rester en security_invoker. En DEFINER, elle contourne la RLS
 --    et expose le catalogue des autres boutiques.
-SELECT 'vue : security_invoker',
-       coalesce(array_to_string(c.reloptions, ','), '(aucune option)'),
+SELECT 'vue : security_invoker' AS controle,
+       coalesce(array_to_string(c.reloptions, ','), '(aucune option)') AS valeur_attendue,
        CASE WHEN coalesce(c.reloptions::text, '') LIKE '%security_invoker=true%'
-            THEN 'OK' ELSE 'A CORRIGER' END
+            THEN 'OK' ELSE 'A CORRIGER' END AS etat
   FROM pg_class c
   JOIN pg_namespace n ON n.oid = c.relnamespace
  WHERE c.relname = 'products_with_supplier' AND n.nspname = 'public'
@@ -101,12 +102,12 @@ UNION ALL
 --    réécrite en entier par trois migrations : c'est l'ordre qui décide de la
 --    version qui reste en base, et se tromper ne lève aucune erreur — la vente
 --    passe, mais « 1,5 kg » ou le crédit sont refusés.
-SELECT 'create_sale : version credit',
+SELECT 'create_sale : version credit' AS controle,
        CASE WHEN p.prosrc LIKE '%credit.internal%' THEN 'credit + decimal'
-            ELSE 'ancienne version' END,
+            ELSE 'ancienne version' END AS valeur_attendue,
        CASE WHEN p.prosrc LIKE '%credit.internal%'
              AND p.prosrc LIKE '%list_price%'
-            THEN 'OK' ELSE 'A CORRIGER' END
+            THEN 'OK' ELSE 'A CORRIGER' END AS etat
   FROM pg_proc p
  WHERE p.proname = 'create_sale'
 UNION ALL
@@ -115,14 +116,14 @@ UNION ALL
 --    propre à chaque boutique, donc deux commerces produisent le même numéro.
 --    Symptôme : « duplicate key value violates unique constraint
 --    idx_sales_invoice_number » et une caisse morte.
-SELECT 'facture : unicite par boutique',
+SELECT 'facture : unicite par boutique' AS controle,
        coalesce((SELECT string_agg(a.attname, ' + ' ORDER BY k.ord)
                    FROM pg_index i
                    JOIN unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
                    JOIN pg_attribute a
                      ON a.attrelid = i.indrelid AND a.attnum = k.attnum
                   WHERE i.indexrelid = 'idx_sales_invoice_number'::regclass),
-                '(index absent)'),
+                '(index absent)') AS valeur_attendue,
        -- On vérifie que l'index porte sur DEUX colonnes et que user_id est
        -- comprise, plutôt que de comparer la représentation textuelle de
        -- pg_index.indkey : celle-ci dépend de l'ordre physique des attributs
@@ -134,5 +135,35 @@ SELECT 'facture : unicite par boutique',
                     JOIN pg_attribute a
                       ON a.attrelid = i.indrelid AND a.attnum = k.attnum
                    WHERE i.indexrelid = 'idx_sales_invoice_number'::regclass)
-            THEN 'OK' ELSE 'A CORRIGER' END
+            THEN 'OK' ELSE 'A CORRIGER' END AS etat
+UNION ALL
+-- E. Le trigger de remplissage doit exister ET être actif. Sans lui, une
+--    insertion directe en SQL (import, script, migration future) laisse
+--    amount_received à 0 sur une vente payée : elle disparaît du chiffre
+--    d'affaires sans lever la moindre erreur, et la caisse cesse de concorder
+--    avec le rapport. C'est le point le plus silencieux de toute la migration.
+SELECT 'acompte : trigger de remplissage' AS controle,
+       coalesce((
+         SELECT CASE WHEN t.tgenabled = 'O' THEN 'actif' ELSE 'desactive' END
+           FROM pg_trigger t
+          WHERE t.tgrelid = 'sales'::regclass
+            AND t.tgname = 'sales_fill_amount_received'
+       ), 'ABSENT') AS valeur_attendue,
+       CASE WHEN EXISTS (
+              SELECT 1
+                FROM pg_trigger t
+                JOIN pg_proc p ON p.proname = 'fill_amount_received'
+               WHERE t.tgrelid = 'sales'::regclass
+                 AND t.tgname = 'sales_fill_amount_received'
+                 AND t.tgenabled = 'O'
+            ) THEN 'OK' ELSE 'A COLLER' END AS etat
+UNION ALL
+-- F. Contrôle d'intégrité sur les données : une vente ne peut avoir reçu plus
+--    que son prix, ni moins que zéro. Un écart ici signerait un bug de
+--    répartition des versements, invisible dans tous les rapports.
+SELECT 'acompte : coherence des montants' AS controle,
+       count(*)::text || ' vente(s) incoherente(s)' AS valeur_attendue,
+       CASE WHEN count(*) = 0 THEN 'OK' ELSE 'A CORRIGER' END AS etat
+  FROM sales
+ WHERE amount_received < 0 OR amount_received > total_amount
  ORDER BY 3;

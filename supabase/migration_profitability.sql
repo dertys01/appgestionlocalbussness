@@ -163,27 +163,44 @@ AS $$
     -- FAIT PHYSIQUE : tout ce qui est sorti, y compris cédé à crédit. Prévisions
     -- s'en sert pour estimer la rotation, et la marchandise est bien partie.
     COALESCE(SUM(si.quantity), 0)                AS units_sold,
-    -- FAIT FINANCIER : uniquement ce qui est encaissé. Une vente à crédit non
-    -- réglée n'est pas du chiffre d'affaires, sous peine de faire Mineur un
-    -- commerce dont le carnet de créances est troué.
-    COALESCE(SUM(si.subtotal) FILTER (WHERE s.settled), 0) AS revenue,
-    -- Le coût suit le chiffre d'affaires encaissé : on ne compte pas le coût
-    -- d'une marchandise que l'on n'a pas encore payée en encaissant.
-    COALESCE(SUM(si.unit_cost * si.quantity) FILTER (WHERE s.settled), 0) AS cost_of_goods,
-    COALESCE(SUM(si.subtotal - si.unit_cost * si.quantity) FILTER (WHERE s.settled), 0)
+    -- FAIT FINANCIER : ce qui est réellement rentré, au prorata de l'acompte.
+    --
+    -- Une vente de 130 000 dont 50 000 sont versés compte pour 50 000. Pas
+    -- 130 000 (le commerçant n'a pas encaissé le reste) ni 0 (il a bien reçu
+    -- 50 000, sa caisse ne peut pas être en désaccord avec son chiffre
+    -- d'affaires). C'est de la base de caisse, appliquée ligne par ligne.
+    --
+    -- Le ratio est NULLIF sur total_amount : une vente gratuite — prix 0 —
+    -- donnerait une division par zéro, et ferait échouer toute la requête.
+    -- COALESCE le ramène à 0, ce qui est correct : rien n'a été encaissé.
+    COALESCE(SUM(si.subtotal * COALESCE(s.amount_received / NULLIF(s.total_amount, 0), 0)), 0)
+                                                        AS revenue,
+    -- Le coût suit la même clé. Reconnaître la recette sans son coût donnerait
+    -- une marge qui monte à chaque vente à crédit, ce qui est l'inverse de la
+    -- réalité : le coût de la marchandise est engagé dès qu'elle sort.
+    COALESCE(SUM(si.unit_cost * si.quantity * COALESCE(s.amount_received / NULLIF(s.total_amount, 0), 0)), 0)
+                                                        AS cost_of_goods,
+    COALESCE(SUM((si.subtotal - si.unit_cost * si.quantity) * COALESCE(s.amount_received / NULLIF(s.total_amount, 0), 0)), 0)
                                                         AS gross_profit,
+    -- Le taux de marge est insensible au prorata : le ratio s'annule. Une vente
+    -- à moitié encaissée affiche donc le VRAI taux de marge du produit, et non un
+    -- taux dégradé par un encaissement partiel. C'est ce qu'un commerçant veut
+    -- savoir : « sur ce produit, je gagne combien ».
     CASE
-      WHEN COALESCE(SUM(si.subtotal) FILTER (WHERE s.settled), 0) > 0
+      WHEN COALESCE(SUM(si.subtotal * COALESCE(s.amount_received / NULLIF(s.total_amount, 0), 0)), 0) > 0
         THEN ROUND(
-          100 * SUM(si.subtotal - si.unit_cost * si.quantity) FILTER (WHERE s.settled)
-          / SUM(si.subtotal) FILTER (WHERE s.settled), 1)
+          100 * SUM((si.subtotal - si.unit_cost * si.quantity) * COALESCE(s.amount_received / NULLIF(s.total_amount, 0), 0))
+          / SUM(si.subtotal * COALESCE(s.amount_received / NULLIF(s.total_amount, 0), 0)), 1)
       ELSE NULL
     END                                          AS margin_pct,
+    -- Prix moyen RÉALISÉ par unité : chiffre d'affaires encaissé divisé par
+    -- quantité vendue. Sur une vente à moitié payée, c'est la moitié du prix
+    -- catalogue — c'est ce que le client a réellement payé pour ces unités.
     CASE
-      WHEN COALESCE(SUM(si.quantity) FILTER (WHERE s.settled), 0) > 0
+      WHEN COALESCE(SUM(si.quantity), 0) > 0
         THEN ROUND(
-          SUM(si.subtotal) FILTER (WHERE s.settled)
-          / SUM(si.quantity) FILTER (WHERE s.settled), 2)
+          SUM(si.subtotal * COALESCE(s.amount_received / NULLIF(s.total_amount, 0), 0))
+          / SUM(si.quantity), 2)
       ELSE NULL
     END                                          AS avg_sold_price,
     -- list_price est NULL sur les ventes antérieures au prix négocié : on
@@ -195,11 +212,18 @@ AS $$
       WHERE si.unit_cost IS NOT NULL AND si.unit_price < si.unit_cost
     ), 0)                                        AS units_sold_at_loss,
     -- Informatif : ce qui reste dû sur ce produit. N'entre dans aucun total.
-    COALESCE(SUM(si.subtotal) FILTER (WHERE NOT s.settled), 0) AS unsettled_credit
+    --
+    -- ⚠ La parenthèse de SUM se ferme AVANT le FILTER : c'est SUM(expr) FILTER
+    --   (WHERE ...), pas SUM(expr FILTER (WHERE ...)). La seconde forme est un
+    --   « syntax error at or near "FILTER" » sans indication de ligne, et le
+    --   message ne dit rien de la parenthèse mal placée. Compter les parenthèses ne suffit
+    --   pas : elles sont équilibrées dans les deux écritures.
+    COALESCE(SUM(si.subtotal * (1 - COALESCE(s.amount_received / NULLIF(s.total_amount, 0), 0)))
+                 FILTER (WHERE NOT s.settled), 0) AS unsettled_credit
   FROM products p
   LEFT JOIN sale_items si ON si.product_id = p.id
-  -- La jointure sur sales est nécessaire pour lire `settled`. LEFT JOIN et non
-  -- INNER : les produits sans vente doivent apparaître avec des zéros.
+  -- La jointure sur sales est nécessaire pour lire amount_received. LEFT JOIN
+  -- et non INNER : les produits sans vente doivent apparaître avec des zéros.
   LEFT JOIN sales s ON s.id = si.sale_id
   -- VERROU DE PLAN. Le cadenas du menu ne protège rien : cette fonction est
   -- appelable directement en RPC, et l'appel ne respecte aucun plan côté
@@ -213,8 +237,6 @@ AS $$
   -- Voir migration_plan_gate.sql.
   WHERE p.is_active
     AND (SELECT true FROM require_feature('reports'))
-  -- `settled` est dans un FILTER, pas dans un WHERE : le WHERE filtrerait les
-  -- lignes et les produits sans vente disparaîtraient du tableau de bord.
   -- Les produits archivés restent hors du tableau de bord : leur historique
   -- est conservé en base, ils ne sont plus pilotés.
   GROUP BY p.id, p.name, p.category, p.price_buy, p.price_sell, p.stock_qty;
