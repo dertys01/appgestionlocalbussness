@@ -16,6 +16,8 @@ interface Debt {
   phone: string;
   name: string | null;
   total_due: number;
+  /** Déjà versé sur ces ventes, acomptes compris. */
+  total_paid: number;
   last_sale_at: string | null;
   sales_count: number;
   oldest_sale_at: string | null;
@@ -193,6 +195,18 @@ export function DebtsModule() {
                     </div>
                   </div>
 
+                  {/* Ce qui a déjà été versé. Un solde nu ne dit pas si le
+                      client a payé la moitié ou rien du tout — et la réponse
+                      change tout : c'est la question que le client pose au
+                      comptoir, et celle que la relance WhatsApp doit pouvoir
+                      éviter. */}
+                  {d.total_paid > 0 && (
+                    <p className="text-[11px] text-slate-500 bg-slate-50 border border-slate-100 rounded px-2 py-1">
+                      Déjà versé <span className="font-medium tabular-nums">{formatCFA(d.total_paid)}</span>
+                      {' '}sur {formatCFA(d.total_paid + d.total_due)}
+                    </p>
+                  )}
+
                   <div className="flex gap-2">
                     <a
                       href={reminderLink(d)}
@@ -255,6 +269,12 @@ export function DebtsModule() {
  * Message de relance. Le ton compte : « bonjour, vous me devez X » dit la
  * même chose que « passe me payer quand tu peux » sans humilier le client devant
  * ses voisins WhatsApp.
+ *
+ * Les montants déjà versés sont mentionnés quand ils existent. Relander quelqu'un
+ * qui a déjà payé la moitié en ne donnant que le solde — sans dire que les 50 000
+ * sont arrivés — passe pour un oubli, alors que c'est une vente à moitié
+ * réglée. Le client le comprend, et répond « je les ai déjà donnés » ; le
+ * commerçant doit alors vérifier. Mieux vaut l'écrire.
  */
 function reminderLink(d: Debt): string {
   const age = daysSince(d.oldest_sale_at);
@@ -262,7 +282,9 @@ function reminderLink(d: Debt): string {
   const message = [
     `Bonjour ${d.name ?? ''},`.trim(),
     ``,
-    `Vous me devez ${formatCFA(d.total_due)}${depuis} pour vos achats.`,
+    d.total_paid > 0
+      ? `Vous avez déjà versé ${formatCFA(d.total_paid)}. Il vous reste ${formatCFA(d.total_due)}${depuis} à régler.`
+      : `Vous me devez ${formatCFA(d.total_due)}${depuis} pour vos achats.`,
     `Passez me payer quand vous pouvez. Merci !`,
   ].join('\n');
   return `https://wa.me/${d.phone.replace(/[^\d]/g, '')}?text=${encodeURIComponent(message)}`;

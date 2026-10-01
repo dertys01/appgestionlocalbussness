@@ -71,6 +71,10 @@ interface ReceiptState {
   date: Date;
   /** Vente à crédit : le reçu ne propose pas de monnaie, il propose de relancer. */
   isCredit: boolean;
+  /** Acompte versé sur-le-champ, en crédit. 0 = rien reçu à la vente. */
+  advance: number;
+  /** Reste à recouvrer, renvoyé par la base. */
+  due: number;
 }
 
 /**
@@ -106,6 +110,11 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
   const [clientName, setClientName] = useState('');
   const [clientPhone, setClientPhone] = useState('');
   const [amountGiven, setAmountGiven] = useState('');
+  // Acompte versé sur une vente à crédit : ce que le client donne sur-le-champ.
+  // Vide ou 0 = crédit total, le comportement le plus simple. « Laisse-moi
+  // 50 000 sur 130 000 » est le geste le plus courant d'une boutique de quartier,
+  // et sans ce champ il n'avait aucun moyen d'être enregistré.
+  const [advance, setAdvance] = useState('');
   const [loading, setLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState('');
   const [receipt, setReceipt] = useState<ReceiptState | null>(null);
@@ -158,6 +167,18 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
   // n'est rattachable à personne et la relance WhatsApp devient impossible.
   // On le signale pendant la saisie plutôt qu'après l'échec du serveur.
   const creditNeedsPhone = paymentMethod === 'credit' && !clientPhone.trim();
+
+  // ── Acompte ──
+  // Nombre tolérant : virgule ou point, c'est un clavier de téléphone.
+  const advanceValue = Number(String(advance).replace(',', '.'));
+  const advanceOk = !advance.trim() || (Number.isFinite(advanceValue) && advanceValue >= 0);
+  const advanceAmount = advanceOk ? Math.min(advanceValue || 0, 1e12) : 0;
+  // Un acompte supérieur au prix n'est pas un acompte, c'est un trop-perçu : le
+  // serveur le refuse, et le signaler ici évite une erreur rouge après coup.
+  const advanceTooHigh = paymentMethod === 'credit' && advanceAmount > total;
+  const remaining = Math.max(total - advanceAmount, 0);
+  const creditFormIncomplete =
+    paymentMethod === 'credit' && (creditNeedsPhone || !clientName.trim() || !advanceOk || advanceTooHigh);
 
   const addToCart = useCallback((product: Product) => {
     setCart((prev) => {
@@ -246,6 +267,10 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
             p_items: items,
             p_client_name: clientName.trim(),
             p_client_phone: clientPhone.trim(),
+            // Acompte : 0 = crédit total. La colonne amount_received en base ne
+            // connaît que ce montant, donc c'est le seul endroit où il doit être
+            // décidé.
+            p_advance: advanceAmount,
           }
         : {
             p_items: items,
@@ -316,6 +341,12 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
           paymentMethod,
           date: new Date(),
           businessName: org?.name,
+          // Acompte et reste dû, pour que le message dise la vérité au client.
+          // Les deux sont calculés plus haut : sur un crédit, advanceAmount est l'acompte
+          // saisi et remaining ce qui reste — les deux viennent du même calcul
+          // que le bouton, donc pas de désaccord possible à l'écran.
+          advance: paymentMethod === 'credit' ? advanceAmount : 0,
+          due: paymentMethod === 'credit' ? remaining : 0,
         },
         clientPhone.trim() || undefined
       );
@@ -337,11 +368,17 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
         // crédit par inadvertance transformerait une boutique en bureau de
         // crédit sans que personne l'ait voulu.
         isCredit: paymentMethod === 'credit',
+        // Renvoyés par la base, qui est la seule à savoir le prix retenu après
+        // les remises. Les recalculer ici donnerait un reçu différent du dû en
+        // cas d'arrondi.
+        advance: Number((data as { amount_advance?: number }).amount_advance ?? 0),
+        due: Number((data as { amount_due?: number }).amount_due ?? serverTotal),
       });
       setCart([]);
       setClientName('');
       setClientPhone('');
       setAmountGiven('');
+      setAdvance('');
       if (paymentMethod === 'credit') setPaymentMethod('cash');
       onSaleComplete?.();
     } catch (err) {
@@ -671,6 +708,45 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
             </div>
           )}
 
+          {/* Acompte — le cas « il donne 50 000 sur 130 000 », plus courant en
+              boutique de quartier que le crédit total. Le champ est vide par
+              défaut : ne pas pré-remplir un champ à chaque vente ferait perdre le
+              geste simple, qui est majoritaire. */}
+          {paymentMethod === 'credit' && (
+            <div className="space-y-2">
+              <label className="text-xs font-medium text-slate-500">
+                Acompte versé maintenant (FCFA)
+              </label>
+              <Input
+                type="number"
+                inputMode="decimal"
+                step="any"
+                min={0}
+                placeholder="Rien — tout à crédit"
+                value={advance}
+                onChange={(e) => setAdvance(e.target.value)}
+                className={`text-sm ${advanceTooHigh ? 'border-red-400' : ''}`}
+              />
+              {advanceTooHigh ? (
+                <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-2.5 py-1.5">
+                  L&apos;acompte ne peut pas dépasser le prix de {formatCFA(total)}.
+                </p>
+              ) : (
+                <div className="flex justify-between rounded-lg bg-amber-50 border border-amber-200 px-3 py-2">
+                  <span className="text-sm font-medium text-amber-800">Reste à recouvrer</span>
+                  <span className="text-sm font-bold text-amber-900 tabular-nums">
+                    {formatCFA(remaining)}
+                  </span>
+                </div>
+              )}
+              <p className="text-[11px] text-slate-400">
+                L&apos;acompte compte au chiffre d&apos;affaires aujourd&apos;hui. Le reste
+                apparaîtra dans l&apos;écran Dettes, et le client sera relance&apos; par
+                WhatsApp.
+              </p>
+            </div>
+          )}
+
           {checkoutError && (
             <p className="text-red-500 text-xs rounded-lg bg-red-50 border border-red-200 px-3 py-2">
               {checkoutError}
@@ -678,16 +754,18 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
           )}
           <Button
             onClick={handleCheckout}
-            // Le crédit est bloqué tant que le nom ou le téléphone manquent :
-            // le serveur refuserait de toute façon, et mieux vaut le dire avant
-            // que renvoyer une erreur rouge après coup.
-            disabled={cart.length === 0 || loading || creditNeedsPhone || (paymentMethod === 'credit' && !clientName.trim())}
+            // Le crédit est bloqué tant que le nom, le téléphone ou l'acompte
+            // sont inexploitables : le serveur refuserait de toute façon, et
+            // mieux vaut le dire avant que renvoyer une erreur rouge après coup.
+            disabled={cart.length === 0 || loading || creditFormIncomplete}
             className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl"
           >
             {loading
               ? 'Enregistrement...'
               : paymentMethod === 'credit'
-                ? `Céder à crédit ${formatCFA(total)}`
+                ? advanceAmount > 0
+                  ? `Encaisser ${formatCFA(advanceAmount)} — dû ${formatCFA(remaining)}`
+                  : `Céder à crédit ${formatCFA(total)}`
                 : `Encaisser ${formatCFA(total)}`}
           </Button>
         </div>
@@ -704,9 +782,30 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
           <div className="space-y-3 py-2">
             <p className="text-slate-600 text-sm text-center">
               {receipt?.isCredit
-                ? `${formatCFA(receipt.total)} à recouvrer. Comptabilisé au règlement.`
+                ? receipt.advance > 0
+                  // Avec acompte, la phrase doit dire ce qui est payé et ce qui
+                  // reste — sinon la caissière ne sait pas quoi annoncer au
+                  // client qui demande « je te dois combien ? ».
+                  ? `${formatCFA(receipt.advance)} encaissés, ${formatCFA(receipt.due)} à recouvrer.`
+                  : `${formatCFA(receipt.total)} à recouvrer. Comptabilisé au règlement.`
                 : 'La vente a été enregistrée avec succès.'}
             </p>
+            {receipt?.isCredit && receipt.advance > 0 && (
+              <div className="grid grid-cols-2 gap-2">
+                <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-center">
+                  <div className="text-[10px] text-emerald-600">Encaissé</div>
+                  <div className="text-sm font-bold text-emerald-700 tabular-nums">
+                    {formatCFA(receipt.advance)}
+                  </div>
+                </div>
+                <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-center">
+                  <div className="text-[10px] text-amber-600">Reste dû</div>
+                  <div className="text-sm font-bold text-amber-800 tabular-nums">
+                    {formatCFA(receipt.due)}
+                  </div>
+                </div>
+              </div>
+            )}
             <div className="flex flex-col gap-2">
               {/* WhatsApp — en crédit, le message sert de rappel de dette */}
               <a

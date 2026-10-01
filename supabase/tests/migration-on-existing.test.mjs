@@ -15,7 +15,8 @@ const ORDER = [
   'migration_invoices.sql', 'migration_webhook_logs.sql', 'migration_indexes.sql',
   'migration_sales_rpc.sql', 'migration_roles.sql', 'migration_plan_gate.sql',
   'migration_price_override.sql',
-  'migration_weighted_sales.sql', 'migration_credit.sql', 'migration_profitability.sql',
+  'migration_weighted_sales.sql', 'migration_credit.sql', 'migration_partial_payment.sql',
+  'migration_profitability.sql',
   'migration_expenses.sql', 'migration_invitations.sql', 'migration_profitability_fix.sql',
   'migration_suppliers.sql', 'migration_credit_fns.sql',
 ];

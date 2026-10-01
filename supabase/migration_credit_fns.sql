@@ -61,13 +61,23 @@ GRANT EXECUTE ON FUNCTION normalize_phone(text) TO service_role;
 -- marque settled = false. Le stock est donc décrémenté exactement comme pour
 -- une vente cash : la marchandise est partie.
 --
+-- p_advance est l'acompte : ce que le client donne sur-le-champ. Laissé vide ou
+-- à 0, c'est un crédit total — le comportement d'origine. C'est le cas le plus
+-- courant en boutique de quartier : « donne-moi 50 000, je passe demain ».
+--
+-- L'acompte est enregistré comme un versement dans credit_payments, avec la
+-- date du jour. C'est ce qui permet de dire au client, sur WhatsApp ou au
+-- comptoir, « tu as déjà payé 50 000 » sans que personne ait à recalculer. Il ne
+-- sert PAS à calculer la dette : celle-ci se lit dans amount_received.
+--
 -- SECURITY DEFINER : l'appelant n'est pas encore connu de la boutique, et
 -- create_sale() l'est déjà.
 CREATE OR REPLACE FUNCTION record_credit_sale(
   p_items        jsonb,
   p_client_name  text,
   p_client_phone text,
-  p_note         text DEFAULT NULL
+  p_note         text DEFAULT NULL,
+  p_advance      numeric(12,2) DEFAULT 0
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -82,6 +92,8 @@ DECLARE
   v_debt_id uuid;
   v_total   numeric(12,2);
   v_name    text;
+  v_avance  numeric(12,2);
+  v_du      numeric(12,2);
 BEGIN
   v_owner := get_business_owner_id();
   IF v_owner IS NULL THEN
@@ -99,6 +111,14 @@ BEGIN
     -- qu'on ne pourra pas suivre.
     RAISE EXCEPTION 'Le numéro de téléphone est obligatoire pour une vente à crédit'
       USING ERRCODE = '22023';
+  END IF;
+
+  -- Un acompte négatif serait un remboursement, et un remboursement est un
+  -- autre geste : il se fait sur l'écran Dettes, pas en cassant la vente. Un
+  -- acompte supérieur au prix, de même — c'est un trop-perçu, pas un acompte.
+  v_avance := round(COALESCE(p_advance, 0), 2);
+  IF v_avance < 0 THEN
+    RAISE EXCEPTION 'L''avance versée ne peut pas être négative' USING ERRCODE = '22023';
   END IF;
 
   -- Le nom va avec la vente : c'est ce que le commerçant voit sur son reçu, même
@@ -119,8 +139,18 @@ BEGIN
   v_sale_id := (v_sale->>'id')::uuid;
   v_total := (v_sale->>'total_amount')::numeric(12,2);
 
+  IF v_avance > v_total THEN
+    RAISE EXCEPTION
+      'L''avance versée (% F) dépasse le prix de la vente (% F)', v_avance, v_total
+      USING ERRCODE = '22023';
+  END IF;
+
+  -- amount_received porte ce qui est réellement rentré : c'est la seule colonne
+  -- qui décide du chiffre d'affaires. settled reste dérivé — il ne sert plus
+  -- qu'à l'indexation des dettes en cours.
   UPDATE sales
-     SET settled = false,
+     SET amount_received = v_avance,
+         settled = (v_avance >= v_total),
          client_phone = v_phone
    WHERE id = v_sale_id;
 
@@ -136,9 +166,26 @@ BEGIN
     FROM customer_debts
    WHERE user_id = v_owner AND phone = v_phone;
 
+  -- L'acompte entre aussi dans l'historique des versements. Pas pour calculer la
+  -- dette — ça, c'est amount_received — mais pour que la question « il m'a déjà
+  -- donné combien ? » ait une réponse datée, avec son moyen de paiement. C'est
+  -- aussi ce que l'écran Dettes affiche en « versements », et ce qu'un client
+  -- conteste éventuellement.
+  IF v_avance > 0 THEN
+    INSERT INTO credit_payments (debt_id, user_id, amount, day, method, note)
+    VALUES (v_debt_id, v_owner, v_avance, current_date, 'cash',
+            'Acompte versé à la vente');
+  END IF;
+
+  v_du := v_total - v_avance;
+
   RETURN jsonb_build_object(
     'id',              v_sale_id,
     'total_amount',    v_total,
+    -- Reste à recouvrer, renvoyé pour que l'écran n'ait pas à le recalculer et
+    -- risquer un arrondi différent de celui de la base.
+    'amount_advance',  v_avance,
+    'amount_due',      v_du,
     'invoice_number',  v_sale->>'invoice_number',
     'debt_id',         v_debt_id,
     'client_phone',    v_phone
@@ -146,8 +193,21 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION record_credit_sale(jsonb, text, text, text) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION record_credit_sale(jsonb, text, text, text) TO authenticated;
+REVOKE ALL ON FUNCTION record_credit_sale(jsonb, text, text, text, numeric) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION record_credit_sale(jsonb, text, text, text, numeric) TO authenticated;
+GRANT EXECUTE ON FUNCTION record_credit_sale(jsonb, text, text, text, numeric) TO service_role;
+
+-- L'ancienne version à quatre arguments est retirée. CREATE OR REPLACE ajoute
+-- bien le paramètre p_advance, mais sur une base où la version à quatre
+-- arguments a déjà été créée, celle-ci reste : PostgREST la verrait et
+-- mapperait l'appel sur l'ancienne, sans l'acompte. Deux fonctions de même nom
+-- et d'arités différentes, c'est le piège qui rend les erreurs illisibles.
+DROP FUNCTION IF EXISTS record_credit_sale(jsonb, text, text, text);
+
+COMMENT ON FUNCTION record_credit_sale(jsonb, text, text, text, numeric) IS
+  'Vente à crédit. p_advance est l''acompte versé sur-le-champ : laissé vide ou '
+  'à 0, c''est un crédit total. L''acompte compte au chiffre d''affaires le jour '
+  'même et réduit d''autant la dette. Le stock part dans tous les cas.';
 
 
 -- ─── 3. Encaisser un versement ────────────────────────────
@@ -181,6 +241,10 @@ DECLARE
   v_user_id      uuid;
   v_restant      numeric(12,2);
   v_avant        numeric(12,2);
+  -- Ce qui manque sur la vente en cours de traitement. Différent de v_restant,
+  -- qui est le reliquat de trésorerie : les deux se confondent vite, et les
+  -- confondre ferait solder une vente par de l'argent destiné à une autre.
+  v_du           numeric(12,2);
   v_reglees      int := 0;
   v_sale         record;
 BEGIN
@@ -210,14 +274,12 @@ BEGIN
     RAISE EXCEPTION 'Moyen de paiement invalide : %', p_method USING ERRCODE = '22023';
   END IF;
 
-  -- Solde avant versement, et refus si le client ne doit rien : cela interdit
-  -- d'encaisser un règlement sur une fiche soldée, qui ferait réapparaître un
-  -- crédit que le commerçant croirait avoir perdu.
-  SELECT COALESCE(SUM(s.total_amount), 0) - COALESCE(
-    (SELECT SUM(cp.amount) FROM credit_payments cp
-      JOIN customer_debts d2 ON d2.id = cp.debt_id
-     WHERE d2.user_id = v_owner AND d2.phone = v_phone), 0
-  ) INTO v_avant
+  -- Solde avant versement : ce qui manque sur les ventes ouvertes de ce client.
+  -- Une simple somme de Differences, juste par construction. La version
+  -- précédente soustrayait un cumul de versements d'un cumul de prix, et
+  -- reconstituait la répartition dans la boucle — deux calculs à tenir d'accord,
+  -- donc une occasion de diverger. Ici il n'y a rien à reconstituer.
+  SELECT COALESCE(SUM(s.total_amount - s.amount_received), 0) INTO v_avant
     FROM sales s
    WHERE s.user_id = v_owner AND s.client_phone = v_phone AND NOT s.settled;
 
@@ -229,34 +291,22 @@ BEGIN
   VALUES (p_debt_id, v_owner, p_amount, current_date, p_method,
           NULLIF(btrim(COALESCE(p_note, '')), ''));
 
-  -- Rembourse chaque vente non soldée, de la plus ancienne à la plus récente.
-  --
-  -- La trésorerie disponible n'est PAS p_amount : c'est le cumul des versements
-  -- déjà faits, ce qui rend le calcul insensible à l'ordre des appels. Deux
-  -- versements de 8 000 et 12 000 sur une vente de 20 000 doivent la solder, que
-  -- le commerçant encaisse en une fois ou en trois.
+  -- Répartit le versement sur les ventes ouvertes, de la plus ancienne à la plus
+  -- récente. Chaque vente reçoit ce qui lui manque, pas plus.
   --
   -- On boucle sur un curseur simple, sans FOR UPDATE : le verrou utile est posé
   -- sur la fiche client plus haut, ce qui sérialise deux caisses encaissant pour
   -- le même client. Verrouiller aussi chaque ligne ici n'apporte rien et, dans un
   -- FOR ... LOOP PL/pgSQL, n'itère pas sur la snapshot attendue.
-  v_restant := COALESCE(
-    (SELECT SUM(cp.amount) FROM credit_payments cp
-      JOIN customer_debts d4 ON d4.id = cp.debt_id
-     WHERE d4.user_id = v_owner AND d4.phone = v_phone), 0
-  ) - COALESCE(
-    (SELECT SUM(s4.total_amount) FROM sales s4
-      WHERE s4.user_id = v_owner
-        AND s4.client_phone = v_phone
-        AND NOT s4.settled
-        AND s4.created_at < (SELECT min(s5.created_at) FROM sales s5
-                             WHERE s5.user_id = v_owner
-                               AND s5.client_phone = v_phone
-                               AND NOT s5.settled)), 0
-  );
+  --
+  -- Le reliquat porte aussi les acomptes déjà versés à la vente : c'est
+  -- amount_received qui dit ce qui a été couvert, pas le montant de ce versement.
+  -- C'est ce qui rend le calcul insensible à l'ordre des appels — deux versements
+  -- de 8 000 puis 12 000 soldent une vente de 20 000, comme un seul de 20 000.
+  v_restant := p_amount;
 
   FOR v_sale IN
-    SELECT s.id, s.total_amount
+    SELECT s.id, s.total_amount, s.amount_received
       FROM sales s
      WHERE s.user_id = v_owner
        AND s.client_phone = v_phone
@@ -265,19 +315,26 @@ BEGIN
   LOOP
     EXIT WHEN v_restant <= 0;
 
-    IF v_restant >= v_sale.total_amount THEN
-      v_restant := v_restant - v_sale.total_amount;
-      UPDATE sales SET settled = true WHERE id = v_sale.id;
+    -- Ce qui manque sur CETTE vente, l'acompte éventuel étant déjà déduit.
+    v_du := v_sale.total_amount - v_sale.amount_received;
+
+    IF v_restant >= v_du THEN
+      UPDATE sales
+         SET amount_received = total_amount,
+             settled = true
+       WHERE id = v_sale.id;
+      v_restant := v_restant - v_du;
       v_reglees := v_reglees + 1;
+    ELSE
+      -- Paiement partiel : la vente reste ouverte, et ce reliquat devient du
+      -- chiffre d'affaires encaissé dès aujourd'hui.
+      UPDATE sales SET amount_received = amount_received + v_restant WHERE id = v_sale.id;
+      v_restant := 0;
     END IF;
   END LOOP;
 
   -- Solde final : ce qui n'a pas couvert une vente entière reste dû.
-  SELECT COALESCE(SUM(s.total_amount), 0) - COALESCE(
-    (SELECT SUM(cp.amount) FROM credit_payments cp
-      JOIN customer_debts d3 ON d3.id = cp.debt_id
-     WHERE d3.user_id = v_owner AND d3.phone = v_phone), 0
-  ) INTO v_restant
+  SELECT COALESCE(SUM(s.total_amount - s.amount_received), 0) INTO v_restant
     FROM sales s
    WHERE s.user_id = v_owner AND s.client_phone = v_phone AND NOT s.settled;
 
@@ -298,9 +355,15 @@ GRANT EXECUTE ON FUNCTION pay_customer_debt(uuid, numeric, text, text) TO authen
 
 
 -- ─── 4. Les soldes ────────────────────────────────────────
--- Fonction plutôt que vue : le solde croise les ventes non encaissées et les
--- versements, et une vue SECURITY DEFINER contournerait la RLS de sales.
+-- Fonction plutôt que vue : le solde se lit dans sales.amount_received, et une
+-- vue SECURITY DEFINER contournerait la RLS de sales.
 -- SECURITY INVOKER : l'isolation vient de la RLS de sales et customer_debts.
+--
+-- Le solde est une somme de différences : ce qui manque sur chaque vente ouverte.
+-- Les versements n'y entrent pas. C'est la conséquence directe de l'acompte — si
+-- le prix est 130 000, l'acompte 50 000 et le reste 80 000, la dette est 80 000
+-- parce que amount_received vaut 50 000, pas parce qu'on a soustrait 50 000 d'un
+-- journal. Un seul calcul, aucune répartition à reconstituer.
 CREATE OR REPLACE FUNCTION get_customer_debts()
 RETURNS TABLE (
   debt_id         uuid,
@@ -311,7 +374,11 @@ RETURNS TABLE (
   sales_count     bigint,
   oldest_sale_at  timestamptz,
   payments_count  bigint,
-  last_payment_at date
+  last_payment_at date,
+  -- Ce que le client a déjà versé sur ses ventes en cours. Affiché à côté du
+  -- solde : « 130 000 dont 50 000 déjà payés » est plus parlant qu'un 80 000
+  -- nu, et c'est la phrase à prononcer au comptoir.
+  total_paid      numeric
 )
 LANGUAGE sql
 STABLE
@@ -322,10 +389,11 @@ AS $$
     SELECT
       s.user_id,
       s.client_phone,
-      SUM(s.total_amount) AS total_due,
-      COUNT(*)             AS sales_count,
-      MAX(s.created_at)    AS last_sale_at,
-      MIN(s.created_at)    AS oldest_sale_at
+      SUM(s.total_amount - s.amount_received) AS total_due,
+      SUM(s.amount_received)                 AS total_paid,
+      COUNT(*)                               AS sales_count,
+      MAX(s.created_at)                      AS last_sale_at,
+      MIN(s.created_at)                      AS oldest_sale_at
     FROM sales s
     WHERE NOT s.settled AND s.client_phone IS NOT NULL
     GROUP BY s.user_id, s.client_phone
@@ -335,24 +403,18 @@ AS $$
       d.user_id,
       d.phone,
       d.name,
-      GREATEST(
-        COALESCE(u.total_due, 0)
-        - COALESCE((
-            SELECT SUM(cp.amount) FROM credit_payments cp
-             WHERE cp.debt_id = d.id
-          ), 0),
-        0
-      ) AS total_due,
+      GREATEST(COALESCE(u.total_due, 0), 0) AS total_due,
       u.last_sale_at,
       COALESCE(u.sales_count, 0) AS sales_count,
       u.oldest_sale_at,
+      COALESCE(u.total_paid, 0) AS total_paid,
       (SELECT COUNT(*) FROM credit_payments cp2 WHERE cp2.debt_id = d.id) AS payments_count,
       (SELECT MAX(cp3.day) FROM credit_payments cp3 WHERE cp3.debt_id = d.id) AS last_payment_at
     FROM customer_debts d
     LEFT JOIN dues u ON u.user_id = d.user_id AND u.client_phone = d.phone
   )
   SELECT s.id, s.phone, s.name, s.total_due, s.last_sale_at, s.sales_count,
-         s.oldest_sale_at, s.payments_count, s.last_payment_at
+         s.oldest_sale_at, s.payments_count, s.last_payment_at, s.total_paid
     FROM soldes s
    WHERE s.user_id = get_business_owner_id()
      -- VERROU DE PLAN. Le carnet de dette fait partie des rapports : c'est ce
@@ -374,10 +436,14 @@ REVOKE ALL ON FUNCTION get_customer_debts() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION get_customer_debts() TO authenticated;
 
 COMMENT ON FUNCTION get_customer_debts() IS
-  'Soldes débiteurs, du plus ancien au plus récent. Une dette soldée n''apparaît '
-  'plus. Le client est identifié par son numéro de téléphone, pas par son nom.';
+  'Soldes débiteurs, du plus ancien au plus récent. Le solde est la somme de ce '
+  'qui manque sur chaque vente ouverte (total_amount - amount_received), donc il '
+  'intègre les acomptes versés à la vente. total_paid indique ce qui a déjà été '
+  'versé sur ces ventes. Une dette soldée n''apparaît plus. Le client est '
+  'identifié par son numéro de téléphone, pas par son nom.';
 
 COMMENT ON FUNCTION pay_customer_debt(uuid, numeric, text, text) IS
-  'Enregistre un versement et solde les ventes à crédit les plus anciennes '
-  'd''abord. Un règlement partiel est la norme. Le surplus reste au crédit du '
-  'client et n''est pas compté en recette.';
+  'Enregistre un versement et le répartit sur les ventes à crédit les plus '
+  'anciennes d''abord. Un règlement partiel est la norme, et il devient du '
+  'chiffre d''affaires encaissé dès le jour même. Le surplus reste au crédit du '
+  'client : il n''est ni perdu ni compté en recette.';

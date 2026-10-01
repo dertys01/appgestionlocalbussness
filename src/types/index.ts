@@ -49,6 +49,8 @@ export interface Sale {
   payment_method: 'cash' | 'momo' | 'credit';
   /** FALSE pour une vente à crédit non encaissée : le stock est parti, l'argent non. */
   settled: boolean;
+  /** Ce qui est réellement rentré. Égal au prix sauf vente à crédit. */
+  amount_received: number;
   /** Numéro normalisé du client, renseigné sur les ventes à crédit. */
   client_phone?: string | null;
   note: string | null;

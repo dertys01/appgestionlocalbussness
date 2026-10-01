@@ -299,15 +299,26 @@ BEGIN
   END IF;
 
   -- ── En-tête de vente ──
+  -- amount_received est ce qui est réellement rentré, et c'est la seule colonne
+  -- qui décide du chiffre d'affaires. Une vente espèces ou MoMo vaut son prix :
+  -- le client a payé, la monnaie a été rendue, le net encaissé est bien
+  -- total_amount. Une vente à crédit est écrite à 0, puis record_credit_sale()
+  -- y pose l'acompte — la seule fonction qui sait de combien il est.
+  --
+  -- Ce n'est pas de la copie : c'est ce qui garantit qu'un rapport en base de
+  -- caisse ne peut pas diverger de la caisse. Sans cela, une vente espèces
+  -- enregistrée à 0 disparaîtrait du chiffre d'affaires.
   INSERT INTO sales (
-    user_id, total_amount, payment_method, client_name, note, invoice_number
+    user_id, total_amount, payment_method, client_name, note, invoice_number,
+    amount_received
   ) VALUES (
     v_owner,
     v_total,
     p_payment_method,
     NULLIF(btrim(COALESCE(p_client_name, '')), ''),
     p_note,
-    v_invoice
+    v_invoice,
+    CASE WHEN p_payment_method = 'credit' THEN 0 ELSE v_total END
   )
   RETURNING id INTO v_sale_id;
 

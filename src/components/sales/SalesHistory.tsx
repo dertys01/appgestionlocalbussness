@@ -211,6 +211,17 @@ export function SalesHistory() {
                       </div>
                       <div className="text-xs text-slate-400 mt-0.5">
                         {formatDate(sale.created_at)} — {sale.sale_items.length} article{sale.sale_items.length > 1 ? 's' : ''}
+                        {/* Vente à crédit partiellement réglée : sans cette ligne,
+                            l'historique affiche 130 000 F alors que la caisse n'a
+                            reçu qu'une partie. C'est le genre d'écart qui fait
+                            douter de l'application entière. */}
+                        {sale.payment_method === 'credit'
+                          && Number(sale.amount_received ?? 0) > 0
+                          && Number(sale.amount_received) < Number(sale.total_amount) && (
+                          <span className="text-amber-600">
+                            {' '}— {formatCFA(sale.amount_received)} reçus, {formatCFA(Number(sale.total_amount) - Number(sale.amount_received))} dus
+                          </span>
+                        )}
                       </div>
                     </div>
                     {isOpen ? <ChevronUp className="h-4 w-4 text-slate-400 shrink-0" /> : <ChevronDown className="h-4 w-4 text-slate-400 shrink-0" />}

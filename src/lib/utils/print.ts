@@ -11,6 +11,9 @@ interface PrintData {
   date: Date;
   /** Numéro de facture normalisée ; absent/null sur les plans non-Pro. */
   invoiceNumber?: string | null;
+  /** En crédit : acompte versé sur-le-champ, et reste à recouvrer. */
+  advance?: number;
+  due?: number;
   org: Organization;
 }
 
@@ -122,6 +125,31 @@ export function printReceipt(data: PrintData) {
     data.paymentMethod === 'cash' && data.amountGiven >= data.total
       ? `<tr><td colspan="3" class="label">Reçu</td><td style="text-align:right">${escapeHtml(fmtCFA(data.amountGiven))}</td></tr>` +
         `<tr><td colspan="3" class="label bold">Monnaie</td><td style="text-align:right" class="bold">${escapeHtml(fmtCFA(data.change))}</td></tr>`
+      : '',
+    // Sur un reçu de crédit, l'acompte et le reste dû sont les deux seules
+    // lignes qui comptent. Sans elles, le papier dit « 130 000 à crédit » alors
+    // que 50 000 sont dans la caisse : le client, et le commerçant dans six mois,
+    // n'ont aucun moyen de savoir que la vente était à moitié réglée.
+    //
+    // Même règle que sur WhatsApp : si l'appelant omet `due`, le reste dû vaut le
+    // prix. Un reçu de crédit ne doit jamais laisser croire que la vente est
+    // réglée.
+    data.paymentMethod === 'credit'
+      ? (data.advance ?? 0) > 0
+        ? `<tr><td colspan="3" class="label">Déjà versé</td><td style="text-align:right">${escapeHtml(fmtCFA(data.advance ?? 0))}</td></tr>`
+        : ''
+      : '',
+    data.paymentMethod === 'credit'
+      ? (() => {
+          const avance = data.advance ?? 0;
+          // Reste dû : ce que l'appelant a indiqué, sinon le prix. Un reçu de
+          // crédit ne doit jamais laisser croire que la vente est réglée.
+          const reste =
+            (data.due ?? 0) > 0 || avance > 0 ? (data.due ?? 0) : data.total;
+          return reste > 0
+            ? `<tr><td colspan="3" class="label bold">Reste à régler</td><td style="text-align:right" class="bold">${escapeHtml(fmtCFA(reste))}</td></tr>`
+            : '';
+        })()
       : '',
     `</table>`,
     footer,
