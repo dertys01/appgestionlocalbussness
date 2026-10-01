@@ -3,7 +3,8 @@ import type { CartItem, Organization } from '@/types';
 interface PrintData {
   items: CartItem[];
   total: number;
-  paymentMethod: 'cash' | 'momo';
+  /** 'credit' = cession à crédit : le stock est parti, l'argent est dû. */
+  paymentMethod: 'cash' | 'momo' | 'credit';
   clientName: string;
   amountGiven: number;
   change: number;
@@ -113,7 +114,11 @@ export function printReceipt(data: PrintData) {
     `<div class="divider"></div>`,
     `<table>`,
     `<tr class="total-row"><td colspan="3">TOTAL</td><td style="text-align:right">${escapeHtml(fmtCFA(data.total))}</td></tr>`,
-    `<tr><td colspan="3" class="label">Paiement</td><td style="text-align:right">${data.paymentMethod === 'momo' ? 'Mobile Money' : 'Espèces'}</td></tr>`,
+    `<tr><td colspan="3" class="label">Paiement</td><td style="text-align:right">${
+      data.paymentMethod === 'momo' ? 'Mobile Money'
+      : data.paymentMethod === 'credit' ? 'Crédit — à recouvrer'
+      : 'Espèces'
+    }</td></tr>`,
     data.paymentMethod === 'cash' && data.amountGiven >= data.total
       ? `<tr><td colspan="3" class="label">Reçu</td><td style="text-align:right">${escapeHtml(fmtCFA(data.amountGiven))}</td></tr>` +
         `<tr><td colspan="3" class="label bold">Monnaie</td><td style="text-align:right" class="bold">${escapeHtml(fmtCFA(data.change))}</td></tr>`

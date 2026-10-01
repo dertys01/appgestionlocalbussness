@@ -6,6 +6,7 @@ import {
   ShoppingCart,
   Package,
   History,
+  Handshake,
   BarChart2,
   TrendingUp,
   AlertTriangle,
@@ -25,6 +26,7 @@ import { InventoryTable } from '@/components/inventory/InventoryTable';
 import { InventoryCount } from '@/components/inventory/InventoryCount';
 import { POSModule } from '@/components/pos/POSModule';
 import { SalesHistory } from '@/components/sales/SalesHistory';
+import { DebtsModule } from '@/components/debts/DebtsModule';
 import { ReportsModule } from '@/components/reports/ReportsModule';
 import { ProfitabilityModule } from '@/components/reports/ProfitabilityModule';
 import { ExpensesModule } from '@/components/reports/ExpensesModule';
@@ -40,7 +42,7 @@ import { formatCFA } from '@/lib/utils/currency';
 import { isFeatureAllowed } from '@/lib/utils/plans';
 import type { Product } from '@/types';
 
-type Tab = 'dashboard' | 'pos' | 'inventory' | 'sales' | 'reports' | 'forecast' | 'team' | 'settings';
+type Tab = 'dashboard' | 'pos' | 'inventory' | 'sales' | 'debts' | 'reports' | 'forecast' | 'team' | 'settings';
 type ReportView = 'sales' | 'profit' | 'expenses';
 
 export default function HomePage() {
@@ -164,6 +166,7 @@ export default function HomePage() {
     { key: 'pos',       label: 'Vente',      icon: ShoppingCart,    locked: false },
     { key: 'inventory', label: 'Stock',      icon: Package,         locked: false },
     { key: 'sales',     label: 'Ventes',     icon: History,         locked: false },
+    { key: 'debts',     label: 'Dettes',     icon: Handshake,       locked: !isFeatureAllowed(plan, 'reports') },
     { key: 'reports',   label: 'Rapports',   icon: BarChart2,       locked: !isFeatureAllowed(plan, 'reports') },
     { key: 'forecast',  label: 'Prévisions', icon: Brain,           locked: !isFeatureAllowed(plan, 'forecast') },
     { key: 'team',      label: 'Équipe',     icon: Users,           locked: false },
@@ -374,6 +377,12 @@ export default function HomePage() {
             <div className="space-y-4">
               <h2 className="text-xl font-bold text-slate-800">Historique des ventes</h2>
               <SalesHistory />
+            </div>
+          )}
+
+          {tab === 'debts' && (
+            <div className="space-y-4">
+              <DebtsModule />
             </div>
           )}
 

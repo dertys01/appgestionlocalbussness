@@ -5,6 +5,7 @@ import {
   ShoppingCart,
   Trash2,
   CreditCard,
+  Handshake,
   Smartphone,
   Search,
   Share2,
@@ -35,7 +36,7 @@ interface POSModuleProps {
   addToCartRequest?: { productId: string; token: number } | null;
 }
 
-type PaymentMethod = 'cash' | 'momo';
+type PaymentMethod = 'cash' | 'momo' | 'credit';
 
 /**
  * Nombre de cartes produits rendues d'un coup. 60 tient sur deux écrans de
@@ -68,6 +69,8 @@ interface ReceiptState {
   amountGiven: number;
   change: number;
   date: Date;
+  /** Vente à crédit : le reçu ne propose pas de monnaie, il propose de relancer. */
+  isCredit: boolean;
 }
 
 /**
@@ -150,6 +153,12 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
     [cart]
   );
 
+  // ── Crédit client ──
+  // Une vente à crédit exige un nom ET un téléphone : sans numéro, la dette
+  // n'est rattachable à personne et la relance WhatsApp devient impossible.
+  // On le signale pendant la saisie plutôt qu'après l'échec du serveur.
+  const creditNeedsPhone = paymentMethod === 'credit' && !clientPhone.trim();
+
   const addToCart = useCallback((product: Product) => {
     setCart((prev) => {
       const existing = prev.find((i) => i.product.id === product.id);
@@ -215,26 +224,36 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
 
   const handleCheckout = async () => {
     if (cart.length === 0 || loading) return;
-    setLoading(true);
     setCheckoutError('');
+    setLoading(true);
 
     try {
-      // Toute l'écriture passe par une unique fonction SQL atomique : vente,
-      // lignes, décrément de stock et journal — ou rien du tout.
-      // Voir supabase/migration_sales_rpc.sql.
-      // Seul product_id et quantity sont envoyés : le prix, le total et le
-      // numéro de facture sont recalculés côté serveur.
-      const { data, error: saleErr } = await supabase.rpc('create_sale', {
-        p_items: cart.map((i) => ({
-          product_id: i.product.id,
-          quantity: i.quantity,
-          // Absent quand le prix catalogue s'applique : le serveur garde alors
-          // son comportement habituel. Envoyé seulement s'il y a eu marchandage.
-          ...(i.unitPrice !== null ? { unit_price: i.unitPrice } : {}),
-        })),
-        p_payment_method: paymentMethod,
-        p_client_name: clientName.trim() || null,
-      });
+      const items = cart.map((i) => ({
+        product_id: i.product.id,
+        quantity: i.quantity,
+        // Absent quand le prix catalogue s'applique : le serveur garde alors
+        // son comportement habituel. Envoyé seulement s'il y a eu marchandage.
+        ...(i.unitPrice !== null ? { unit_price: i.unitPrice } : {}),
+      }));
+
+      // Le crédit passe par record_credit_sale() et non create_sale() : c'est
+      // elle qui rattache la vente à un numéro de téléphone et la marque non
+      // encaissée. create_sale() refuse 'credit' volontairement — un appel
+      // direct créerait une vente comptée comme encaissée, sans dette derrière.
+      const fn = paymentMethod === 'credit' ? 'record_credit_sale' : 'create_sale';
+      const payload = paymentMethod === 'credit'
+        ? {
+            p_items: items,
+            p_client_name: clientName.trim(),
+            p_client_phone: clientPhone.trim(),
+          }
+        : {
+            p_items: items,
+            p_payment_method: paymentMethod,
+            p_client_name: clientName.trim() || null,
+          };
+
+      const { data, error: saleErr } = await supabase.rpc(fn, payload);
 
       if (saleErr) throw new Error(readableSaleError(saleErr.message));
       if (!data || typeof data !== 'object') throw new Error("La vente n'a pas pu être enregistrée.");
@@ -243,6 +262,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
       const saleId = String(data.id);
       const serverTotal = Number(data.total_amount ?? total);
       const invoiceNumber = (data.invoice_number as string | null) ?? null;
+      const creditPhone = (data as { client_phone?: string }).client_phone ?? null;
 
       // Journal d'activité : best-effort, ne doit pas faire échouer l'encaissement
       const { data: { user } } = await supabase.auth.getUser();
@@ -254,6 +274,8 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
         // concession lisible plus tard, quand le prix convenu n'est plus
         // déductible de la ligne de vente.
         const remise = Number((data as { discount_amount?: number })?.discount_amount ?? 0);
+        const moyen = paymentMethod === 'cash' ? 'Espèces'
+          : paymentMethod === 'momo' ? 'MoMo' : 'Crédit';
         await logActivity({
           ownerId,
           actorId: user.id,
@@ -261,13 +283,18 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
           actorName,
           action: 'sale',
           description:
-            `Vente ${formatCFA(serverTotal)} (${paymentMethod === 'cash' ? 'Espèces' : 'MoMo'}) — ${itemsDesc}` +
+            `Vente ${formatCFA(serverTotal)} (${moyen}) — ${itemsDesc}` +
             (remise > 0 ? ` — remise ${formatCFA(remise)}` : ''),
           metadata: {
             sale_id: saleId,
             total: serverTotal,
             payment_method: paymentMethod,
             discount: remise,
+            // Un crédit cède la marchandise sans encaissement : le dire dans le
+            // journal est ce qui permet, des mois plus tard, de comprendre
+            // pourquoi le chiffre d'affaires ne correspond pas aux articles
+            // sortis du stock.
+            ...(paymentMethod === 'credit' ? { credit_to: creditPhone } : {}),
           },
         });
       }
@@ -306,11 +333,16 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
         amountGiven: given,
         change: paymentMethod === 'cash' && given >= serverTotal ? given - serverTotal : 0,
         date: new Date(),
+        // Après un crédit, on revient à l'espèces : enchaîner deux ventes à
+        // crédit par inadvertance transformerait une boutique en bureau de
+        // crédit sans que personne l'ait voulu.
+        isCredit: paymentMethod === 'credit',
       });
       setCart([]);
       setClientName('');
       setClientPhone('');
       setAmountGiven('');
+      if (paymentMethod === 'credit') setPaymentMethod('cash');
       onSaleComplete?.();
     } catch (err) {
       setCheckoutError(err instanceof Error ? err.message : 'Erreur inconnue');
@@ -508,22 +540,29 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
           </p>
         )}
 
-        {/* Nom + téléphone client (optionnel) */}
+        {/* Nom + téléphone client. Facultatif en espèces et MoMo, obligatoire
+            en crédit : sans numéro, la dette n'est rattachable à personne. */}
         <div className="border-t border-slate-200 pt-3 space-y-2">
           <Input
-            placeholder="Nom du client (optionnel)"
+            placeholder={creditNeedsPhone ? 'Nom du client *' : 'Nom du client (optionnel)'}
             value={clientName}
             onChange={(e) => setClientName(e.target.value)}
-            className="text-sm"
+            className={`text-sm ${creditNeedsPhone ? 'border-amber-400' : ''}`}
           />
           <Input
             type="tel"
             inputMode="tel"
-            placeholder="Téléphone WhatsApp (optionnel)"
+            placeholder={creditNeedsPhone ? 'Téléphone du client *' : 'Téléphone WhatsApp (optionnel)'}
             value={clientPhone}
             onChange={(e) => setClientPhone(e.target.value)}
-            className="text-sm"
+            className={`text-sm ${creditNeedsPhone ? 'border-amber-400' : ''}`}
           />
+          {creditNeedsPhone && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+              Une vente à crédit exige le nom et le téléphone du client, sans quoi
+              la dette ne peut pas être suivie.
+            </p>
+          )}
         </div>
 
         {/* Total */}
@@ -553,11 +592,13 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
             </p>
           )}
 
-          {/* Mode de paiement */}
-          <div className="grid grid-cols-2 gap-2">
+          {/* Mode de paiement — trois colonnes : le crédit est aussi fréquent
+              qu'un paiement normal dans une boutique de quartier, et
+              l'enterrer dans un menu le ferait oublier. */}
+          <div className="grid grid-cols-3 gap-2">
             <button
               onClick={() => setPaymentMethod('cash')}
-              className={`flex items-center justify-center gap-2 rounded-lg border py-2 text-sm font-medium transition-colors ${
+              className={`flex flex-col items-center justify-center gap-1 rounded-lg border py-2 text-xs font-medium transition-colors ${
                 paymentMethod === 'cash'
                   ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
                   : 'border-slate-200 text-slate-500 hover:bg-slate-50'
@@ -568,7 +609,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
             </button>
             <button
               onClick={() => setPaymentMethod('momo')}
-              className={`flex items-center justify-center gap-2 rounded-lg border py-2 text-sm font-medium transition-colors ${
+              className={`flex flex-col items-center justify-center gap-1 rounded-lg border py-2 text-xs font-medium transition-colors ${
                 paymentMethod === 'momo'
                   ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
                   : 'border-slate-200 text-slate-500 hover:bg-slate-50'
@@ -577,7 +618,25 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
               <Smartphone className="h-4 w-4" />
               MoMo
             </button>
+            <button
+              onClick={() => setPaymentMethod('credit')}
+              className={`flex flex-col items-center justify-center gap-1 rounded-lg border py-2 text-xs font-medium transition-colors ${
+                paymentMethod === 'credit'
+                  ? 'border-amber-500 bg-amber-50 text-amber-700'
+                  : 'border-slate-200 text-slate-500 hover:bg-slate-50'
+              }`}
+            >
+              <Handshake className="h-4 w-4" />
+              Crédit
+            </button>
           </div>
+
+          {paymentMethod === 'credit' && (
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+              Le stock part, mais le chiffre d&apos;affaires n&apos;augmente qu&apos;au
+              moment du règlement. La dette apparaîtra dans l&apos;écran Dettes.
+            </p>
+          )}
 
           {/* Montant donné + monnaie (espèces uniquement) */}
           {paymentMethod === 'cash' && (
@@ -619,10 +678,17 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
           )}
           <Button
             onClick={handleCheckout}
-            disabled={cart.length === 0 || loading}
+            // Le crédit est bloqué tant que le nom ou le téléphone manquent :
+            // le serveur refuserait de toute façon, et mieux vaut le dire avant
+            // que renvoyer une erreur rouge après coup.
+            disabled={cart.length === 0 || loading || creditNeedsPhone || (paymentMethod === 'credit' && !clientName.trim())}
             className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 rounded-xl"
           >
-            {loading ? 'Enregistrement...' : `Encaisser ${formatCFA(total)}`}
+            {loading
+              ? 'Enregistrement...'
+              : paymentMethod === 'credit'
+                ? `Céder à crédit ${formatCFA(total)}`
+                : `Encaisser ${formatCFA(total)}`}
           </Button>
         </div>
       </div>
@@ -631,16 +697,18 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
       <Dialog open={!!receipt} onOpenChange={() => setReceipt(null)}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2 text-emerald-600">
-              ✅ Vente enregistrée !
+            <DialogTitle className={`flex items-center gap-2 ${receipt?.isCredit ? 'text-amber-600' : 'text-emerald-600'}`}>
+              {receipt?.isCredit ? '🤝 Vente cédée à crédit' : '✅ Vente enregistrée !'}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <p className="text-slate-600 text-sm text-center">
-              La vente a été enregistrée avec succès.
+              {receipt?.isCredit
+                ? `${formatCFA(receipt.total)} à recouvrer. Comptabilisé au règlement.`
+                : 'La vente a été enregistrée avec succès.'}
             </p>
             <div className="flex flex-col gap-2">
-              {/* WhatsApp */}
+              {/* WhatsApp — en crédit, le message sert de rappel de dette */}
               <a
                 href={receipt?.waLink}
                 target="_blank"
@@ -648,7 +716,11 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
                 className="flex items-center justify-center gap-2 rounded-xl bg-[#25D366] text-white font-semibold py-3 hover:bg-[#1ebe5d] transition-colors"
               >
                 <Share2 className="h-4 w-4" />
-                {receipt?.clientPhone ? 'Envoyer le reçu WhatsApp' : 'Partager le reçu WhatsApp'}
+                {receipt?.isCredit
+                  ? 'Envoyer le rappel WhatsApp'
+                  : receipt?.clientPhone
+                    ? 'Envoyer le reçu WhatsApp'
+                    : 'Partager le reçu WhatsApp'}
               </a>
               {!receipt?.clientPhone && (
                 <p className="text-xs text-slate-400 text-center -mt-1">

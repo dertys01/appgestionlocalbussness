@@ -26,11 +26,15 @@ const ORDER = [
   //   refusé avec « Ligne de panier invalide ».
   'migration_price_override.sql',
   'migration_weighted_sales.sql',
+  // Crée sales.settled : les deux migrations suivantes filtrent dessus pour la
+  // recette à l'encaissement. Doit précéder profitability et expenses.
+  'migration_credit.sql',
   'migration_profitability.sql',
   'migration_expenses.sql',
   'migration_invitations.sql',
   'migration_profitability_fix.sql',
   'migration_suppliers.sql',
+  'migration_credit_fns.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -152,6 +156,7 @@ const DERNIERE_VERSION = [
   'migration_expenses.sql',       // seed_expense_categories, get_cash_flow
   'migration_invitations.sql',    // redeem_invitation, purge_accepted_invitations
   'migration_roles.sql',          // can_manage_products
+  'migration_credit_fns.sql',     // normalize_phone, record_credit_sale, pay, soldes
   // ⚠ migration_saas.sql est volontairement ABSENTE. Elle contient le seed
   //   « créer une organisation pour tout utilisateur Auth existant », qui
   //   n'est pas une redéfinition de fonction : la rejouer donnait une
@@ -1415,6 +1420,218 @@ const ligneK = (saleId) => q(`SELECT * FROM sale_items WHERE sale_id='${saleId}'
   check('13x. coût = 2,5 × 800', Number(prof.cost_of_goods) === 2000, `obtenu ${prof.cost_of_goods}`);
   check('13y. marge = 500', Number(prof.gross_profit) === 500, `obtenu ${prof.gross_profit}`);
   check('13z. taux = 20 %', Math.round(Number(prof.margin_pct)) === 20, `obtenu ${prof.margin_pct}`);
+}
+
+// ═══ 14. Crédit client ═══════════════════════════════════
+// Le carnet de dette. Choix comptable : recette à l'encaissement. Une vente à
+// crédit ne compte ni dans le chiffre d'affaires ni dans la marge tant qu'elle
+// n'est pas réglée — mais le stock part immédiatement.
+console.log('\n▸ Crédit client');
+
+const ART_C = 'f0f0f0f0-0000-4000-8000-00000000000a';
+await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+await q(`INSERT INTO products (id, user_id, name, price_buy, price_sell, stock_qty)
+         VALUES ('${ART_C}', '${PATRON}', 'Article crédit', 4000, 10000, 100)`);
+
+const vendreC = async (qty) => {
+  const r = await q(`SELECT record_credit_sale(
+    '[{"product_id":"${ART_C}","quantity":${qty}}]'::jsonb, 'Test', '+229 97 00 00 01', null) AS v`);
+  const b = r.rows[0]?.v;
+  return typeof b === 'string' ? JSON.parse(b) : b;
+};
+const credit = async (qty, nom, tel) => {
+  const r = await q(`SELECT record_credit_sale(
+    '[{"product_id":"${ART_C}","quantity":${qty}}]'::jsonb, '${nom}', '${tel}', null) AS v`);
+  const b = r.rows[0]?.v;
+  return typeof b === 'string' ? JSON.parse(b) : b;
+};
+
+{
+  // 1. Normalisation du numéro : trois écritures, un seul client.
+  const n1 = (await q(`SELECT normalize_phone('+229 97 00 00 01') AS n`)).rows[0].n;
+  const n2 = (await q(`SELECT normalize_phone('22997000001') AS n`)).rows[0].n;
+  const n3 = (await q(`SELECT normalize_phone('97000001') AS n`)).rows[0].n;
+  check('14a. « +229 97… » normalisé', n1 === '22997000001', n1);
+  check('14b. « 229… » normalisé', n2 === '22997000001', n2);
+  check('14c. numéro local préfixé 229', n3 === '22997000001', n3);
+
+  const invalide = (await q(`SELECT normalize_phone('123') AS n`)).rows[0].n;
+  check('14d. numéro trop court refusé', invalide === null, String(invalide));
+  const vide = (await q(`SELECT normalize_phone('abc') AS n`)).rows[0].n;
+  check('14e. texte non numérique refusé', vide === null, String(vide));
+}
+
+{
+  // 2. Sans téléphone, pas de dette : elle serait orpheline.
+  let msg = '';
+  try { await credit(1, 'Sans tel', ''); } catch (e) { msg = e.message; }
+  check('14f. vente à crédit sans téléphone : refusée', /téléphone est obligatoire/.test(msg), msg || 'acceptée !');
+
+  msg = '';
+  try { await credit(1, '', '+229 97 00 00 02'); } catch (e) { msg = e.message; }
+  check('14g. vente à crédit sans nom : refusée', /nom du client/.test(msg), msg || 'acceptée !');
+}
+
+{
+  // 3. La vente passe, le stock part, l'argent n'entre pas.
+  const v = await credit(2, 'Koffi', '+229 97 00 00 01');
+  check('14h. vente à crédit enregistrée', !!v?.id);
+  check('14i. total correct (2 × 10 000)', Number(v.total_amount) === 20000, String(v.total_amount));
+  check('14j. numéro normalisé renvoyé', v.client_phone === '22997000001', v.client_phone);
+
+  const stock = (await q(`SELECT stock_qty FROM products WHERE id='${ART_C}'`)).rows[0].stock_qty;
+  check('14k. le stock part quand même', Number(stock) === 98, `stock = ${stock}`);
+
+  const s = (await q(`SELECT settled, payment_method, client_phone FROM sales WHERE id='${v.id}'`)).rows[0];
+  check('14l. vente marquée non encaissée', s.settled === false);
+  check('14m. moyen de paiement = credit', s.payment_method === 'credit', s.payment_method);
+  check('14n. téléphone sur la vente', s.client_phone === '22997000001', String(s.client_phone));
+}
+
+{
+  // 4. LE POINT CENTRAL : la vente ne compte PAS dans le chiffre d'affaires.
+  const prof = (await q(`SELECT * FROM get_product_profitability()`)).rows
+    .find((x) => x.name === 'Article crédit');
+  check('14o. CA = 0 (recette à l\'encaissement)', Number(prof.revenue) === 0, `obtenu ${prof.revenue}`);
+  check('14p. marge = 0 tant que non réglée', Number(prof.gross_profit) === 0, `obtenu ${prof.gross_profit}`);
+  check('14q. coût des marchandises = 0 (non encaissé)', Number(prof.cost_of_goods) === 0, `obtenu ${prof.cost_of_goods}`);
+  check('14r. MAIS les unités vendues comptent (fait physique)', Number(prof.units_sold) === 2, `obtenu ${prof.units_sold}`);
+  check('14s. crédit en cours exposé à part', Number(prof.unsettled_credit) === 20000, `obtenu ${prof.unsettled_credit}`);
+}
+
+{
+  // 5. Le résultat net ne doit PAS compter le crédit. Le harnais a déjà fait
+  //    des ventes cash aujourd'hui : on compare donc le cash-flow du jour au
+  //    cumul des ventes ENCAISSÉES de ce jour. L'écart doit être nul — si le
+  //    crédit entrait, l'écart serait de 20 000.
+  const jour = (await q(
+    `SELECT (created_at AT TIME ZONE 'Africa/Porto-Novo')::date::text AS d
+       FROM sales WHERE client_phone = '22997000001' LIMIT 1`)).rows[0].d;
+  const ca = Number((await q(`SELECT * FROM get_cash_flow('${jour}', '${jour}')`)).rows[0]?.revenue ?? 0);
+  const encaisse = Number((await q(
+    `SELECT COALESCE(SUM(total_amount), 0) AS c FROM sales
+      WHERE settled AND (created_at AT TIME ZONE 'Africa/Porto-Novo')::date::text = '${jour}'`)).rows[0].c);
+  check('14t. le cash-flow = ventes encaissées du jour (crédit exclu)',
+    Math.abs(ca - encaisse) < 1, `cash-flow ${ca} vs encaissé ${encaisse}`);
+}
+
+{
+  // 6. Le solde apparaît, et le plus ancien d'abord.
+  const dettes = (await q(`SELECT * FROM get_customer_debts()`)).rows;
+  check('14u. une dette listée', dettes.length === 1, `${dettes.length}`);
+  check('14v. solde = 20 000', Number(dettes[0].total_due) === 20000, `obtenu ${dettes[0].total_due}`);
+  check('14w. fiche client créée', dettes[0].phone === '22997000001', dettes[0].phone);
+}
+
+{
+  // 7. Encaissement partiel : la norme. 8 000 sur 20 000.
+  const d = (await q(`SELECT id FROM customer_debts WHERE phone='22997000001'`)).rows[0].id;
+  const r = await q(`SELECT pay_customer_debt('${d}', 8000, 'cash', null) AS v`);
+  const p = r.rows[0].v;
+  check('14x. versement partiel accepté', !!p);
+  check('14y. solde avant = 20 000', Number(p.balance_before) === 20000, String(p.balance_before));
+  check('14z. solde après = 12 000', Number(p.balance_after) === 12000, String(p.balance_after));
+  check('14aa. aucune vente soldée (règlement partiel)', Number(p.sales_settled) === 0, String(p.sales_settled));
+
+  const encore = (await q(`SELECT count(*)::int c FROM sales WHERE NOT settled AND client_phone='22997000001'`)).rows[0].c;
+  check('14ab. la vente reste ouverte', encore === 1, `${encore}`);
+}
+
+{
+  // 8. La vente apparaît dans le CA dès l'encaissement complet.
+  const d = (await q(`SELECT id FROM customer_debts WHERE phone='22997000001'`)).rows[0].id;
+  const r = await q(`SELECT pay_customer_debt('${d}', 12000, 'momo', 'solde') AS v`);
+  const p = r.rows[0].v;
+  check('14ac. solde soldé', Number(p.balance_after) === 0, String(p.balance_after));
+  check('14ad. une vente réglée', Number(p.sales_settled) === 1, String(p.sales_settled));
+
+  const prof = (await q(`SELECT * FROM get_product_profitability()`)).rows
+    .find((x) => x.name === 'Article crédit');
+  check('14ae. CA apparaît après encaissement (20 000)', Number(prof.revenue) === 20000, `obtenu ${prof.revenue}`);
+  check('14af. coût apparaît (8 000)', Number(prof.cost_of_goods) === 8000, `obtenu ${prof.cost_of_goods}`);
+  check('14ag. marge apparaît (12 000)', Number(prof.gross_profit) === 12000, `obtenu ${prof.gross_profit}`);
+  check('14ah. plus de crédit en cours', Number(prof.unsettled_credit) === 0, `obtenu ${prof.unsettled_credit}`);
+
+  // Et l'écran de dettes ne montre plus un client à 0 F.
+  const dettes = (await q(`SELECT * FROM get_customer_debts()`)).rows;
+  check('14ai. dette soldée : plus de client listé', dettes.length === 0, `${dettes.length}`);
+}
+
+{
+  // 9. Un second client, pour tester l'isolation entre dettes.
+  await credit(1, 'Adjovi', '+229 96 11 22 33');
+  const dettes = (await q(`SELECT * FROM get_customer_debts()`)).rows;
+  check('14aj. deux dettes distinctes', dettes.length === 1, `${dettes.length}`);
+  check('14ak. bonne fiche', dettes[0]?.phone === '22996112233', dettes[0]?.phone);
+}
+
+{
+  // 10. Un numéro écrit différemment ne crée pas un second débiteur.
+  const v = await credit(1, 'Koffi encore', '96 11 22 33');
+  check('14al. réécriture du numéro : même dette', !!v?.id);
+  const dettes = (await q(`SELECT * FROM get_customer_debts()`)).rows;
+  check('14am. toujours un seul débiteur', dettes.length === 1, `${dettes.length}`);
+  const nom = dettes[0]?.name;
+  check('14an. nom mis à jour', nom === 'Koffi encore', String(nom));
+}
+
+{
+  // 11. Encaisser sur une fiche sans dette, ou deux fois : refusé.
+  const soldée = (await q(
+    `SELECT id FROM customer_debts WHERE phone='22997000001'`)).rows[0].id;
+  let msg = '';
+  try {
+    await q(`SELECT pay_customer_debt('${soldée}', 500, 'cash', null)`);
+  } catch (e) { msg = e.message; }
+  check('14ao. encaissement sur une dette soldée : refusé', /n'a pas de dette en cours/.test(msg), msg || 'accepté !');
+
+  msg = '';
+  try {
+    await q(`SELECT pay_customer_debt('${soldée}', 0, 'cash', null)`);
+  } catch (e) { msg = e.message; }
+  check('14ap. versement nul : refusé', /Montant de versement invalide/.test(msg), msg || 'accepté !');
+
+  msg = '';
+  try {
+    await q(`SELECT pay_customer_debt('${soldée}', 100, 'carte', null)`);
+  } catch (e) { msg = e.message; }
+  check('14aq. moyen de paiement inconnu : refusé', /Moyen de paiement invalide/.test(msg), msg || 'accepté !');
+}
+
+{
+  // 12. Un patron ne peut pas encaisser la dette d'un autre tenant.
+  const AUTRE6 = '66666666-6666-6666-6666-666666666666';
+  await q(`INSERT INTO auth.users (id,email) VALUES ('${AUTRE6}','dette@t.ci') ON CONFLICT DO NOTHING`);
+  await q(`INSERT INTO organizations (id,name,slug) VALUES ('${AUTRE6}','Chez lui2','chezlui2') ON CONFLICT DO NOTHING`);
+  await q(`INSERT INTO customer_debts (user_id, phone, name)
+           VALUES ('${AUTRE6}', '22990000000', 'Dette étrangère') ON CONFLICT DO NOTHING`);
+  const detteEtrangere = (await q(
+    `SELECT id FROM customer_debts WHERE user_id='${AUTRE6}'`)).rows[0].id;
+
+  let refuse = false;
+  try {
+    await q(`SELECT pay_customer_debt('${detteEtrangere}', 1000, 'cash', null)`);
+  } catch { refuse = true; }
+  check('14ar. encaisser la dette d\'autre boutique : refusé', refuse);
+
+  // Et on ne voit pas ses dettes.
+  const vus = (await q(`SELECT count(*)::int c FROM get_customer_debts()
+                         WHERE phone = '22990000000'`)).rows[0].c;
+  check('14as. les dettes d\'autre tenant sont invisibles', Number(vus) === 0, `${vus}`);
+}
+
+{
+  // 13. Le stock d'un produit cédé à crédit a bien disparu — c'est le point :
+  //     la recette attend l'encaissement, la marchandise, elle, est partie.
+  //     100 − 2 (14h) − 1 (14j) − 1 (14j) = 96
+  const stock = (await q(`SELECT stock_qty FROM products WHERE id='${ART_C}'`)).rows[0].stock_qty;
+  check('14at. stock décrémenté par les ventes à crédit', Number(stock) === 96, `stock = ${stock}`);
+
+  // Et la quantité vendue, elle, compte pour toutes les ventes : c'est un fait
+  // physique, Prévisions s'en sert pour estimer la rotation.
+  const prof = (await q(`SELECT * FROM get_product_profitability()`)).rows
+    .find((x) => x.name === 'Article crédit');
+  check('14au. unités vendues = 4 (crédit compris)', Number(prof.units_sold) === 4, `obtenu ${prof.units_sold}`);
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);

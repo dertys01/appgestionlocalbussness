@@ -128,8 +128,25 @@ BEGIN
     RAISE EXCEPTION 'Panier vide' USING ERRCODE = '22023';
   END IF;
 
-  IF p_payment_method IS NULL OR p_payment_method NOT IN ('cash', 'momo') THEN
+  -- 'credit' est accepté ici mais n'est pas un encaissement : la vente est
+  -- créée, le stock part, et c'est record_credit_sale() qui la marque non
+  -- encaissée et rattache le téléphone. Sans ce filet, un appel direct avec
+  -- 'credit' produirait une vente comptée comme encaissée sans dette derrière.
+  IF p_payment_method IS NULL
+     OR p_payment_method NOT IN ('cash', 'momo', 'credit') THEN
     RAISE EXCEPTION 'Moyen de paiement invalide : %', p_payment_method USING ERRCODE = '22023';
+  END IF;
+
+  IF p_payment_method = 'credit' AND current_setting('credit.internal', true) IS DISTINCT FROM '1' THEN
+    -- Garde-fou : create_sale() est exécutable par tout client authentifié. Un
+    -- appel direct avec 'credit' créerait une vente comptée comme encaissée,
+    -- sans dette derrière — exactement le trou que cette fonction comble.
+    --
+    -- record_credit_sale() pose credit.internal = '1' le temps de l'appel. Un
+    -- GUC n'est pas modifiable par un client SQL ordinaire : seule une fonction
+    -- SECURITY DEFINER peut le poser, et celle-ci l'est.
+    RAISE EXCEPTION 'Utilisez record_credit_sale() pour une vente à crédit'
+      USING ERRCODE = '22023';
   END IF;
 
   -- ── Valider chaque ligne AVANT toute écriture ──

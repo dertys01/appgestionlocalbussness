@@ -163,6 +163,10 @@ AS $$
     FROM sales s
     WHERE (s.created_at AT TIME ZONE (SELECT tz FROM bounds))::date
           BETWEEN p_from AND p_to
+      -- Recette à l'encaissement : une vente à crédit non réglée n'est pas du
+      -- chiffre d'affaires. Sans ce filtre, un commerçant qui prête verrait son
+      -- « résultat net » calculé par des sommes qu'il n'a jamais encaissées.
+      AND s.settled
     GROUP BY 1
   ),
   expenses_by_day AS (

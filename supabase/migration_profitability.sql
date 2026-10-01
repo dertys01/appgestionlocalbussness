@@ -141,7 +141,12 @@ RETURNS TABLE (
   discount_given     numeric,
   -- Volume vendu sous le prix d'achat, en unités. Non nul = du stock écoulé
   -- à perte, ce qu'un commerçant doit voir sans que la vente soit bloquée.
-  units_sold_at_loss bigint
+  units_sold_at_loss bigint,
+  -- Montant cédé à crédit et non encore encaissé, sur ce produit. N'entre pas
+  -- dans revenue ni gross_profit : la recette à l'encaissement est le choix
+  -- prudent, sinon un commerçant qui prête verrait son chiffre d'affaires
+  -- gonflé par une dette qu'il ne recouvrera peut-être jamais.
+  unsettled_credit numeric
 )
 LANGUAGE sql
 STABLE
@@ -155,20 +160,30 @@ AS $$
     COALESCE(p.price_buy, 0)                     AS unit_cost,
     p.price_sell                                 AS unit_price,
     p.stock_qty,
+    -- FAIT PHYSIQUE : tout ce qui est sorti, y compris cédé à crédit. Prévisions
+    -- s'en sert pour estimer la rotation, et la marchandise est bien partie.
     COALESCE(SUM(si.quantity), 0)                AS units_sold,
-    COALESCE(SUM(si.subtotal), 0)                AS revenue,
-    COALESCE(SUM(si.unit_cost * si.quantity), 0) AS cost_of_goods,
-    COALESCE(SUM(si.subtotal - si.unit_cost * si.quantity), 0) AS gross_profit,
+    -- FAIT FINANCIER : uniquement ce qui est encaissé. Une vente à crédit non
+    -- réglée n'est pas du chiffre d'affaires, sous peine de faire Mineur un
+    -- commerce dont le carnet de créances est troué.
+    COALESCE(SUM(si.subtotal) FILTER (WHERE s.settled), 0) AS revenue,
+    -- Le coût suit le chiffre d'affaires encaissé : on ne compte pas le coût
+    -- d'une marchandise que l'on n'a pas encore payée en encaissant.
+    COALESCE(SUM(si.unit_cost * si.quantity) FILTER (WHERE s.settled), 0) AS cost_of_goods,
+    COALESCE(SUM(si.subtotal - si.unit_cost * si.quantity) FILTER (WHERE s.settled), 0)
+                                                        AS gross_profit,
     CASE
-      WHEN COALESCE(SUM(si.subtotal), 0) > 0
+      WHEN COALESCE(SUM(si.subtotal) FILTER (WHERE s.settled), 0) > 0
         THEN ROUND(
-          100 * SUM(si.subtotal - si.unit_cost * si.quantity)
-          / SUM(si.subtotal), 1)
+          100 * SUM(si.subtotal - si.unit_cost * si.quantity) FILTER (WHERE s.settled)
+          / SUM(si.subtotal) FILTER (WHERE s.settled), 1)
       ELSE NULL
     END                                          AS margin_pct,
     CASE
-      WHEN COALESCE(SUM(si.quantity), 0) > 0
-        THEN ROUND(SUM(si.subtotal) / SUM(si.quantity), 2)
+      WHEN COALESCE(SUM(si.quantity) FILTER (WHERE s.settled), 0) > 0
+        THEN ROUND(
+          SUM(si.subtotal) FILTER (WHERE s.settled)
+          / SUM(si.quantity) FILTER (WHERE s.settled), 2)
       ELSE NULL
     END                                          AS avg_sold_price,
     -- list_price est NULL sur les ventes antérieures au prix négocié : on
@@ -178,9 +193,16 @@ AS $$
     ), 0)                                        AS discount_given,
     COALESCE(SUM(si.quantity) FILTER (
       WHERE si.unit_cost IS NOT NULL AND si.unit_price < si.unit_cost
-    ), 0)                                        AS units_sold_at_loss
+    ), 0)                                        AS units_sold_at_loss,
+    -- Informatif : ce qui reste dû sur ce produit. N'entre dans aucun total.
+    COALESCE(SUM(si.subtotal) FILTER (WHERE NOT s.settled), 0) AS unsettled_credit
   FROM products p
   LEFT JOIN sale_items si ON si.product_id = p.id
+  -- La jointure sur sales est nécessaire pour lire `settled`. LEFT JOIN et non
+  -- INNER : les produits sans vente doivent apparaître avec des zéros.
+  LEFT JOIN sales s ON s.id = si.sale_id
+  -- `settled` est dans un FILTER, pas dans un WHERE : le WHERE filtrerait les
+  -- lignes et les produits sans vente disparaîtraient du tableau de bord.
   -- Les produits archivés restent hors du tableau de bord : leur historique
   -- est conservé en base, ils ne sont plus pilotés.
   WHERE p.is_active
