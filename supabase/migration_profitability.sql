@@ -201,11 +201,22 @@ AS $$
   -- La jointure sur sales est nécessaire pour lire `settled`. LEFT JOIN et non
   -- INNER : les produits sans vente doivent apparaître avec des zéros.
   LEFT JOIN sales s ON s.id = si.sale_id
+  -- VERROU DE PLAN. Le cadenas du menu ne protège rien : cette fonction est
+  -- appelable directement en RPC, et l'appel ne respecte aucun plan côté
+  -- client. Sans cette condition, un client en plan gratuit obtient sa
+  -- rentabilité — prix d'achat, prix de vente, marge unitaire — en appelant
+  -- depuis la console du navigateur. Il paie 0 F ce qui vaut 3 000 F/mois.
+  --
+  -- `SELECT true FROM require_feature('reports')` renvoie true si le plan
+  -- suffit, et lève une exception sinon. require_feature est VOLATILE, donc le
+  -- planificateur ne peut pas l'écarter ni la calculer une fois pour toutes.
+  -- Voir migration_plan_gate.sql.
+  WHERE p.is_active
+    AND (SELECT true FROM require_feature('reports'))
   -- `settled` est dans un FILTER, pas dans un WHERE : le WHERE filtrerait les
   -- lignes et les produits sans vente disparaîtraient du tableau de bord.
   -- Les produits archivés restent hors du tableau de bord : leur historique
   -- est conservé en base, ils ne sont plus pilotés.
-  WHERE p.is_active
   GROUP BY p.id, p.name, p.category, p.price_buy, p.price_sell, p.stock_qty;
 $$;
 

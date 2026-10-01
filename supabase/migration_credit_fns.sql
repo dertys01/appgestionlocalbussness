@@ -355,6 +355,15 @@ AS $$
          s.oldest_sale_at, s.payments_count, s.last_payment_at
     FROM soldes s
    WHERE s.user_id = get_business_owner_id()
+     -- VERROU DE PLAN. Le carnet de dette fait partie des rapports : c'est ce
+     -- qui est vendu avec le plan Starter. Sans ce garde, un client en plan
+     -- gratuit liste ses débiteurs en appelant la fonction en RPC, alors que le
+     -- cadenas de l'onglet l'en empêche dans l'interface.
+     --
+     -- Le solde d'un client n'est pas une information anodine : c'est la liste
+     -- des personnes qui doivent de l'argent à la boutique, avec leur numéro de
+     -- téléphone. Le RLS protège le voisin, pas le plan.
+     AND (SELECT true FROM require_feature('reports'))
      -- Une dette soldée n'a plus rien à réclamer. Sans ce critère, la fiche
      -- persiste et l'écran montre un client à 0 F comme s'il devait de l'argent.
      AND s.total_due > 0

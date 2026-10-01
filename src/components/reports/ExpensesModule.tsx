@@ -13,6 +13,7 @@ import { PeriodPicker } from '@/components/ui/PeriodPicker';
 import { PLAN_LIMITS } from '@/lib/utils/plans';
 import { rangeFromDays, todayISO, type DateRange } from '@/lib/utils/period';
 import { formatCFA } from '@/lib/utils/currency';
+import { readablePlanError } from '@/lib/utils/planErrors';
 import { logActivity } from '@/lib/utils/activity';
 
 /** Ligne renvoyée par get_cash_flow(date, date). */
@@ -50,6 +51,8 @@ export function ExpensesModule() {
 
   const [period, setPeriod] = useState<DateRange>(() => rangeFromDays(30));
   const [flow, setFlow] = useState<CashFlowDay[]>([]);
+  /** Refus de plan sur la seule courbe de résultat net. N'empêche pas de saisir. */
+  const [flowError, setFlowError] = useState('');
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [categories, setCategories] = useState<ExpenseCategory[]>([]);
   const [loading, setLoading] = useState(false);
@@ -89,11 +92,20 @@ export function ExpensesModule() {
         supabase.from('expense_categories').select('id, name, sort_order').order('sort_order'),
       ]);
 
-      if (flowRes.error) throw new Error(flowRes.error.message);
+      // get_cash_flow est refusée en base si le plan ne permet pas les rapports.
+      // Les charges, elles, ne le sont pas : enregistrer une dépense n'est pas un
+      // avantage payant, c'est la tenue du commerce.
+      //
+      // L'échec ne doit donc pas faire tomber tout l'écran. On le note à part et
+      // on continue : le commerçant garde sa liste de charges et peut continuer
+      // à saisir, seule la courbe de résultat net est remplacée par une phrase
+      // qui explique ce qu'il lui faut. Lever une exception ici le priverait des
+      // deux — le pire des deux mondes.
       if (expRes.error) throw new Error(expRes.error.message);
       if (catRes.error) throw new Error(catRes.error.message);
 
-      setFlow((flowRes.data as CashFlowDay[]) ?? []);
+      setFlowError(flowRes.error ? readablePlanError(flowRes.error.message) : '');
+      setFlow(flowRes.error ? [] : ((flowRes.data as CashFlowDay[]) ?? []));
       setExpenses((expRes.data as Expense[]) ?? []);
 
       const cats = (catRes.data as ExpenseCategory[]) ?? [];
@@ -260,7 +272,24 @@ export function ExpensesModule() {
         />
       </div>
 
+      {/* Refus de plan sur la synthèse. Isolé de l'erreur générale : la liste
+          des charges et le formulaire restent utilisables en dessous. */}
+      {flowError && (
+        <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-900">
+          <div className="flex items-center gap-2 font-medium">
+            <AlertTriangle className="w-4 h-4" />
+            Synthèse indisponible
+          </div>
+          <p className="text-xs mt-1">{flowError}</p>
+          <p className="text-xs mt-1 text-amber-700">
+            Vos charges restent enregistrées et modifiables ci-dessous — seule la
+            synthèse de résultat est masquée.
+          </p>
+        </div>
+      )}
+
       {/* Synthèse */}
+      {!flowError && (
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Card className="border-slate-200">
           <CardContent className="p-4">
@@ -300,6 +329,7 @@ export function ExpensesModule() {
           </CardContent>
         </Card>
       </div>
+      )}
 
       {/* Avertissement : aucune charge saisie */}
       {expenses.length === 0 && !loading && (

@@ -16,11 +16,30 @@
 -- Avant, le numéro n'était jamais stocké : il était calculé à l'impression
 -- depuis un compteur en base, si bien que deux factures imprimées depuis le
 -- même état de page portaient le même numéro, et qu'aucune facture n'était
--- rattachable à sa vente.
+-- rattachée à sa vente.
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_number text;
 
+-- ⚠ L'unicité est PAR BOUTIQUE, pas globale.
+--
+-- Le compteur (organizations.invoice_counter) appartient à une boutique, mais
+-- l'index portait sur la seule colonne invoice_number : les deux premières
+-- boutiques Pro de la plateforme produisaient toutes deux « FAC-2026-00001 », et
+-- la seconde se faisait refuser sa vente. Sa caisse était morte — le défaut le
+-- plus grave possible chez un client payant. Reproduit avant correction : la
+-- boutique B ne pouvait plus encaisser.
+--
+-- Ce n'est pas seulement un choix technique : la numérotation des factures est
+-- une séquence par contribuable, pas par pays. Deux commerces différents ont
+-- chacun leur première facture au numéro 1, et c'est légal. L'unicité globale
+-- n'avait aucun sens.
+--
+-- Le DROP est nécessaire : CREATE UNIQUE INDEX IF NOT EXISTS ne remplace pas
+-- un index déjà présent, il en laisse un autre — la correction ne s'appliquerait
+-- jamais sur une base existante.
+DROP INDEX IF EXISTS idx_sales_invoice_number;
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_invoice_number
-  ON sales(invoice_number) WHERE invoice_number IS NOT NULL;
+  ON sales(user_id, invoice_number) WHERE invoice_number IS NOT NULL;
 
 -- ─── 2. Filet de sécurité sur le stock ─────────────────────
 -- NOT VALID : la contrainte est bien appliquée aux INSERT/UPDATE futurs,

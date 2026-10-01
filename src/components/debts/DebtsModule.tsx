@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
+import { readablePlanError } from '@/lib/utils/planErrors';
 import { isFeatureAllowed, PLAN_LABELS } from '@/lib/utils/plans';
 import type { Plan } from '@/types';
 
@@ -57,9 +58,10 @@ export function DebtsModule() {
     setError('');
     try {
       // Fonction SECURITY INVOKER : l'isolation vient de la RLS de sales et
-      // customer_debts, pas d'un filtre manuel dans la requête.
+      // customer_debts, pas d'un filtre manuel dans la requête. Le plan, lui, est
+      // vérifié en base : le cadenas de l'onglet ne protège rien.
       const { data, error: err } = await supabase.rpc('get_customer_debts');
-      if (err) throw new Error(err.message);
+      if (err) throw new Error(readablePlanError(err.message));
       setDebts((data ?? []) as Debt[]);
     } catch (e) {
       setError((e as Error).message);
@@ -87,7 +89,7 @@ export function DebtsModule() {
         p_amount: montant,
         p_method: 'cash',
       });
-      if (err) throw new Error(err.message);
+      if (err) throw new Error(readablePlanError(err.message));
       setAmounts((prev) => ({ ...prev, [debt.debt_id]: '' }));
       await load();
     } catch (e) {

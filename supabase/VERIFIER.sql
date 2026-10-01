@@ -35,6 +35,9 @@ WITH attendus AS (
   UNION ALL SELECT 'get_product_profitability', 'fonction'
   UNION ALL SELECT 'get_cash_flow',             'fonction'
   UNION ALL SELECT 'redeem_invitation',         'fonction'
+  UNION ALL SELECT 'current_org_plan',          'fonction'
+  UNION ALL SELECT 'require_feature',           'fonction'
+  UNION ALL SELECT 'get_units_sold_since',      'fonction'
 )
 SELECT
   a.objet,
@@ -106,4 +109,30 @@ SELECT 'create_sale : version credit',
             THEN 'OK' ELSE 'A CORRIGER' END
   FROM pg_proc p
  WHERE p.proname = 'create_sale'
+UNION ALL
+-- D. L'unicité du numéro de facture doit être PAR BOUTIQUE. Un index global
+--    faisait échouer la vente de la deuxième boutique Pro : le compteur est
+--    propre à chaque boutique, donc deux commerces produisent le même numéro.
+--    Symptôme : « duplicate key value violates unique constraint
+--    idx_sales_invoice_number » et une caisse morte.
+SELECT 'facture : unicite par boutique',
+       coalesce((SELECT string_agg(a.attname, ' + ' ORDER BY k.ord)
+                   FROM pg_index i
+                   JOIN unnest(i.indkey) WITH ORDINALITY AS k(attnum, ord) ON true
+                   JOIN pg_attribute a
+                     ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+                  WHERE i.indexrelid = 'idx_sales_invoice_number'::regclass),
+                '(index absent)'),
+       -- On vérifie que l'index porte sur DEUX colonnes et que user_id est
+       -- comprise, plutôt que de comparer la représentation textuelle de
+       -- pg_index.indkey : celle-ci dépend de l'ordre physique des attributs
+       -- et n'est pas stable d'une version de PostgreSQL à l'autre.
+       CASE WHEN (SELECT count(*) = 2
+                    AND bool_or(a.attname = 'user_id')
+                    FROM pg_index i
+                    JOIN unnest(i.indkey) AS k(attnum) ON true
+                    JOIN pg_attribute a
+                      ON a.attrelid = i.indrelid AND a.attnum = k.attnum
+                   WHERE i.indexrelid = 'idx_sales_invoice_number'::regclass)
+            THEN 'OK' ELSE 'A CORRIGER' END
  ORDER BY 3;

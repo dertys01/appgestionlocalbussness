@@ -50,6 +50,7 @@ point à vérifier après un `git pull`.
 | 10 | `migration_price_override.sql` | Prix négocié par ligne, `sale_items.list_price` |
 | 11 | `migration_weighted_sales.sql` | Quantités décimales, `products.unit` |
 | 12 | `migration_credit.sql` | `sales.settled`, `customer_debts`, `credit_payments` |
+| 12b | `migration_plan_gate.sql` | `current_org_plan()`, `require_feature()`, `get_units_sold_since()` |
 | 13 | `migration_profitability.sql` | Coût figé à la vente, `get_product_profitability()`, archivage |
 | 14 | `migration_expenses.sql` | Tables `expenses` / `expense_categories`, `get_cash_flow()` |
 | 15 | `migration_invitations.sql` | `employee_invitations`, `redeem_invitation()` |
@@ -230,6 +231,65 @@ caisse (60 par tranche, `PRODUCT_PAGE_SIZE`) et les charges (50 par tranche,
 « Afficher plus »). La recherche porte toujours sur la liste entière, pas sur la
 tranche affichée ; le scanner cherche dans `products` complet et ajoute donc
 correctement un produit hors écran.
+
+## Numéro de facture : unique par boutique
+
+Le compteur (`organizations.invoice_counter`) appartient à une boutique, mais
+l'index d'unicité portait sur la seule colonne `invoice_number`. Les deux
+premières boutiques Pro de la plateforme produisaient donc toutes deux
+« FAC-2026-00001 », et la seconde se faisait **refuser sa vente** : sa caisse
+était morte. Un client payant incapable d'encaisser.
+
+L'unicité est désormais `(user_id, invoice_number)`. Ce n'est pas seulement un
+choix technique : la numérotation des factures est une séquence par
+contribuable, pas par pays. Deux commerces différents ont chacun leur première
+facture au numéro 1, et c'est légal.
+
+Le `DROP INDEX` qui précède est nécessaire — `CREATE UNIQUE INDEX IF NOT EXISTS`
+ne remplace pas un index déjà présent, il en laisse un second, et la correction
+ne s'appliquerait jamais sur une base existante.
+
+## Verrou de plan
+
+Le menu affiche un cadenas sur Rapports, Prévisions et Dettes. Ce cadenas ne
+protègeait **rien** : c'est un test dans le navigateur, contournable en appelant
+la fonction en RPC depuis la console. La clé anon est publique — elle est dans
+le bundle JS. Un client en plan gratuit obtenait sa rentabilité, son résultat net
+et son carnet de dette sans payer. Un concurrent, ou un client qui garde un onglet
+ouvert depuis un essai terminé, avait le même chemin.
+
+`migration_plan_gate.sql` déplace la décision dans la base : `current_org_plan()`
+lit `organizations.plan`, `require_feature()` refuse l'appel si le plan ne suit
+pas. Les mêmes quotas sont donc appliqués en deux endroits — le client pour
+afficher des cadenas, la base pour décider. C'est la base qui tranche.
+
+Ce qui est verrouillé :
+
+| Fonctionnalité | Plan requis |
+|---|---|
+| `get_product_profitability()` | Starter |
+| `get_cash_flow()` | Starter |
+| `get_customer_debts()` | Starter |
+| `get_units_sold_since()` | Pro |
+
+Ce qui ne l'est **pas**, volontairement : la caisse, le stock, les ventes,
+l'équipe, les invitations. Un client gratuit doit pouvoir vendre — c'est
+l'application. Verrouiller la caisse décourage, et un commerce arrêté ne demande
+jamais d'upgrade. Les charges restent saisissables pour la même raison : seul le
+résultat net est masqué, pas la liste des dépenses.
+
+Un appel sans utilisateur résolu (clé `service_role`, script d'administration,
+migration) n'est pas un client gratuit : c'est un contexte de confiance, et il
+passe. Le rôle `anon` n'a aucun droit d'exécution sur ces fonctions.
+
+### Prévisions : autant de performance que de sécurité
+
+Le module Prévisions lisait `sale_items` ligne à ligne et additionnait les
+quantités en JavaScript. Il ramenait donc **toutes les lignes de vente des 90
+derniers jours** dans le navigateur d'un client en plan gratuit — le chiffre
+d'affaires, jour par jour, produit par produit. `get_units_sold_since()` déplace
+l'agrégat en base : le client reçoit une ligne par produit, et le refus de plan
+protège les données, pas seulement l'affichage.
 
 ## Crédit client
 

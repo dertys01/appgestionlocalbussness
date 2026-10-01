@@ -45,7 +45,12 @@ export interface Sale {
   id: string;
   user_id: string;
   total_amount: number;
-  payment_method: 'cash' | 'momo';
+  /** 'credit' = marchandise cédée, argent dû. Comptabilisée au règlement. */
+  payment_method: 'cash' | 'momo' | 'credit';
+  /** FALSE pour une vente à crédit non encaissée : le stock est parti, l'argent non. */
+  settled: boolean;
+  /** Numéro normalisé du client, renseigné sur les ventes à crédit. */
+  client_phone?: string | null;
   note: string | null;
   client_name: string | null;
   created_at: string;
