@@ -2,7 +2,7 @@
 --  GESTIONLOCAL — SCHÉMA COMPLET
 --  À coller dans : Supabase Dashboard → SQL Editor → New query → Run
 --
---  Les 18 migrations concaténées, dans l'ordre d'application. Ce
+--  Les 19 migrations concaténées, dans l'ordre d'application. Ce
 --  fichier est pratique pour partir d'une base vide ; sur une base existante,
 --  préfère la migration concernée seule.
 --
@@ -456,11 +456,30 @@ CREATE INDEX IF NOT EXISTS idx_activity_logs_created_at ON activity_logs(created
 -- Avant, le numéro n'était jamais stocké : il était calculé à l'impression
 -- depuis un compteur en base, si bien que deux factures imprimées depuis le
 -- même état de page portaient le même numéro, et qu'aucune facture n'était
--- rattachable à sa vente.
+-- rattachée à sa vente.
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS invoice_number text;
 
+-- ⚠ L'unicité est PAR BOUTIQUE, pas globale.
+--
+-- Le compteur (organizations.invoice_counter) appartient à une boutique, mais
+-- l'index portait sur la seule colonne invoice_number : les deux premières
+-- boutiques Pro de la plateforme produisaient toutes deux « FAC-2026-00001 », et
+-- la seconde se faisait refuser sa vente. Sa caisse était morte — le défaut le
+-- plus grave possible chez un client payant. Reproduit avant correction : la
+-- boutique B ne pouvait plus encaisser.
+--
+-- Ce n'est pas seulement un choix technique : la numérotation des factures est
+-- une séquence par contribuable, pas par pays. Deux commerces différents ont
+-- chacun leur première facture au numéro 1, et c'est légal. L'unicité globale
+-- n'avait aucun sens.
+--
+-- Le DROP est nécessaire : CREATE UNIQUE INDEX IF NOT EXISTS ne remplace pas
+-- un index déjà présent, il en laisse un autre — la correction ne s'appliquerait
+-- jamais sur une base existante.
+DROP INDEX IF EXISTS idx_sales_invoice_number;
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_invoice_number
-  ON sales(invoice_number) WHERE invoice_number IS NOT NULL;
+  ON sales(user_id, invoice_number) WHERE invoice_number IS NOT NULL;
 
 -- ─── 2. Filet de sécurité sur le stock ─────────────────────
 -- NOT VALID : la contrainte est bien appliquée aux INSERT/UPDATE futurs,
@@ -838,6 +857,230 @@ CREATE POLICY "Patron crée son org" ON organizations
     auth.uid() = id
     AND NOT EXISTS (SELECT 1 FROM business_members WHERE member_id = auth.uid())
   );
+
+
+-- ============================================================
+-- VERROU DE PLAN CÔTÉ SERVEUR
+-- À exécuter dans Supabase SQL Editor
+--
+-- LE TROU
+--   Les écrans Rapports, Prévisions et Dettes sont verrouillés par un test de
+--   plan dans le navigateur : le menu affiche un cadenas, et un client en plan
+--   gratuit est redirigé vers Paramètres. C'est vrai, et c'est sans valeur.
+--
+--   Le verrou est côté client, donc contournable en une ligne depuis la console
+--   du navigateur :
+--
+--     supabase.rpc('get_product_profitability')
+--
+--   La clé anon est publique — elle est dans le bundle JS, que le navigateur
+--   télécharge. Un concurrent, un-client, ou un Stall qui veut voir la marge de
+--   la boutique d'à côté n'a rien à faire de plus. Il n'est même pas nécessaire
+--   d'être connecté : il suffit d'être le propriétaire de sa boutique, ce que
+--   l'inscription en plan gratuit donne en trente secondes. La RLS isole les
+--   boutiques entre elles, donc il ne verra que SES chiffres — mais il verra
+--   tous les chiffres payants, gratuitement.
+--
+-- CE QUE CELA FAIT PERDRE
+--   Le plan Starter vend 3 000 FCFA/mois, le Pro 9 000. Si les rapports sont
+--   accessibles à tous, personne n'a de raison de payer : c'est le produit
+--   entier qui devient gratuit. Le cadenas dans le menu continuait de dire le
+--   contraire.
+--
+-- LE PRINCIPE
+--   Une règle de monétisation ne peut pas vivre dans le navigateur. Le plan est
+--   relu en base, à chaque appel, et l'appel est refusé si le plan ne suit pas.
+--   Le client ne fait que refléter la décision — il n'est plus l'arbitre.
+--
+-- ⚠ Ce n'est PAS une sécurité de confidentialité : la RLS s'en charge, et elle
+--   fonctionne. C'est une règle commerciale, et c'est précisément le genre de
+--   règle qu'un client contourne sans le vouloir, en gardant un onglet ouvert
+--   d'un essai terminé. Le contrôle doit être là où la décision se prend.
+--
+-- CE QUI N'EST PAS VERROUILLÉ, ET POURQUOI
+--   La caisse, le stock, les ventes, l'équipe, les invitations, les dettes.
+--   Un client doit pouvoir VENDRE : c'est l'application. Verrouiller la
+--   vente décourage, il faut donc laisser passer tout ce qui fait tourner le
+--   commerce, et ne verrouiller que ce qui est un avantage payant.
+--
+-- DEUX COUCHES, VOLONTAIREMENT : le plan et les limites restent aussi dans le
+--   client (PLAN_LIMITS), pour afficher des cadenas et des messages sans
+--   aller-retour réseau. Cette migration ne le remplace pas, elle le renforce :
+--   si les deux divergent un jour, c'est la base qui tranche.
+-- ============================================================
+
+-- ─── 1. Lire le plan de la boutique ────────────────────────
+-- La source de vérité est organizations.plan, déjà utilisée par le trigger de
+-- limite de produits : le contrôle de plan ne peut pas utiliser une autre
+-- colonne, sinon les deux se désynchronisent.
+--
+-- COALESCE sur 'free' : une organisation sans plan est traitée comme gratuit.
+-- Le doute doit coûter cher au vendeur, jamais au client.
+CREATE OR REPLACE FUNCTION current_org_plan()
+RETURNS text
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+AS $$
+  SELECT COALESCE(
+    (SELECT o.plan FROM organizations o WHERE o.id = get_business_owner_id()),
+    'free'
+  );
+$$;
+
+REVOKE ALL ON FUNCTION current_org_plan() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION current_org_plan() TO authenticated;
+GRANT EXECUTE ON FUNCTION current_org_plan() TO service_role;
+
+COMMENT ON FUNCTION current_org_plan() IS
+  'Plan de la boutique appelante. Défaut « free » : en cas de doute, un client '
+  'est traité comme gratuit. SECURITY INVOKER, la RLS de organizations suffit.';
+
+
+-- ─── 2. Exiger une fonctionnalité ──────────────────────────
+-- Lève une exception si le plan ne permet pas p_feature. Le message est en
+-- français et nomme le plan à prendre : c'est ce que le client affiche quand
+-- l'appel échoue, et un message technique serait incompréhensible pour un
+-- commerçant.
+--
+-- VOLATILE, et c'est délibéré : la fonction lève une exception, donc elle n'est
+-- pas « pure ». Une fonction STABLE serait susceptible d'être évaluée une seule
+-- fois par le planificateur, ou écartée s'il juge le résultat inutilisable —
+-- deux façons discrètes de laisser passer un client en plan gratuit.
+--
+-- SECURITY INVOKER : elle ne fait que lire organizations, dont la RLS renvoie
+-- la ligne de l'appelant. Rien à contourner.
+CREATE OR REPLACE FUNCTION require_feature(p_feature text)
+RETURNS boolean
+LANGUAGE plpgsql
+VOLATILE
+SECURITY INVOKER
+SET search_path = public
+AS $$
+DECLARE
+  v_plan    text;
+  v_requis  text;
+  v_rang_plan   int;
+  v_rang_requis int;
+BEGIN
+  -- Les mêmes quotas que PLAN_LIMITS côté client. Les tenir à jour à deux
+  -- endroits est un risque assumé : c'est la base qui tranche, donc un oubli
+  -- côté client ne donne accès à rien.
+  v_requis := CASE p_feature
+    WHEN 'reports'   THEN 'starter'   -- rentabilité, charges, dettes
+    WHEN 'forecast'  THEN 'pro'       -- prévisions de réapprovisionnement
+    WHEN 'exportCsv' THEN 'starter'
+    ELSE NULL
+  END;
+
+  -- Fonctionnalité inconnue : on refuse. Une faute de frappe dans le nom ne
+  -- doit pas se traduire par un accès accordé.
+  IF v_requis IS NULL THEN
+    RAISE EXCEPTION 'Fonctionnalité inconnue : %', p_feature USING ERRCODE = '22023';
+  END IF;
+
+  -- CONTEXTE SANS UTILISATEUR = CONFIANCE, PAS PLAN GRATUIT.
+  --
+  -- Aucun utilisateur résolu ne signifie pas un client gratuit : cela veut dire
+  -- clé service_role, script d'administration, migration, ETL. Ces contextes
+  -- sont déjà de confiance maximale — ils ont tous les droits sur toutes les
+  -- boutiques — donc les bloquer au motif du plan n'aurait aucun sens.
+  --
+  -- Ce n'est pas une brèche : le rôle anon n'a aucun droit d'exécution sur ces
+  -- fonctions (les GRANT vont à authenticated et service_role), et un appel
+  -- authentifié a toujours un claim `sub`. Seuls service_role et les scripts
+  -- arrivent ici avec un propriétaire NULL.
+  IF get_business_owner_id() IS NULL THEN
+    RETURN true;
+  END IF;
+
+  v_plan := current_org_plan();
+
+  -- Comparaison par rang plutôt que par liste : ajouter un plan plus tard ne
+  -- demande pas de réécrire les conditions. Les rangs sont mis dans des
+  -- variables car un CASE nu comme opérande de comparaison n'est pas accepté
+  -- par le parseur PL/pgSQL — il s'arrête sur « syntax error at end of input »,
+  -- sans nommer la ligne fautive.
+  v_rang_plan := CASE v_plan
+    WHEN 'pro'     THEN 3
+    WHEN 'starter' THEN 2
+    ELSE 1
+  END;
+
+  v_rang_requis := CASE v_requis
+    WHEN 'pro'     THEN 3
+    WHEN 'starter' THEN 2
+    ELSE 1
+  END;
+
+  IF v_rang_plan < v_rang_requis THEN
+    RAISE EXCEPTION
+      'La fonctionnalité « % » nécessite le plan % (plan actuel : %).',
+      p_feature, v_requis, v_plan
+      USING ERRCODE = '42501';
+  END IF;
+
+  RETURN true;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION require_feature(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION require_feature(text) TO authenticated;
+GRANT EXECUTE ON FUNCTION require_feature(text) TO service_role;
+
+COMMENT ON FUNCTION require_feature(text) IS
+  'Lève une exception si le plan de la boutique ne permet pas la fonctionnalité. '
+  'À appeler dans les fonctions payantes : le contrôle de plan ne peut pas '
+  'vivre dans le navigateur, où un simple appel RPC le contourne.';
+
+
+-- ─── 3. Les quantités vendues, pour les Prévisions ────────
+-- Nouvelle fonction, et pas un simple verrou sur la requête existante : le
+-- module Prévisions lisait sale_items ligne à ligne pour compter lui-même les
+-- quantités vendues. Il ramenait donc TOUTES les lignes de vente de la période
+-- dans le navigateur d'un client en plan gratuit — le chiffre d'affaires, jour
+-- par jour, produit par produit. Un verrou posé sur l'écran n'aurait protégé
+-- que l'affichage ; il fallait protéger les données.
+--
+-- La fonction retourne le même agrégat, calculé en base. Un client gratuit
+-- reçoit une erreur, pas le chiffre d'affaires des trois derniers mois.
+--
+-- SECURITY INVOKER : l'isolation vient de la RLS de sale_items et sales. Le
+-- contrôle de plan est ajouté, ce qui est une autre question.
+DROP FUNCTION IF EXISTS get_units_sold_since(integer);
+CREATE FUNCTION get_units_sold_since(p_days integer DEFAULT 30)
+RETURNS TABLE (
+  product_id uuid,
+  quantity   numeric
+)
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+AS $$
+  -- Le garde s'exécute avant l'agrégat : un client sans le plan ne voit pas
+  -- les quantités, même agrégées. `true` pour laisser passer la ligne, et
+  -- l'exception est levée par require_feature() si le plan ne suffit pas.
+  SELECT si.product_id, SUM(si.quantity)
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+   WHERE (SELECT true FROM require_feature('forecast'))
+     -- Borne basse : un nombre négatif ou absurde ne doit pas transformer la
+     -- requête en plein scan de l'historique du client.
+     AND p_days BETWEEN 1 AND 3650
+     AND s.created_at >= now() - make_interval(days => p_days)
+   GROUP BY si.product_id;
+$$;
+
+REVOKE ALL ON FUNCTION get_units_sold_since(integer) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION get_units_sold_since(integer) TO authenticated;
+GRANT EXECUTE ON FUNCTION get_units_sold_since(integer) TO service_role;
+
+COMMENT ON FUNCTION get_units_sold_since(integer) IS
+  'Quantités vendues par produit sur les N derniers jours, agrégées en base. '
+  'Remplace la lecture ligne à ligne de sale_items : le client ne reçoit plus '
+  'l''historique complet. Exige le plan pro (fonctionnalité forecast).';
 
 
 -- ============================================================
@@ -1817,11 +2060,22 @@ AS $$
   -- La jointure sur sales est nécessaire pour lire `settled`. LEFT JOIN et non
   -- INNER : les produits sans vente doivent apparaître avec des zéros.
   LEFT JOIN sales s ON s.id = si.sale_id
+  -- VERROU DE PLAN. Le cadenas du menu ne protège rien : cette fonction est
+  -- appelable directement en RPC, et l'appel ne respecte aucun plan côté
+  -- client. Sans cette condition, un client en plan gratuit obtient sa
+  -- rentabilité — prix d'achat, prix de vente, marge unitaire — en appelant
+  -- depuis la console du navigateur. Il paie 0 F ce qui vaut 3 000 F/mois.
+  --
+  -- `SELECT true FROM require_feature('reports')` renvoie true si le plan
+  -- suffit, et lève une exception sinon. require_feature est VOLATILE, donc le
+  -- planificateur ne peut pas l'écarter ni la calculer une fois pour toutes.
+  -- Voir migration_plan_gate.sql.
+  WHERE p.is_active
+    AND (SELECT true FROM require_feature('reports'))
   -- `settled` est dans un FILTER, pas dans un WHERE : le WHERE filtrerait les
   -- lignes et les produits sans vente disparaîtraient du tableau de bord.
   -- Les produits archivés restent hors du tableau de bord : leur historique
   -- est conservé en base, ils ne sont plus pilotés.
-  WHERE p.is_active
   GROUP BY p.id, p.name, p.category, p.price_buy, p.price_sell, p.stock_qty;
 $$;
 
@@ -2019,6 +2273,14 @@ AS $$
     COALESCE(s.tx, 0)                                 AS transactions
   FROM sales_by_day s
   FULL OUTER JOIN expenses_by_day x ON s.d = x.d
+  -- VERROU DE PLAN. Même raison que get_product_profitability() : l'appel RPC
+  -- contourne le cadenas du menu. Ici, ce que le client gratuit lirait est le
+  -- résultat net par jour — exactement ce qui se trouve au bas de la page
+  -- « Charges », la ligne que le plan vend.
+  -- require_feature est VOLATILE : elle ne peut être ni écartée ni mise en
+  -- cache par le planificateur. FULL OUTER JOIN produit toujours au moins une
+  -- ligne, donc le garde est toujours atteint.
+  WHERE (SELECT true FROM require_feature('reports'))
   ORDER BY 1;
 $$;
 
@@ -2838,6 +3100,15 @@ AS $$
          s.oldest_sale_at, s.payments_count, s.last_payment_at
     FROM soldes s
    WHERE s.user_id = get_business_owner_id()
+     -- VERROU DE PLAN. Le carnet de dette fait partie des rapports : c'est ce
+     -- qui est vendu avec le plan Starter. Sans ce garde, un client en plan
+     -- gratuit liste ses débiteurs en appelant la fonction en RPC, alors que le
+     -- cadenas de l'onglet l'en empêche dans l'interface.
+     --
+     -- Le solde d'un client n'est pas une information anodine : c'est la liste
+     -- des personnes qui doivent de l'argent à la boutique, avec leur numéro de
+     -- téléphone. Le RLS protège le voisin, pas le plan.
+     AND (SELECT true FROM require_feature('reports'))
      -- Une dette soldée n'a plus rien à réclamer. Sans ce critère, la fiche
      -- persiste et l'écran montre un client à 0 F comme s'il devait de l'argent.
      AND s.total_due > 0

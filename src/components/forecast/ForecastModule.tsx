@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge';
 import { RestockModal } from '@/components/products/RestockModal';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
+import { readablePlanError } from '@/lib/utils/planErrors';
 import type { Product } from '@/types';
 
 interface ProductForecast {
@@ -43,35 +44,39 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
     const since = new Date();
     since.setDate(since.getDate() - ANALYSIS_DAYS);
 
-    // La vue apporte le fournisseur résolu : pas de seconde requête, pas de
-    // raccordement par identifiant, et l'isolation vient de la RLS de la vue.
-    const [productsRes, saleItemsRes] = await Promise.all([
+    // Le catalogue vient de la vue : elle apporte le fournisseur résolu, donc
+    // pas de seconde requête ni de raccordement par identifiant, et l'isolation
+    // vient de la RLS de la vue.
+    //
+    // Les quantités vendues passent par get_units_sold_since() et non par une
+    // lecture de sale_items. Deux raisons :
+    //   1. le plan — l'agrégat est refusé en base si le plan ne le permet pas,
+    //      alors qu'une lecture de table ne se verrouille pas ;
+    //   2. le volume — la version précédente ramenait TOUTES les lignes de vente
+    //      des 90 derniers jours dans le navigateur pour les additionner
+    //      ensuite en JavaScript. Sur une boutique qui vend, cela devient vite
+    //      des dizaines de milliers de lignes téléchargées pour produire une
+    //      somme de nombres par produit.
+    const [productsRes, soldRes] = await Promise.all([
       supabase.from('products_with_supplier').select('*').order('name'),
-      supabase
-        .from('sale_items')
-        .select('product_id, quantity, sale:sales!inner(created_at)')
-        .gte('sale.created_at', since.toISOString()),
+      supabase.rpc('get_units_sold_since', { p_days: ANALYSIS_DAYS }),
     ]);
 
     // Les erreurs étaient ignorées : un échec de sale_items faisait passer
     // chaque produit en « Pas de données » (silencieusement), et celui de
     // products figeait l'écran sur le chargement.
     if (productsRes.error) { setError(productsRes.error.message); setLoading(false); return; }
-    if (saleItemsRes.error) { setError(saleItemsRes.error.message); setLoading(false); return; }
+    if (soldRes.error) { setError(readablePlanError(soldRes.error.message)); setLoading(false); return; }
 
     const products = productsRes.data;
-    const saleItems = saleItemsRes.data;
+    const sold = soldRes.data;
     if (!products) { setLoading(false); return; }
 
-    // Calcule les quantités vendues par produit.
-    // La clé est `sale` (alias posé dans le select) ; `!inner` garantit que
-    // seules les lignes dont la vente est dans la période reviennent, donc le
-    // test de présence est redondant — conservé par sécurité.
+    // Quantités vendues par produit. Déjà agrégées en base : le navigateur
+    // reçoit une ligne par produit, et non une ligne par vente.
     const soldMap: Record<string, number> = {};
-    (saleItems ?? []).forEach((item: { product_id: string; quantity: number; sale?: unknown }) => {
-      if (item.sale) {
-        soldMap[item.product_id] = (soldMap[item.product_id] ?? 0) + item.quantity;
-      }
+    (sold ?? []).forEach((row: { product_id: string; quantity: number }) => {
+      soldMap[row.product_id] = Number(row.quantity);
     });
 
     const result: ProductForecast[] = (products as ProductForecastRow[]).map((p) => {

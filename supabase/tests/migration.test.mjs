@@ -15,6 +15,10 @@ const ORDER = [
   'migration_indexes.sql',
   'migration_sales_rpc.sql',
   'migration_roles.sql',
+  // Crée require_feature(), referenced par les trois fonctions payantes
+  // (get_product_profitability, get_cash_flow, get_customer_debts). Doit
+  // précéder ces trois migrations, sinon la fonction n'existe pas encore.
+  'migration_plan_gate.sql',
   // Les trois migrations qui redéfinissent create_sale(). Vues dans cet ordre,
   // la dernière version l'emporte : vente au poids (NUMERIC + virgule).
   //
@@ -669,7 +673,7 @@ const TODAY = '2026-06-15';
 {
   const d = '2026-06-16';
   await q(`INSERT INTO expenses (user_id,category,label,amount,day)
-           VALUES ('${PATRON}','Autre','Achat 二 kwatt',3000,'${d}')`);
+           VALUES ('${PATRON}','Autre','Achat 2 kwatt',3000,'${d}')`);
   const row = (await q(`SELECT * FROM get_cash_flow('${d}', '${d}')`)).rows[0];
   check('7j. journée sans vente mais avec charge visible', !!row && Number(row.revenue) === 0,
     row ? `revenue ${row.revenue}` : 'jour absent');
@@ -1147,7 +1151,7 @@ const ligne = (saleId) =>
 }
 
 {
-  // 4. Prix supérieur au catalogue : autorisé (vente flash, lot缺的).
+  // 4. Prix supérieur au catalogue : autorisé (vente flash, lot au détail).
   const v = await vendre(
     JSON.stringify([{ product_id: NEGO, quantity: 1, unit_price: 12000 }]));
   const li = (await ligne(v.id)).rows[0];
@@ -1636,6 +1640,189 @@ const credit = async (qty, nom, tel) => {
     .find((x) => x.name === 'Article crédit');
   check('14au. unités vendues = 4 (crédit compris)', Number(prof.units_sold) === 4, `obtenu ${prof.units_sold}`);
 }
+
+// ═══ 15. Deux boutiques Pro ════════════════════════════════
+// Régression d'un bug qui rendait la caisse inutilisable : le compteur de
+// facture est par boutique, mais l'index d'unicité portait sur la seule colonne
+// invoice_number. Les deux premières boutiques Pro de la plateforme produisaient
+// donc toutes deux « FAC-2026-00001 », et la seconde se faisait REFUSER sa
+// vente. Un client payant incapable d'encaisser.
+console.log('\n▸ Deux boutiques Pro');
+
+{
+  const A = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const B = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  await q(`INSERT INTO auth.users (id,email) VALUES ('${A}','pa@test.ci'),('${B}','pb@test.ci') ON CONFLICT DO NOTHING`);
+  await q(`INSERT INTO organizations (id,name,slug,plan) VALUES
+             ('${A}','Boutique A','boutique-a','pro'),
+             ('${B}','Boutique B','boutique-b','pro') ON CONFLICT DO NOTHING`);
+  await q(`INSERT INTO products (id,user_id,name,price_buy,price_sell,stock_qty) VALUES
+             ('cccccccc-0000-4000-8000-000000000001','${A}','Article A',4000,10000,50),
+             ('dddddddd-0000-4000-8000-000000000001','${B}','Article B',4000,10000,50)
+           ON CONFLICT DO NOTHING`);
+
+  const vendre = async (uid, pid) => {
+    await q(`SELECT set_config('request.jwt.claim.sub','${uid}',false)`);
+    const r = await q(`SELECT create_sale(
+      '[{"product_id":"${pid}","quantity":1}]'::jsonb,'cash',null,null) AS v`);
+    const b = r.rows[0].v;
+    return typeof b === 'string' ? JSON.parse(b) : b;
+  };
+
+  const va = await vendre(A, 'cccccccc-0000-4000-8000-000000000001');
+  check('15A. la première boutique Pro encaisse', Number(va?.total_amount) === 10000, JSON.stringify(va));
+
+  let vb = null, refus = '';
+  try { vb = await vendre(B, 'dddddddd-0000-4000-8000-000000000001'); }
+  catch (e) { refus = e.message.split('\n')[0]; }
+  check('15B. la DEUXIÈME boutique Pro encaisse aussi', !!vb?.id, refus || 'sa caisse est morte');
+  check('15C. sa vente vaut bien 10 000', Number(vb?.total_amount) === 10000, String(vb?.total_amount));
+
+  // Chaque boutique a sa propre séquence. C'est la sémantique attendue d'une
+  // numérotation de factures : elle est par contribuable, pas par pays.
+  check('15D. les deux|numéros peuvent coincider sans erreur',
+    typeof va?.invoice_number === 'string' && typeof vb?.invoice_number === 'string',
+    `${va?.invoice_number} / ${vb?.invoice_number}`);
+
+  // Et la séquence avance bien dans la durée pour une même boutique.
+  const va2 = await vendre(A, 'cccccccc-0000-4000-8000-000000000001');
+  check('15E. la séquence avance dans la même boutique',
+    va2?.invoice_number !== va?.invoice_number,
+    `${va?.invoice_number} puis ${va2?.invoice_number}`);
+
+  // L'unicité reste réelle là où elle doit l'être : deux ventes d'une même
+  // boutique ne peuvent pas porter le même numéro.
+  const doublon = (await q(`SELECT count(*)::int c FROM sales
+     WHERE user_id='${A}' AND invoice_number = '${va?.invoice_number}'`)).rows[0].c;
+  check('15F. unicité maintenue par boutique', Number(doublon) === 1, `${doublon} ligne(s)`);
+
+  await q(`SELECT set_config('request.jwt.claim.sub','${PATRON}',false)`);
+}
+
+// ═══ 16. Verrou de plan côté serveur ═══════════════════════
+// Le cadenas du menu ne protégeait rien. Les trois fonctions payantes étaient
+// appelables en RPC sans qu'aucun plan soit consulté : un client en plan
+// gratuit obtenait sa rentabilité, son résultat net et son carnet de dette en
+// appelant depuis la console du navigateur. C'est le produit entier qui
+// devenait gratuit.
+//
+// Ces tests vérifient le refus, pas seulement la présence du code.
+console.log('\n▸ Verrou de plan');
+
+const FREE = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+await q(`INSERT INTO auth.users (id,email) VALUES ('${FREE}','gratuit@test.ci') ON CONFLICT DO NOTHING`);
+await q(`INSERT INTO organizations (id,name,slug,plan) VALUES ('${FREE}','Boutique Gratuite','boutique-gratuite','free') ON CONFLICT DO NOTHING`);
+await q(`INSERT INTO products (id,user_id,name,price_buy,price_sell,stock_qty)
+         VALUES ('f0f0f0f0-0000-4000-8000-00000000000b','${FREE}','Article gratuit',4000,10000,50)
+         ON CONFLICT DO NOTHING`);
+
+// Le produit doit exister ET avoir déjà vendu AVANT de vérifier le refus : sinon
+// le test passerait pour la mauvaise raison — aucune ligne à renvoyer, donc
+// rien à protéger. La vente passe par create_sale(), ce qui prouve au passage
+// qu'un client gratuit peut vendre.
+await q(`SELECT set_config('request.jwt.claim.sub', '${FREE}', false)`);
+await q(`SELECT create_sale(
+  '[{"product_id":"f0f0f0f0-0000-4000-8000-00000000000b","quantity":2}]'::jsonb,
+  'cash', null, null)`);
+
+{
+  const plan = (await q(`SELECT current_org_plan() AS p`)).rows[0].p;
+  check('16a. le plan de la boutique est lu en base', plan === 'free', plan);
+}
+
+{
+  // Le trou : avant migration_plan_gate, cet appel renvoyait les chiffres.
+  let msg = '';
+  try { await q(`SELECT * FROM get_product_profitability()`); } catch (e) { msg = e.message; }
+  check('16b. rentabilité refusée en plan gratuit', /plan starter/i.test(msg), msg || 'RENVOYÉE !');
+  check('16c. le message nomme le plan à prendre', /starter/i.test(msg), msg);
+}
+
+{
+  let msg = '';
+  try { await q(`SELECT * FROM get_cash_flow('2000-01-01','2100-01-01')`); } catch (e) { msg = e.message; }
+  check('16d. résultat net refusé en plan gratuit', /plan starter/i.test(msg), msg || 'RENVOYÉ !');
+}
+
+{
+  // Vendre à crédit puis demander le relevé : c'est ce que contient la liste
+  // des débiteurs — nom et numéro de ceux qui doivent de l'argent.
+  await q(`SELECT record_credit_sale(
+             '[{"product_id":"f0f0f0f0-0000-4000-8000-00000000000b","quantity":1}]'::jsonb,
+             'Débiteur gratuit','+229 95 00 00 00',null)`);
+  let msg = '';
+  try { await q(`SELECT * FROM get_customer_debts()`); } catch (e) { msg = e.message; }
+  check('16e. carnet de dette refusé en plan gratuit', /plan starter/i.test(msg), msg || 'RENVOYÉ !');
+}
+
+{
+  // Prévisions : l'API qui ramenait l'historique de ventes, ligne à ligne.
+  let msg = '';
+  try { await q(`SELECT * FROM get_units_sold_since(30)`); } catch (e) { msg = e.message; }
+  check('16f. prévisions refusées en plan gratuit', /plan pro/i.test(msg), msg || 'RENVOYÉES !');
+}
+
+{
+  // Le contournement classique : passer un nom de fonctionnalité bidon en
+  // espérant un accès granted. Une faute de frappe ne doit rien ouvrir.
+  let msg = '';
+  try { await q(`SELECT require_feature('reports ')`); } catch (e) { msg = e.message; }
+  check('16g. fonctionnalité inconnue refusée', /inconnue/i.test(msg), msg || 'ACCEPTÉE !');
+}
+
+{
+  // Un plan en Starter a les rapports, mais pas les prévisions. C'est le
+  // raccourcissement à ne pas faire : si Starter avait eu les deux, personne
+  // n'aurait jamais payé Pro.
+  await q(`UPDATE organizations SET plan='starter' WHERE id='${FREE}'`);
+  let ok = true, msg = '';
+  try { await q(`SELECT * FROM get_product_profitability()`); } catch (e) { ok = false; msg = e.message; }
+  check('16h. Starter accède à la rentabilité', ok, msg);
+  ok = true; msg = '';
+  try { await q(`SELECT * FROM get_cash_flow('2000-01-01','2100-01-01')`); } catch (e) { ok = false; msg = e.message; }
+  check('16i. Starter accède au résultat net', ok, msg);
+  ok = true; msg = '';
+  try { await q(`SELECT * FROM get_customer_debts()`); } catch (e) { ok = false; msg = e.message; }
+  check('16j. Starter accède au carnet de dette', ok, msg);
+
+  ok = true; msg = '';
+  try { await q(`SELECT * FROM get_units_sold_since(30)`); } catch (e) { ok = false; msg = e.message; }
+  check('16k. Starter n\'a PAS les prévisions', !ok && /plan pro/i.test(msg), msg || 'accès accordé !');
+}
+
+{
+  await q(`UPDATE organizations SET plan='pro' WHERE id='${FREE}'`);
+  const r = await q(`SELECT * FROM get_units_sold_since(30)`);
+  check('16l. Pro accède aux prévisions', Array.isArray(r.rows), '');
+}
+
+{
+  // La vente, elle, ne doit jamais être bloquée. Un client gratuit doit pouvoir
+  // travailler : c'est l'application. Verrouiller la caisse décourage, et un
+  // commerce arrêté ne demande jamais d'upgrade.
+  const v = await q(`SELECT create_sale(
+    '[{"product_id":"f0f0f0f0-0000-4000-8000-00000000000b","quantity":1}]'::jsonb,'cash',null,null) AS v`);
+  const b = v.rows[0].v;
+  const o = typeof b === 'string' ? JSON.parse(b) : b;
+  check('16m. la vente reste possible en plan gratuit', Number(o?.total_amount) === 10000, JSON.stringify(o));
+
+  // Et le stock baisse : c'est une vraie vente, pas un dry-run.
+  // 50 − 2 (fixture) − 1 (ici) − 1 (16e, dette créée pour 16e) = 46
+  const st = (await q(`SELECT stock_qty FROM products WHERE id='f0f0f0f0-0000-4000-8000-00000000000b'`)).rows[0].stock_qty;
+  check('16n. le stock décrémente en plan gratuit', Number(st) === 46, `stock = ${st}`);
+}
+
+{
+  // Une boutique qui n'existe pas ou n'a pas de plan est traitée comme gratuit.
+  // En cas de doute, le coût doit tomber sur le vendeur, jamais sur le client.
+  await q(`SELECT set_config('request.jwt.claim.sub',
+           'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', false)`);
+  const plan = (await q(`SELECT current_org_plan() AS p`)).rows[0].p;
+  check('16o. boutique inconnue traitée comme gratuit', plan === 'free', plan);
+}
+
+// Retour au patron Pro pour la suite de la suite.
+await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
 process.exit(failures ? 1 : 0);

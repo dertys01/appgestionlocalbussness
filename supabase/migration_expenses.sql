@@ -183,6 +183,14 @@ AS $$
     COALESCE(s.tx, 0)                                 AS transactions
   FROM sales_by_day s
   FULL OUTER JOIN expenses_by_day x ON s.d = x.d
+  -- VERROU DE PLAN. Même raison que get_product_profitability() : l'appel RPC
+  -- contourne le cadenas du menu. Ici, ce que le client gratuit lirait est le
+  -- résultat net par jour — exactement ce qui se trouve au bas de la page
+  -- « Charges », la ligne que le plan vend.
+  -- require_feature est VOLATILE : elle ne peut être ni écartée ni mise en
+  -- cache par le planificateur. FULL OUTER JOIN produit toujours au moins une
+  -- ligne, donc le garde est toujours atteint.
+  WHERE (SELECT true FROM require_feature('reports'))
   ORDER BY 1;
 $$;
 

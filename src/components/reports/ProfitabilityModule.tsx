@@ -6,6 +6,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
+import { readablePlanError } from '@/lib/utils/planErrors';
 import { toCSV, downloadCSV } from '@/lib/utils/export';
 import { isFeatureAllowed } from '@/lib/utils/plans';
 
@@ -41,10 +42,11 @@ export function ProfitabilityModule() {
     setError('');
     try {
       // Fonction SECURITY INVOKER : l'isolation multi-tenant est assurée par
-      // la RLS de products, pas par un filtre manuel dans la requête.
+      // la RLS de products, pas par un filtre manuel dans la requête. Le plan
+      // est vérifié en base : le cadenas du menu ne l'est pas.
       const { data, error: err } = await supabase.rpc('get_product_profitability');
 
-      if (err) throw new Error(err.message);
+      if (err) throw new Error(readablePlanError(err.message));
       const list = (data as ProfitRow[]) ?? [];
       setRows([...list].sort((a, b) => Number(b.gross_profit) - Number(a.gross_profit)));
     } catch (e) {
