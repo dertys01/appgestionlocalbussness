@@ -39,6 +39,13 @@ WITH attendus AS (
   UNION ALL SELECT 'current_org_plan',          'fonction'
   UNION ALL SELECT 'require_feature',           'fonction'
   UNION ALL SELECT 'get_units_sold_since',      'fonction'
+
+  -- Programme bêta
+  UNION ALL SELECT 'beta_program',              'table'
+  UNION ALL SELECT 'beta_access',               'table'
+  UNION ALL SELECT 'beta_claim_slot',           'fonction'
+  UNION ALL SELECT 'beta_record_access',        'fonction'
+  UNION ALL SELECT 'beta_status',               'fonction'
 )
 SELECT
   a.objet,
@@ -166,4 +173,27 @@ SELECT 'acompte : coherence des montants' AS controle,
        CASE WHEN count(*) = 0 THEN 'OK' ELSE 'A CORRIGER' END AS etat
   FROM sales
  WHERE amount_received < 0 OR amount_received > total_amount
+UNION ALL
+-- G. Le programme bêta. Les deux triggers doivent être présents ET actifs : sans
+--    le BEFORE, personne ne passe en Pro ; sans l'AFTER, les places sont
+--    consommées sans que personne sache à qui — le pire des deux, puisque le
+--    budget se viderait à l'insu du propriétaire.
+SELECT 'beta : triggers actifs' AS controle,
+       count(*)::text || ' trigger(s) actif(s) sur 2' AS valeur_attendue,
+       CASE WHEN count(*) = 2 THEN 'OK' ELSE 'A COLLER' END AS etat
+  FROM pg_trigger
+ WHERE tgrelid = 'organizations'::regclass
+   AND tgname IN ('trg_beta_claim_slot', 'trg_beta_record_access')
+   AND tgenabled = 'O'
+UNION ALL
+-- H. État du programme, en clair. C'est la seule information à consulter en
+--    routine : combien de places restent, et combien ont été servies.
+SELECT 'beta : etat du programme' AS controle,
+       CASE WHEN open THEN 'ouvert' ELSE 'clos' END
+         || ' — ' || (slots_total - slots_used) || '/' || slots_total || ' place(s) restante(s)'
+         || ' — ' || (SELECT count(*) FROM beta_access WHERE plan = 'pro') || ' compte(s) Pro'
+       AS valeur_attendue,
+       CASE WHEN slots_used <= slots_total THEN 'OK' ELSE 'INCOHERENT' END AS etat
+  FROM beta_program
+ WHERE id = 1
  ORDER BY 3;

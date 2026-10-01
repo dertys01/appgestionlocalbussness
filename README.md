@@ -52,6 +52,7 @@ point à vérifier après un `git pull`.
 | 12 | `migration_credit.sql` | `sales.settled`, `customer_debts`, `credit_payments` |
 | 12b | `migration_plan_gate.sql` | `current_org_plan()`, `require_feature()`, `get_units_sold_since()` |
 | 12c | `migration_partial_payment.sql` | `sales.amount_received`, trigger de remplissage |
+| 12d | `migration_beta_program.sql` | dix places bêta, triggers d'attribution |
 | 13 | `migration_profitability.sql` | Coût figé à la vente, `get_product_profitability()`, archivage |
 | 14 | `migration_expenses.sql` | Tables `expenses` / `expense_categories`, `get_cash_flow()` |
 | 15 | `migration_invitations.sql` | `employee_invitations`, `redeem_invitation()` |
@@ -59,7 +60,7 @@ point à vérifier après un `git pull`.
 | 17 | `migration_suppliers.sql` | `suppliers`, `products.supplier_id`, `products_with_supplier` |
 | 18 | `migration_credit_fns.sql` | `record_credit_sale()`, `pay_customer_debt()`, `get_customer_debts()` |
 
-`APPLY_MIGRATIONS.sql` concatène les 20 migrations pour partir d'une base
+`APPLY_MIGRATIONS.sql` concatène les 21 migrations pour partir d'une base
 vide. Sur une base existante, appliquer la seule migration concernée.
 
 `migration_partial_payment.sql` crée `sales.amount_received`, donc elle doit
@@ -89,7 +90,7 @@ fonction après avoir tout rejoué, et vérifie que `create_sale()` est bien rev
 `migration_profitability.sql` (colonne `list_price`) et suivre
 `migration_price_override.sql` (dont elle reprend le prix négocié).
 
-**Les 20 migrations sont rejouables** : `IF NOT EXISTS` sur les tables et les
+**Les 21 migrations sont rejouables** : `IF NOT EXISTS` sur les tables et les
 index, `DROP … IF EXISTS` avant chaque policy, chaque trigger et chaque fonction
 dont la signature a changé.
 
@@ -266,6 +267,63 @@ caisse (60 par tranche, `PRODUCT_PAGE_SIZE`) et les charges (50 par tranche,
 « Afficher plus »). La recherche porte toujours sur la liste entière, pas sur la
 tranche affichée ; le scanner cherche dans `products` complet et ajoute donc
 correctement un produit hors écran.
+
+## Programme bêta : dix comptes en accès complet
+
+Pour tester en conditions réelles, avec des gens qui ne sont pas le
+développeur. Un prix qui ne s'affiche pas sur un petit écran, un libellé que
+personne ne comprend, un geste que la caissière ne fait pas parce qu'il n'y est
+pas : aucun test automatique ne voit cela.
+
+### Un budget de places, pas un code
+
+Le mécanisme est un compteur, pas un code d'accès à distribuer. Il n'y a donc
+rien à trouver, et le onzième compte s'inscrit normalement, en gratuit. Une fois
+les dix places prises, le programme est fermé et le comportement redevient
+exactement celui d'une inscription ordinaire.
+
+C'est aussi pour ça qu'aucune date d'expiration n'a été mise : une date non
+appliquée par un trigger planifié est pire qu'aucune date, parce qu'on croit que
+l'accès s'arrêtera tout seul. Le budget se ferme par une commande explicite, donc
+ce qui est promis est ce qui se produit.
+
+### Un trigger, parce qu'il y a trois chemins d'inscription
+
+`/api/register`, la page `/register` en deux étapes, et l'onboarding de la page
+d'accueil créent chacun une organisation. Les modifier tous serait trois endroits
+à tenir d'accord — et le quatrième chemin, oublié, donnerait un compte gratuit
+sans qu'on le voie. Le trigger `trg_beta_claim_slot` est le seul point par où
+passe toute création de boutique, donc il s'applique partout, y compris aux
+chemins qu'on n'a pas prévus. **Aucune modification de l'application n'a été
+nécessaire.**
+
+Le travail est partagé par deux triggers, et ce n'est pas un détail de style :
+`beta_access` référence `organizations`, donc la ligne doit exister avant d'y
+écrire. Un seul trigger `BEFORE` — le plus naturel, puisque c'est lui qui modifie
+`NEW.plan` — violerait la clé étrangère à chaque inscription.
+
+L'attribution est atomique : un seul `UPDATE … WHERE slots_used < slots_total`,
+et non un `SELECT` suivi d'un `UPDATE`. Deux inscriptions simultanées lisent
+toutes deux `slots_used = 9` ; PostgreSQL reverifie la condition après avoir pris
+le verrou de ligne, donc la seconde ne consomme rien. Le plafond reste exact sous
+concurrence, sans `SERIALIZABLE` ni réessai.
+
+### Le testeur ne peut pas élargir son propre accès
+
+`beta_program` et `beta_access` sont en RLS forcée, sans aucune policy : seul le
+trigger, en `SECURITY DEFINER`, écrit dedans. À noter pour qui écrit des tests
+ici — un `UPDATE` refusé par la RLS **ne lève pas d'erreur**, la ligne est
+simplement filtrée et le compte de lignes modifiées vaut 0. C'est ce compte qui
+prouve le blocage, pas l'absence d'erreur.
+
+`supabase/BETA_SUIVI.sql` est la boîte à outils : état du programme, liste des
+testeurs et de leurs retours, qui n'a pas encore testé, et les boutiques les
+plus utilisées. Les colonnes `avis` / `bugs` / `manques` de `beta_access`
+existent pour accumuler les retours au fil de l'eau — sans elles, l'information
+se perd dans des messages privés et ne sert à rien.
+
+Commandes : `close_beta_program()`, `set_beta_slots(n)`, `revoke_all_beta()`,
+`beta_status()`.
 
 ## Numéro de facture : unique par boutique
 
