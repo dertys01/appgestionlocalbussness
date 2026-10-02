@@ -1,72 +1,134 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { isOverLimit, ruleFor, type RateLimitRule } from './lib/rate-limit';
 
 /**
- * Rate limiting en mémoire.
+ * Rate limiting des routes sensibles.
  *
- * ⚠️  CE LIMITEUR N'EST PAS EFFICACE EN PRODUCTION SERVEURLESS.
- * Le store vit dans le process : sur Vercel chaque instance est isolée et le
- * module est ré-évalué à froid, donc la Map repart vide à chaque invocation et
- * le seuil n'est jamais atteint. Il protège `next dev` et les déploiements
- * Node à instance unique ; ailleurs il ne fait rien.
+ * Le compteur vivait dans une Map du module. Sur Vercel chaque instance est
+ * isolée et le module est ré-évalué à froid : la Map repartait vide, le seuil
+ * n'était jamais atteint, et la limite ne bloquait rien en production — le
+ * commentaire qui précédait l'admettait ouvertement.
  *
- * Vrai rempart : @upstash/ratelimit + Redis, ou compter via PostgREST dans une
- * table `rate_limits` (déjà le cas pour /api/register, qui s'appuie sur la
- * service role). Voir README pour le détail.
+ * Le compteur est désormais dans la table `rate_limits`, appelée par
+ * bump_rate_limit() (SECURITY DEFINER, verrou de ligne). C'est
+ * l'infrastructure déjà utilisée par /api/register : partagée par toutes les
+ * instances, persistante d'un cold start à l'autre, et qui sérialise deux
+ * écritures simultanées au lieu de les laisser se croiser.
+ *
+ * Deux choix, détaillés dans src/lib/rate-limit.ts :
+ *   • seules les écritures sont comptées — une lecture n'a aucun effet de
+ *     bord et limiter les GET bloquait le rafraîchisseur de la console ;
+ *   • une panne de la base laisse passer la requête (fail-open) : un souci
+ *     PostgREST ne doit pas rendre l'inscription inaccessible.
  */
-const store = new Map<string, { count: number; reset: number }>();
 
-function rateLimit(key: string, max: number, windowMs: number): boolean {
-  const now = Date.now();
-  const entry = store.get(key);
+const SENSITIVE_ROUTES = [
+  '/api/employees',
+  // Invitations et acceptation : la première crée un jeton d'accès, la seconde
+  // crée un compte. Les deux doivent être encadrées comme la création d'un
+  // compte patron.
+  '/api/invitations',
+  '/api/register',
+  '/api/stripe/checkout',
+  '/api/stripe/portal',
+];
 
-  if (!entry || now > entry.reset) {
-    store.set(key, { count: 1, reset: now + windowMs });
-    return true; // autorisé
+/**
+ * Purge des compteurs expirés.
+ *
+ * bump_rate_limit() réutilise une ligne à chaque appel, mais une clé d'IP qui
+ * ne revient plus reste dans la table pour toujours : purge_rate_limits()
+ * existait sans jamais être appelé. Sans ce garde-fou, le compteur multiplié
+ * par cinq chemins aurait fait grandir rate_limits sans limite.
+ *
+ * Appelée en await : un fetch lancé sans l'être peut être coupé par le retour
+ * de la réponse, et la purge n'aurait jamais lieu. Coût : un aller-retour de
+ * plus, une fois toutes les dix minutes.
+ */
+const PURGE_INTERVAL_MS = 10 * 60_000;
+let nextPurgeAt = 0;
+let warnedMissingEnv = false;
+
+/**
+ * Variables lues par accès dynamique (`process.env[name]`), que Next.js ne
+ * remplace pas au build : les valeurs sont résolues par le process au
+ * démarrage, et le bundle ne contient que le nom de la variable.
+ */
+function env(name: string): string {
+  return process.env[name] ?? '';
+}
+
+async function rpc(fn: string, args: Record<string, unknown>): Promise<unknown> {
+  const url = env('NEXT_PUBLIC_SUPABASE_URL');
+  const serviceKey = env('SUPABASE_SERVICE_ROLE_KEY');
+
+  if (!url || !serviceKey) {
+    if (!warnedMissingEnv) {
+      warnedMissingEnv = true;
+      console.warn('[proxy] rate limit désactivé : URL ou clé service absente');
+    }
+    return undefined;
   }
 
-  if (entry.count >= max) return false; // bloqué
+  const res = await fetch(`${url}/rest/v1/rpc/${fn}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      apikey: serviceKey,
+      Authorization: `Bearer ${serviceKey}`,
+    },
+    body: JSON.stringify(args),
+    cache: 'no-store',
+  });
 
-  entry.count++;
+  if (!res.ok) throw new Error(`${fn} a répondu HTTP ${res.status}`);
+  return res.json();
+}
+
+async function isAllowed(key: string, rule: RateLimitRule): Promise<boolean> {
+  if (purgeIsDue()) {
+    // Son échec n'a aucune incidence sur la requête en cours : d'où le catch.
+    await rpc('purge_rate_limits', {}).catch(() => {});
+  }
+
+  try {
+    const over = await rpc('bump_rate_limit', {
+      p_key: key,
+      p_max: rule.max,
+      p_window_seconds: rule.windowSeconds,
+    });
+    return !isOverLimit(over);
+  } catch (err) {
+    // Fail-open, à l'identique de /api/register : on journalise et on laisse
+    // passer. Un compteur qui bloque l'inscription vaut pire qu'absent.
+    console.error('[proxy] rate limit indisponible', err);
+    return true;
+  }
+}
+
+function purgeIsDue(): boolean {
+  if (Date.now() < nextPurgeAt) return false;
+  nextPurgeAt = Date.now() + PURGE_INTERVAL_MS;
   return true;
 }
 
-// Nettoyage périodique pour éviter les fuites mémoire.
-// `unref()` : sans cela le setInterval maintiendrait le process en vie.
-const cleanup = setInterval(() => {
-  const now = Date.now();
-  store.forEach((v, k) => { if (now > v.reset) store.delete(k); });
-}, 60_000);
-if (typeof cleanup === 'object' && cleanup !== null && 'unref' in cleanup) {
-  (cleanup as { unref: () => void }).unref();
-}
-
-export function proxy(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  // Routes protégées par rate limiting
-  const sensitiveRoutes = [
-    '/api/employees',
-    // Invitations et acceptation : la première crée un jeton d'accès, la seconde
-    // crée un compte. Les deux doivent être encadrées comme la création d'un
-    // compte patron.
-    '/api/invitations',
-    '/api/register',
-    '/api/stripe/checkout',
-    '/api/stripe/portal',
-  ];
-
-  const isSensitive = sensitiveRoutes.some((r) => pathname.startsWith(r));
+  const isSensitive = SENSITIVE_ROUTES.some((r) => pathname.startsWith(r));
   if (!isSensitive) return NextResponse.next();
 
-  const ip = req.headers.get('x-forwarded-for')?.split(',')[0] ?? 'unknown';
-  const key = `${ip}:${pathname}`;
+  const rule = ruleFor(req.method);
+  // Lecture : rien à compter, et surtout aucun aller-retour en base.
+  if (!rule) return NextResponse.next();
 
-  const allowed = rateLimit(key, 10, 60_000); // 10 requêtes par minute
+  const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+  const allowed = await isAllowed(`proxy:${ip}:${pathname}`, rule);
 
   if (!allowed) {
     return NextResponse.json(
       { error: 'Trop de requêtes, réessayez dans un moment.' },
-      { status: 429, headers: { 'Retry-After': '60' } }
+      { status: 429, headers: { 'Retry-After': String(rule.windowSeconds) } }
     );
   }
 
