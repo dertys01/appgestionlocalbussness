@@ -48,7 +48,11 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       name: productName.trim(),
       price_buy: 0,
       price_sell: parseFloat(productPrice) || 0,
-      stock_qty: parseInt(productStock) || 0,
+      // parseFloat et non parseInt : stock_qty est NUMERIC depuis la migration
+      // « vente au poids ». Ici l'unité vaut 'pce' et le navigateur bloque les
+      // décimales (step par défaut = 1), mais on ne fait pas dépendre la
+      // valeur en base d'un contrôle de formulaire.
+      stock_qty: parseFloat(productStock) || 0,
       min_stock_level: 5,
     });
 

@@ -134,6 +134,15 @@ export async function POST(req: NextRequest) {
       if (/introuvable|révoquée/.test(msg)) {
         return NextResponse.json({ error: "Ce lien est invalide." }, { status: 404 });
       }
+      // Le compte invité possède déjà SA boutique. Il ne peut donc pas devenir
+      // employé d'une autre : son basculement de tenant détruirait sa boutique.
+      // Atteignable seulement pour un compte préexistant (un compte qu'on vient
+      // de créer n'a pas d'organisation), donc jamais supprimé ci-dessus.
+      if (/possède déjà sa propre boutique/.test(msg)) {
+        return NextResponse.json({
+          error: "Ce compte possède déjà sa propre boutique : il ne peut pas en rejoindre une autre. Invitez une autre adresse, ou connectez-vous avec ce compte.",
+        }, { status: 409 });
+      }
       throw redeemError;
     }
 

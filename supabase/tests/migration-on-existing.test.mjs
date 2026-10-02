@@ -19,6 +19,7 @@ const ORDER = [
   'migration_profitability.sql',
   'migration_expenses.sql', 'migration_invitations.sql', 'migration_profitability_fix.sql',
   'migration_suppliers.sql', 'migration_credit_fns.sql', 'migration_beta_program.sql',
+  'migration_security.sql',
 ];
 
 let failed = 0;

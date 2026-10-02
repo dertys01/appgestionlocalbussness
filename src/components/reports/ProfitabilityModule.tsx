@@ -121,7 +121,11 @@ export function ProfitabilityModule() {
             <div className="text-lg font-bold text-slate-800">{formatCFA(cogs)}</div>
           </CardContent>
         </Card>
-        <Card className={`border-${profit >= 0 ? 'emerald' : 'red'}-200 bg-${profit >= 0 ? 'emerald' : 'red'}-50`}>
+        {/* Les classes doivent apparaître en toutes lettres : Tailwind scanne
+            les sources et ne génère jamais `border-${...}-200`. Interpolées,
+            les deux variantes n'étaient tout simplement pas compilées — la
+            carte perdait sa bordure et son fond. */}
+        <Card className={profit >= 0 ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}>
           <CardContent className="p-4">
             <div className={`flex items-center gap-2 text-xs mb-1 ${profit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
               <TrendingUp className="h-3.5 w-3.5" /> Marge brute

@@ -15,6 +15,17 @@ interface RestockModalProps {
   onSaved: () => void;
 }
 
+/**
+ * `stock_qty` est NUMERIC(12,3) depuis la migration « vente au poids » : un
+ * produit vendu au kilo se réapprovisionne en 1,5, pas en 1. `parseInt`
+ * tronquait, et renvoyait surtout NaN sur la virgule française — saisie
+ * « 1,5 », le modal répondait « Quantité invalide » sans jamais le dire.
+ */
+const parseQty = (raw: string): number => {
+  const n = Number(String(raw).trim().replace(',', '.'));
+  return Number.isFinite(n) ? n : NaN;
+};
+
 export function RestockModal({ product, onClose, onSaved }: RestockModalProps) {
   const { supabase, ownerId, actorName } = useSupabase();
   const [qty, setQty] = useState('');
@@ -23,8 +34,8 @@ export function RestockModal({ product, onClose, onSaved }: RestockModalProps) {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const added = parseInt(qty);
-    if (!added || added <= 0) { setError('Quantité invalide.'); return; }
+    const added = parseQty(qty);
+    if (!Number.isFinite(added) || added <= 0) { setError('Quantité invalide.'); return; }
 
     setLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
@@ -47,13 +58,24 @@ export function RestockModal({ product, onClose, onSaved }: RestockModalProps) {
     const stockBefore = fresh.stock_qty;
     const newQty = stockBefore + added;
 
-    const { error: err } = await supabase
+    const { data: updated, error: err } = await supabase
       .from('products')
       .update({ stock_qty: newQty })
       .eq('id', product.id)
-      .eq('stock_qty', stockBefore); // verrou optimiste : 0 ligne si concurrence
+      .eq('stock_qty', stockBefore) // verrou optimiste : 0 ligne si concurrence
+      .select('id');
 
     if (err) { setError(err.message); setLoading(false); return; }
+
+    // Le verrou n'a pas été tenu : quelqu'un a modifié le stock entre la
+    // lecture et l'écriture. supabase-js ne met PAS d'erreur quand 0 ligne ne
+    // correspond pas — err reste null, et on continuait à écrire un stock_logs
+    // décrivant un incrément qui n'a jamais eu lieu, puis à annoncer « succès ».
+    if (!updated || updated.length === 0) {
+      setError('Le stock a changé pendant la saisie. Vérifiez la nouvelle valeur et réessayez.');
+      setLoading(false);
+      return;
+    }
 
     const { error: logErr } = await supabase.from('stock_logs').insert({
       user_id: ownerId,
@@ -72,7 +94,7 @@ export function RestockModal({ product, onClose, onSaved }: RestockModalProps) {
       actorEmail: user.email ?? '',
       actorName,
       action: 'restock',
-      description: `Réappro. ${product.name} : +${added} unités (stock ${stockBefore} → ${newQty})`,
+      description: `Réappro. ${product.name} : +${added} ${product.unit} (stock ${stockBefore} → ${newQty})`,
     });
 
     setLoading(false);
@@ -94,29 +116,32 @@ export function RestockModal({ product, onClose, onSaved }: RestockModalProps) {
           <div className="rounded-lg bg-slate-50 p-3 text-sm">
             <div className="font-semibold text-slate-800">{product.name}</div>
             <div className="text-slate-500">
-              Stock actuel : <strong>{product.stock_qty}</strong> unités —{' '}
+              Stock actuel : <strong>{product.stock_qty}</strong> {product.unit} —{' '}
               {formatCFA(product.price_sell)}
             </div>
           </div>
 
           <div className="space-y-1">
             <label className="text-sm font-medium text-slate-700">
-              Quantité à ajouter
+              Quantité à ajouter ({product.unit})
             </label>
             <Input
               type="number"
               value={qty}
               onChange={(e) => setQty(e.target.value)}
-              placeholder="Ex: 10"
-              min="1"
+              placeholder={product.unit === 'pce' ? 'Ex: 10' : 'Ex: 1,5'}
+              // step="any" sinon le navigateur REFUSE une décimale (step par
+              // défaut vaut 1) et bloque l'envoi avec un message générique.
+              step="any"
+              min="0.001"
               required
               autoFocus
             />
           </div>
 
-          {qty && parseInt(qty) > 0 && (
+          {parseQty(qty) > 0 && (
             <div className="text-sm text-emerald-600 font-medium">
-              Nouveau stock : {product.stock_qty + parseInt(qty)} unités
+              Nouveau stock : {product.stock_qty + parseQty(qty)} {product.unit}
               <span className="block text-xs text-slate-400 font-normal">
                 (calculé sur le stock affiché, il sera revérifié à l&apos;enregistrement)
               </span>

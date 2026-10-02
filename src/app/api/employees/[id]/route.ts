@@ -36,11 +36,23 @@ export async function DELETE(
 
     if (!membership) return NextResponse.json({ error: 'Employé introuvable' }, { status: 404 });
 
-    // Supprime le lien
-    await adminClient.from('business_members').delete().eq('id', membership.id);
-
-    // Supprime le compte Supabase Auth
-    await adminClient.auth.admin.deleteUser(memberId);
+    // Supprime le lien, et rien d'autre.
+    //
+    // On ne supprime JAMAIS le compte Auth : organizations, products, sales,
+    // stock_logs… tous partent en ON DELETE CASCADE depuis auth.users, la
+    // suppression détruisait donc la boutique entière du membre. C'est arrivé
+    // dans le cas d'un patron invité comme employé ailleurs — son tenant
+    // basculait chez l'invitant, qui pouvait ensuite « virer » un compte dont
+    // dépendait sa propre boutique.
+    //
+    // Le compte reste, sans lien : il ne voit plus rien, et l'utilisateur peut
+    // se reconnecter normalement. Le poste occupé est bien libéré, puisque le
+    // plan compte members + invitations en attente.
+    const { error: delErr } = await adminClient
+      .from('business_members')
+      .delete()
+      .eq('id', membership.id);
+    if (delErr) return NextResponse.json({ error: 'Suppression impossible' }, { status: 500 });
 
     return NextResponse.json({ success: true });
   } catch (e) {

@@ -162,7 +162,9 @@ export function TeamModule() {
     // sans raison visible pour l'utilisateur.
     if (!canAddEmployee(plan, members.length + invitations.length)) {
       setFormError(
-        `Limite atteinte. Le plan ${PLAN_LABELS[plan]} autorise ${PLAN_LIMITS[plan]} employé(s), invitations en attente comprises. Passez au plan supérieur dans Paramètres.`
+        // PLAN_LIMITS[plan] est un OBJET : interpolé tel quel il s'affichait
+        // « autorise [object Object] employé(s) ». C'est .employees qu'il faut.
+        `Limite atteinte. Le plan ${PLAN_LABELS[plan]} autorise ${PLAN_LIMITS[plan].employees} employé(s), invitations en attente comprises. Passez au plan supérieur dans Paramètres.`
       );
       return;
     }
@@ -423,7 +425,7 @@ export function TeamModule() {
                         <button
                           onClick={() => setConfirmDeleteId(m.member_id)}
                           className="p-1.5 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
-                          title="Supprimer"
+                          title="Retirer de l'équipe"
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>
@@ -436,7 +438,9 @@ export function TeamModule() {
                     <Card className="border-red-200 bg-red-50 mt-1">
                       <CardContent className="p-3 flex items-center justify-between gap-3">
                         <p className="text-xs text-red-700 font-medium">
-                          Supprimer <strong>{m.member_name}</strong> ? Cette action est irréversible.
+                          Retirer <strong>{m.member_name}</strong> de l&apos;équipe ? Il perd
+                          l&apos;accès à cette boutique. Son compte est conservé : vous pourrez
+                          l&apos;inviter à nouveau.
                         </p>
                         <div className="flex gap-2 shrink-0">
                           <Button

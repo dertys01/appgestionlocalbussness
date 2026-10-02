@@ -59,8 +59,14 @@ point à vérifier après un `git pull`.
 | 16 | `migration_profitability_fix.sql` | Remplit les `unit_cost` manquants, recrée le trigger |
 | 17 | `migration_suppliers.sql` | `suppliers`, `products.supplier_id`, `products_with_supplier` |
 | 18 | `migration_credit_fns.sql` | `record_credit_sale()`, `pay_customer_debt()`, `get_customer_debts()` |
+| 19 | `migration_security.sql` | RLS sur `rate_limits`, verrou de `organizations.plan`, index unique de `subscriptions`, policies de `business_members` |
 
-`APPLY_MIGRATIONS.sql` concatène les 21 migrations pour partir d'une base
+`migration_security.sql` **doit fermer la série** : elle réécrit ce que les
+migrations précédentes ont posé (policies de `business_members`, garde de
+`redeem_invitation` par déclencheur). La placer avant laisserait les failles
+revenir à la migration suivante.
+
+`APPLY_MIGRATIONS.sql` concatène les 22 migrations pour partir d'une base
 vide. Sur une base existante, appliquer la seule migration concernée.
 
 `migration_partial_payment.sql` crée `sales.amount_received`, donc elle doit
@@ -90,7 +96,7 @@ fonction après avoir tout rejoué, et vérifie que `create_sale()` est bien rev
 `migration_profitability.sql` (colonne `list_price`) et suivre
 `migration_price_override.sql` (dont elle reprend le prix négocié).
 
-**Les 21 migrations sont rejouables** : `IF NOT EXISTS` sur les tables et les
+**Les 22 migrations sont rejouables** : `IF NOT EXISTS` sur les tables et les
 index, `DROP … IF EXISTS` avant chaque policy, chaque trigger et chaque fonction
 dont la signature a changé.
 
@@ -683,9 +689,36 @@ vrai rempart sur les routes proxy : `@upstash/ratelimit` + Redis.
 un appel direct à l'API Supabase avec la clé anon peut contourner la limite. Un
 déploiement strict demanderait la même contrainte en RLS ou via une vue.
 
-**Les features `reports` et `forecast` sont verrouillées par l'interface
-seule.** Ce sont des composants client qui interrogent Supabase directement :
-un utilisateur hors plan peut les rendre par d'autres moyens.
+**Les features `reports` et `forecast` sont verrouillées en base, pas
+seulement par l'interface.** `require_feature()` est appelée par
+`get_product_profitability()`, `get_cash_flow()`, `get_customer_debts()` et
+`get_units_sold_since()` — voir « Verrou de plan » plus haut. En revanche
+`salesHistoryDays` n'existe que dans le client : borne la requête, mais un appel
+direct à l'API avec la clé anon passe outre.
+
+**`organizations.plan` n'est écrit que par Stripe.** `migration_security.sql`
+pose un déclencheur qui refuse toute modification de la colonne venant des rôles
+`anon` et `authenticated`, et retire au client le privilège de la *citer* dans un
+`INSERT` ou un `UPDATE`. C'est ce qui empêchait de passer en Pro depuis la
+console : `current_org_plan()`, `require_feature()`,
+`check_product_limit()` et la facturation Pro lisent tous cette colonne.
+
+Ne réintroduisez donc **jamais** `plan:` dans un `insert()` ou un `update()`
+client : l'écriture part de `src/app/api/stripe/webhook/route.ts`, en service
+role. `TEST_ACTIVER_PRO.sql`, lui, se lance depuis le SQL Editor (rôle
+`postgres`), que le déclencheur laisse passer.
+
+Deux conséquences pratiques à connaître :
+
+- **`bump_rate_limit()` doit rester en SECURITY DEFINER.** La table
+  `rate_limits` n'a plus aucune policy — c'est voulu, sans elle n'importe quel
+  client pouvait la vider et repasser à l'inscription illimitée. Seules les
+  fonctions y accèdent.
+- **Un compte qui possède déjà sa boutique ne peut pas rejoindre une autre
+  équipe.** Le déclencheur `business_members_guard` le refuse, et
+  `/api/employees/[id]` ne supprime **plus** le compte Auth du membre — tous les
+  ON DELETE CASCADE partent de `auth.users`, la suppression détruisait la
+  boutique entière du membre.
 
 ## Scripts
 
