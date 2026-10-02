@@ -91,7 +91,13 @@ async function bootstrap() {
     CREATE TABLE IF NOT EXISTS auth.users (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       email text,
-      raw_user_meta_data jsonb DEFAULT '{}'::jsonb
+      raw_user_meta_data jsonb DEFAULT '{}'::jsonb,
+      -- Colonnes jeton que migration_security.sql section 6 remplit quand elles
+      -- sont NULL : GoTrue les lit dans un string non nullable.
+      confirmation_token text,
+      recovery_token text,
+      email_change_token_new text,
+      email_change text
     );
     -- request.jwt.claim.sub porte l'utilisateur courant ; permet de simuler
     -- plusieurs acteurs dans un seul test.
@@ -2430,6 +2436,82 @@ if (ventePatron && lignePatron && journalPatron && estMembre >= 1) {
     `INSERT INTO stock_logs (user_id, product_id, product_name, movement_type, quantity_change, stock_before, stock_after)
        VALUES ('${PATRON}', '${P1}', 'Réappro test', 'restock', 5, 10, 15)`, true, PATRON);
 }
+
+// ─── 20. Suppression de compte ────────────────────────────────
+// Deux pannes de bout en bout relevées dans les logs Auth, qui nommaient les
+// causes au mot près :
+//   • « converting NULL to string is unsupported » → l'API refusait de lire
+//     tout compte dont les colonnes jeton étaient NULL (créé par insertion
+//     manuelle) : liste, fiche et suppression devenaient impossibles ;
+//   • « delete on table "products" violates foreign key constraint
+//     "sale_items_product_id_fkey" » → la cascade partait de products avant
+//     sales, donc avant que sale_items ait disparu.
+console.log('\n▸ Suppression de compte');
+
+const SUP_JETABLE = '88888888-8888-4888-8888-888888888821';
+await q(`INSERT INTO auth.users (id, email, confirmation_token, recovery_token,
+         email_change_token_new, email_change)
+         VALUES ('${SUP_JETABLE}', 'jetable20@t.ci', NULL, NULL, NULL, NULL)
+         ON CONFLICT DO NOTHING`);
+const nullAvant = (await q(`SELECT count(*)::int c FROM auth.users
+  WHERE id = '${SUP_JETABLE}' AND confirmation_token IS NULL AND recovery_token IS NULL
+    AND email_change_token_new IS NULL AND email_change IS NULL`)).rows[0].c;
+check('20a. le compte jetable part avec des jetons NULL', nullAvant === 1, `${nullAvant}`);
+
+try {
+  await db.exec(readSql('migration_security.sql'));
+  const nullApres = (await q(`SELECT count(*)::int c FROM auth.users
+    WHERE confirmation_token IS NULL OR recovery_token IS NULL
+       OR email_change_token_new IS NULL OR email_change IS NULL`)).rows[0].c;
+  check('20b. la section 6 remplit les jetons NULL de auth.users', nullApres === 0, `${nullApres} reste(nt)`);
+} catch (err) {
+  failures++;
+  console.log(`  ✗ 20b. rejouage — ${err.message}`);
+}
+
+for (const [libelle, table, nom] of [
+  ['20c. sale_items → products vérifie à la fin de la transaction', 'sale_items', 'sale_items_product_id_fkey'],
+  ['20d. stock_logs → products vérifie à la fin de la transaction', 'stock_logs', 'stock_logs_product_id_fkey'],
+]) {
+  const fk = (await q(`SELECT condeferrable d, condeferred f FROM pg_constraint
+    WHERE conname = '${nom}' AND conrelid = '${table}'::regclass`)).rows[0];
+  check(libelle, fk?.d === true && fk?.f === true, JSON.stringify(fk));
+}
+
+// La cascade de bout en bout : le cas exact qui renvoyait 23503. Avant la
+// section 6, ce DELETE échouait parce que products partait alors que la ligne
+// de vente le référençait encore.
+const SUP_U = '88888888-8888-4888-8888-888888888822';
+const SUP_P = '88888888-8888-4888-8888-888888888823';
+const SUP_V = '88888888-8888-4888-8888-888888888824';
+await q(`INSERT INTO auth.users (id, email)
+         VALUES ('${SUP_U}', 'cascade20@t.ci') ON CONFLICT DO NOTHING`);
+await q(`INSERT INTO products (id, user_id, name)
+         VALUES ('${SUP_P}', '${SUP_U}', 'Produit jetable')`);
+await q(`INSERT INTO sales (id, user_id, total_amount, payment_method)
+         VALUES ('${SUP_V}', '${SUP_U}', 20, 'cash')`);
+await q(`INSERT INTO sale_items (sale_id, product_id, product_name, quantity, unit_price, subtotal)
+         VALUES ('${SUP_V}', '${SUP_P}', 'Produit jetable', 1, 20, 20)`);
+await q(`INSERT INTO stock_logs (user_id, product_id, product_name, movement_type,
+                                 quantity_change, stock_before, stock_after)
+         VALUES ('${SUP_U}', '${SUP_P}', 'Produit jetable', 'sale', -1, 5, 4)`);
+
+let suppressionOk = true;
+let motifSup = '';
+try {
+  await q(`DELETE FROM auth.users WHERE id = '${SUP_U}'`);
+} catch (err) {
+  suppressionOk = false;
+  motifSup = err.message;
+}
+check('20e. la suppression d’un compte pourvu de ventes réussit', suppressionOk, motifSup);
+
+const reste = (await q(`
+  SELECT (SELECT count(*) FROM products   WHERE user_id  = '${SUP_U}')::int
+       + (SELECT count(*) FROM sales      WHERE user_id  = '${SUP_U}')::int
+       + (SELECT count(*) FROM sale_items WHERE product_id = '${SUP_P}')::int
+       + (SELECT count(*) FROM stock_logs WHERE product_id = '${SUP_P}')::int AS c`)).rows[0].c;
+check('20f. la cascade a tout emporté', reste === 0, `${reste} ligne(s) restante(s)`);
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
 process.exit(failures ? 1 : 0);
