@@ -3785,7 +3785,7 @@ GRANT EXECUTE ON FUNCTION revoke_all_beta()      TO service_role;
 -- A exécuter dans Supabase SQL Editor
 -- ============================================================
 --
--- Quatre trous, du plus rapide au plus structurant :
+-- Six trous, du plus rapide au plus structurant :
 --
 --   1. rate_limits sans RLS      — le compteur d'inscription est effaçable
 --                                   par n'importe quel client, clé anon en
@@ -3808,6 +3808,11 @@ GRANT EXECUTE ON FUNCTION revoke_all_beta()      TO service_role;
 --                                   pour les quatre commandes. Un employé
 --                                   pouvait UPDATE et DELETE les ventes de la
 --                                   boutique, et le journal des stocks.
+--   6. suppression de compte cassée — deux pannes de bout en bout relevées dans
+--                                   les logs Auth : l'API renvoyait 500 sur
+--                                   toute lecture d'utilisateur, et la
+--                                   suppression d'un compte pourvu de ventes
+--                                   échouait sur une FK.
 --
 -- Le point 4 est refermé ici à deux niveaux (policy + trigger) et un troisième
 -- dans l'application : la suppression du compte Auth en cascade n'est plus
@@ -4014,3 +4019,46 @@ CREATE POLICY "user_stock_logs_insert" ON stock_logs
   );
 -- Ni UPDATE ni DELETE : le journal des stocks est inaltérable. Une correction
 -- se fait par un nouveau mouvement, jamais en réécrivant l'ancien.
+
+
+-- ─── 6. Suppression de compte : deux blocages de bout en bout ──
+-- Relevés dans les logs Auth (source `auth_logs`), qui nomment les deux causes
+-- au mot près.
+--
+-- a) `GET /admin/users` → 500 « converting NULL to string is unsupported »
+--    GoTrue lit confirmation_token dans un string Go non nullable : NULL lève
+--    une erreur, '' passe. Un compte créé par le formulaire d'inscription a
+--    '' ; un compte inséré à la main dans auth.users a laissé les colonnes jeton
+--    à NULL. Une seule ligne suffisait : la liste des comptes ET la fiche d'un
+--    compte devenaient illisibles, donc leur suppression depuis le Dashboard
+--    aussi. Le PATCH ne touche que les lignes incomplètes.
+--
+-- b) `DELETE /admin/users/{id}` → 500 « delete on table "products" violates
+--    foreign key constraint "sale_items_product_id_fkey" »
+--    La suppression d'un compte remonte en cascade vers products AVANT sales
+--    (l'ordre suit celui de création des contraintes, soit products avant sales
+--    dans schema.sql). products partait donc quand sale_items le référençait
+--    encore, et NO ACTION renvoyait l'erreur.
+--    Rien n'est assoupli : la règle de suppression reste NO ACTION. Seule la
+--    VÉRIFICATION est différée à la fin de la transaction, où sale_items a
+--    disparu via sale_id (déjà en CASCADE). Une suppression isolée d'un produit
+--    reste donc refusée, exactement comme avant.
+--
+-- Rejouable : COALESCE ne réécrit rien quand la valeur est déjà correcte, et
+-- ALTER CONSTRAINT réappliqué sur la même valeur ne change rien.
+
+UPDATE auth.users
+   SET confirmation_token      = COALESCE(confirmation_token, ''),
+       recovery_token          = COALESCE(recovery_token, ''),
+       email_change_token_new  = COALESCE(email_change_token_new, ''),
+       email_change            = COALESCE(email_change, '')
+ WHERE confirmation_token IS NULL
+    OR recovery_token IS NULL
+    OR email_change_token_new IS NULL
+    OR email_change IS NULL;
+
+ALTER TABLE sale_items
+  ALTER CONSTRAINT sale_items_product_id_fkey DEFERRABLE INITIALLY DEFERRED;
+
+ALTER TABLE stock_logs
+  ALTER CONSTRAINT stock_logs_product_id_fkey DEFERRABLE INITIALLY DEFERRED;

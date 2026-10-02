@@ -59,7 +59,7 @@ point à vérifier après un `git pull`.
 | 16 | `migration_profitability_fix.sql` | Remplit les `unit_cost` manquants, recrée le trigger |
 | 17 | `migration_suppliers.sql` | `suppliers`, `products.supplier_id`, `products_with_supplier` |
 | 18 | `migration_credit_fns.sql` | `record_credit_sale()`, `pay_customer_debt()`, `get_customer_debts()` |
-| 19 | `migration_security.sql` | RLS sur `rate_limits`, verrou de `organizations.plan`, index unique de `subscriptions`, policies de `business_members` |
+| 19 | `migration_security.sql` | RLS sur `rate_limits`, verrou de `organizations.plan`, index unique de `subscriptions`, policies de `business_members`, réparation de la suppression de compte (jetons `auth.users`, FK différées) |
 
 `migration_security.sql` **doit fermer la série** : elle réécrit ce que les
 migrations précédentes ont posé (policies de `business_members`, garde de
