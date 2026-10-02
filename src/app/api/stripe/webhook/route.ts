@@ -10,6 +10,22 @@ function normalizePlan(raw: unknown): Plan {
 }
 
 /**
+ * Le plan réellement souscrit, lu sur le prix et non sur les metadata.
+ *
+ * Les metadata viennent du client Checkout : elles disent ce que la session
+ * *demandait*, pas ce que Stripe a *vendu*. Le price_id, lui, ne ment pas —
+ * c'est lui qui est facturé. On retombe sur les metadata quand les variables
+ * STRIPE_PRICE_* ne sont pas renseignées, pour ne pas casser un déploiement
+ * qui ne les a pas encore.
+ */
+function planFromPrice(priceId: string | undefined): Plan | null {
+  if (!priceId) return null;
+  if (priceId === process.env.STRIPE_PRICE_STARTER) return 'starter';
+  if (priceId === process.env.STRIPE_PRICE_PRO) return 'pro';
+  return null;
+}
+
+/**
  * Depuis l'API Stripe 2026-03-25, `current_period_end` n'existe plus sur
  * l'objet `Subscription` : la période est portée par chaque `SubscriptionItem`.
  * Lire `sub.current_period_end` renvoie `undefined` et faisait planter
@@ -18,6 +34,20 @@ function normalizePlan(raw: unknown): Plan {
 function subscriptionPeriodEnd(sub: { items?: { data?: Array<{ current_period_end?: number }> } }): string | null {
   const ts = sub.items?.data?.[0]?.current_period_end;
   return typeof ts === 'number' && Number.isFinite(ts) ? new Date(ts * 1000).toISOString() : null;
+}
+
+// supabase-js ne LÈVE jamais : il renvoie { error } dans le résultat. Chaque
+// écriture passait donc sous silence — c'est comme ça que subscriptions est
+// restée vide malgré un upsert permanent, et que le portail abonnement
+// répondait 404 sans qu'aucun log n'en parle.
+//
+// must() transforme chaque { error } en exception, que le catch ci-dessous
+// stocke dans webhook_events et que la réponse 500 renvoie à Stripe.
+type PgResult = { error: { message: string } | null };
+async function must<T extends PgResult>(label: string, pending: PromiseLike<T>): Promise<T> {
+  const res = await pending;
+  if (res.error) throw new Error(`${label} — ${res.error.message}`);
+  return res;
 }
 
 export async function POST(req: NextRequest) {
@@ -40,18 +70,40 @@ export async function POST(req: NextRequest) {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 
+  // ── Idempotence ──
+  // Stripe renvoie le même événement jusqu'à ce qu'il reçoive un 2xx, et le
+  // rejoue aussi après un 500. Sans ce garde, un checkout rejoué réécrit les
+  // abonnements — et un événement en retard peut rétrograder un plan déjà
+  // payant. Seul un événement déjà traité avec succès est court-circuité :
+  // un 'error' est justement celui qu'on veut rejouer.
+  const { data: prior, error: priorError } = await adminClient
+    .from('webhook_events')
+    .select('status')
+    .eq('event_id', event.id)
+    .maybeSingle();
+
+  if (priorError) {
+    // On ne sait pas si on a déjà traité : on n'écrit rien et on renvoie 500,
+    // Stripe rejouera. Traiter à l'aveugle reviendrait à perdre l'idempotence.
+    return NextResponse.json({ error: 'journal inaccessible' }, { status: 500 });
+  }
+  if (prior?.status === 'processed') {
+    return NextResponse.json({ received: true, duplicate: true });
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const eventData = event.data.object as any;
   const orgId = eventData.metadata?.org_id ?? null;
   const activeStatuses = ['active', 'trialing'];
 
   // Log l'événement reçu (idempotent via event_id unique)
-  await adminClient.from('webhook_events').upsert({
+  const { error: logError } = await adminClient.from('webhook_events').upsert({
     event_id: event.id,
     event_type: event.type,
     org_id: orgId,
     status: 'received',
   }, { onConflict: 'event_id', ignoreDuplicates: true });
+  if (logError) return NextResponse.json({ error: 'journal inaccessible' }, { status: 500 });
 
   let processError: string | null = null;
 
@@ -59,11 +111,13 @@ export async function POST(req: NextRequest) {
     switch (event.type) {
       case 'checkout.session.completed': {
         if (!orgId) break;
-        const plan = normalizePlan(eventData.metadata?.plan);
         const subId = eventData.subscription as string;
         const sub = await stripe.subscriptions.retrieve(subId);
 
-        await adminClient.from('subscriptions').upsert({
+        const priceId = sub.items?.data?.[0]?.price?.id as string | undefined;
+        const plan = planFromPrice(priceId) ?? normalizePlan(eventData.metadata?.plan);
+
+        await must('subscriptions', adminClient.from('subscriptions').upsert({
           org_id: orgId,
           stripe_customer_id: eventData.customer as string,
           stripe_subscription_id: subId,
@@ -71,18 +125,27 @@ export async function POST(req: NextRequest) {
           status: sub.status,
           current_period_end: subscriptionPeriodEnd(sub),
           updated_at: new Date().toISOString(),
-        }, { onConflict: 'org_id' });
+        }, { onConflict: 'org_id' }));
 
-        await adminClient.from('organizations').update({ plan }).eq('id', orgId);
+        // Un paiement `incomplete` ne donne pas le plan : le client n'a pas
+        // encore été débité. customer.subscription.updated l'activera au
+        // moment où Stripe encaisse réellement. Donner le plan ici, c'est
+        // offrir Pro à quelqu'un dont la carte a été refusée.
+        const effectivePlan = activeStatuses.includes(sub.status) ? plan : 'free';
+        await must('organizations', adminClient
+          .from('organizations')
+          .update({ plan: effectivePlan })
+          .eq('id', orgId));
         break;
       }
 
       case 'customer.subscription.updated': {
         if (!orgId) break;
-        const plan = normalizePlan(eventData.metadata?.plan);
         const status = eventData.status as string;
+        const priceId = eventData.items?.data?.[0]?.price?.id as string | undefined;
+        const plan = planFromPrice(priceId) ?? normalizePlan(eventData.metadata?.plan);
 
-        await adminClient.from('subscriptions').upsert({
+        await must('subscriptions', adminClient.from('subscriptions').upsert({
           org_id: orgId,
           stripe_customer_id: (eventData.customer as string) ?? null,
           stripe_subscription_id: eventData.id,
@@ -90,19 +153,25 @@ export async function POST(req: NextRequest) {
           status,
           current_period_end: subscriptionPeriodEnd(eventData),
           updated_at: new Date().toISOString(),
-        }, { onConflict: 'org_id' });
+        }, { onConflict: 'org_id' }));
 
         const effectivePlan = activeStatuses.includes(status) ? plan : 'free';
-        await adminClient.from('organizations').update({ plan: effectivePlan }).eq('id', orgId);
+        await must('organizations', adminClient
+          .from('organizations')
+          .update({ plan: effectivePlan })
+          .eq('id', orgId));
         break;
       }
 
       case 'customer.subscription.deleted': {
         if (!orgId) break;
-        await adminClient.from('subscriptions').update({
+        await must('subscriptions', adminClient.from('subscriptions').update({
           plan: 'free', status: 'canceled', updated_at: new Date().toISOString(),
-        }).eq('org_id', orgId);
-        await adminClient.from('organizations').update({ plan: 'free' }).eq('id', orgId);
+        }).eq('org_id', orgId));
+        await must('organizations', adminClient
+          .from('organizations')
+          .update({ plan: 'free' })
+          .eq('id', orgId));
         break;
       }
     }
@@ -115,11 +184,19 @@ export async function POST(req: NextRequest) {
     console.error('[Webhook] Erreur traitement', event.type, e);
   }
 
-  // Mettre à jour le statut du log
-  await adminClient.from('webhook_events').update({
+  // Mettre à jour le statut du log. Un échec ici ne peut pas passer pour un
+  // succès : sinon on répondrait 200 à un événement que la prochaine tentative
+  // jugera « déjà traité ».
+  const { error: logUpdateError } = await adminClient.from('webhook_events').update({
     status: processError ? 'error' : 'processed',
     error: processError,
   }).eq('event_id', event.id);
+  if (logUpdateError && !processError) processError = logUpdateError.message;
+
+  // 500 et non 200 : Stripe rejoue tant qu'il reçoit un échec. Répondre 200
+  // ici signifierait qu'un paiement confirmé reste en plan Free pour toujours,
+  // sans que personne ne le sache.
+  if (processError) return NextResponse.json({ error: 'traitement échoué' }, { status: 500 });
 
   return NextResponse.json({ received: true });
 }

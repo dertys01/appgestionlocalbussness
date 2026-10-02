@@ -63,7 +63,8 @@ export default function RegisterPage() {
         id: userId,
         name: orgName.trim(),
         slug,
-        plan: 'free',
+        // plan absent volontairement : colonne à 'free' par défaut, et le
+        // client n'a plus le privilège de la citer (migration_security.sql).
         onboarding_done: false,
       });
 

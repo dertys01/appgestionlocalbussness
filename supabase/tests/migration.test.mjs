@@ -44,6 +44,11 @@ const ORDER = [
   // Doit etre applique apres organizations (schema.sql) : son trigger
   // s'execute sur chaque creation de boutique.
   'migration_beta_program.sql',
+  // DOIT RESTER DERNIERE. Elle ferme les failles ouvertes plus tôt : RLS sur
+  // rate_limits, verrou de organizations.plan, index unique sur subscriptions,
+  // policies de business_members et la garde de redeem_invitation(). La placer
+  // avant redeviendrait ces failles a la seconde migration suivante.
+  'migration_security.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -2236,6 +2241,195 @@ console.log('\n▸ Programme bêta');
 // Le harnais referme derrière lui : la section bêta est la seule qui ouvre le
 // programme, et un test qui suivrait ne doit pas hériter de l'état.
 await e(`UPDATE beta_program SET open = false WHERE id = 1`);
+
+// ─── 19. Durcissement sécurité ──────────────────────────────
+//
+// Le harnais a fait GRANT ALL sur toutes les tables (section 4) pour pouvoir
+// tester la RLS. C'est exactement l'état d'une base Supabase vierge : les
+// privilèges par défaut sont posés à la création des tables, et
+// migration_security.sql ne les restreint qu'ensuite. On rejoue donc la
+// migration dans cet état — c'est l'ordre réel du déploiement, et c'est le seul
+// moyen d'y tester les privilèges : une assertion posée avant le GRANT ALL
+// passerait pour la mauvaise raison.
+console.log('\n▸ Durcissement sécurité');
+
+const readSql = (f) =>
+  fs.readFileSync(path.join(SQL_DIR, f), 'utf8').replace(/CREATE EXTENSION[^;]*;/gi, '');
+
+try {
+  await db.exec(readSql('migration_security.sql'));
+  console.log('  ✓ 19a. migration_security.sql se rejoue après les grants par défaut');
+} catch (err) {
+  failed++;
+  console.log(`  ✗ 19a. rejouage — ${err.message}`);
+}
+
+const SEC_PATRON = '66666666-6666-4666-8666-666666666666';
+const SEC_AUTRE = '77777777-7777-4777-8777-777777777777';
+const SEC_SANS_ORG = '42424242-4242-4242-4242-424242424242';
+
+await q(`INSERT INTO auth.users (id, email)
+  VALUES ('${SEC_PATRON}', 'sec1@t.ci'), ('${SEC_AUTRE}', 'sec2@t.ci'),
+         ('${SEC_SANS_ORG}', 'sec3@t.ci')
+  ON CONFLICT DO NOTHING`);
+await q(`INSERT INTO organizations (id, name, slug)
+  VALUES ('${SEC_PATRON}', 'Securite', 'securite-19') ON CONFLICT DO NOTHING`);
+// Le programme bêta est refermé ci-dessus : la boutique naît en gratuit.
+const planInitial = (await q(`SELECT plan FROM organizations WHERE id='${SEC_PATRON}'`)).rows[0].plan;
+check('19b. la boutique de test démarre en gratuit', planInitial === 'free', planInitial);
+
+// 1. rate_limits : la faille la plus simple du projet.
+//    D'abord prouver que la table n'est PAS vide : sans ça, « invisible » et
+//    « aucun compteur » se confondraient et le test passerait pour la bonne
+//    raison par accident.
+await e(`INSERT INTO rate_limits (key, count, reset_at)
+         VALUES ('securite:19', 1, now() + interval '1 hour')
+         ON CONFLICT (key) DO NOTHING`);
+const nbCompteurs = (await q(`SELECT count(*)::int c FROM rate_limits`)).rows[0].c;
+check('19c. la table rate_limits contient des compteurs', nbCompteurs >= 1, `${nbCompteurs}`);
+await canRead('19d. rate_limits est invisible pour un client',
+  `SELECT count(*) FROM rate_limits`, false, SEC_PATRON);
+await canWrite('19e. rate_limits ne peut pas être vidée depuis le navigateur',
+  `DELETE FROM rate_limits`, false, SEC_PATRON);
+
+// 2. organizations.plan : la faille qui rendait Stripe facultatif.
+await canWrite('19f. un client ne peut pas passer sa boutique en pro',
+  `UPDATE organizations SET plan = 'pro' WHERE id = '${SEC_PATRON}'`, false, SEC_PATRON);
+const planApres = (await q(`SELECT plan FROM organizations WHERE id='${SEC_PATRON}'`)).rows[0].plan;
+check('19g. le plan est resté gratuit', planApres === 'free', planApres);
+
+// Le verrou ne doit porter que sur plan : le reste de la fiche reste à jour.
+await canWrite('19h. le patron peut toujours renommer sa boutique',
+  `UPDATE organizations SET name = 'Securite 19' WHERE id = '${SEC_PATRON}'`, true, SEC_PATRON);
+await canWrite('19i. mais pas toucher au numéro de facture',
+  `UPDATE organizations SET invoice_counter = 999 WHERE id = '${SEC_PATRON}'`, false, SEC_PATRON);
+await canWrite('19j. un client ne peut pas CITER la colonne plan',
+  `INSERT INTO organizations (id, name, slug, plan)
+     VALUES ('${SEC_AUTRE}', 'Pirate', 'pirate-19', 'pro')`, false, SEC_AUTRE);
+await canWrite('19k. il peut en revanche créer sa boutique en gratuit',
+  `INSERT INTO organizations (id, name, slug)
+     VALUES ('${SEC_AUTRE}', 'Sa boutique', 'sa-boutique-19')`, true, SEC_AUTRE);
+
+// Le service role, lui, doit continuer : c'est le webhook Stripe.
+await e(`GRANT USAGE ON SCHEMA public TO service_role;
+         GRANT ALL ON ALL TABLES IN SCHEMA public TO service_role;
+         GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO service_role;`);
+await q(`SELECT set_config('request.jwt.claim.sub', '${SEC_PATRON}', false)`);
+await e('SET ROLE service_role');
+let svcAffected = -1;
+let svcErr = '';
+try {
+  const r = await q(`UPDATE organizations SET plan = 'starter' WHERE id = '${SEC_PATRON}'`);
+  svcAffected = r.affectedRows ?? 0;
+} catch (ex) { svcErr = ex.message; }
+await e('RESET ROLE');
+check('19l. le service role (webhook Stripe) peut toujours changer le plan',
+  svcAffected > 0, svcErr || `${svcAffected} ligne(s)`);
+await q(`UPDATE organizations SET plan = 'free' WHERE id = '${SEC_PATRON}'`);
+
+// 3. subscriptions : l'upsert du webhook, qui échouait en silence.
+const ux = (await q(
+  `SELECT count(*)::int c FROM pg_indexes
+    WHERE tablename = 'subscriptions' AND indexname = 'ux_subscriptions_org'`
+)).rows[0].c;
+check('19m. index unique sur subscriptions(org_id)', ux === 1, `${ux}`);
+
+let upsertMsg = '';
+try {
+  await q(`INSERT INTO subscriptions (org_id, plan, status)
+             VALUES ('${SEC_PATRON}', 'free', 'active')
+           ON CONFLICT (org_id) DO UPDATE
+             SET plan = 'pro', status = 'active', updated_at = now()`);
+} catch (ex) { upsertMsg = ex.message; }
+check('19n. l\'upsert du webhook (ON CONFLICT org_id) fonctionne enfin',
+  upsertMsg === '', upsertMsg || 'refusé');
+const nbAb = (await q(
+  `SELECT count(*)::int c FROM subscriptions WHERE org_id = '${SEC_PATRON}'`
+)).rows[0].c;
+check('19o. une seule ligne par boutique', nbAb === 1, `${nbAb}`);
+
+// 4. business_members : le rattachement arbitraire.
+await canWrite('19p. un client ne peut pas rattacher un compte à son équipe',
+  `INSERT INTO business_members (owner_id, member_id, member_name)
+     VALUES ('${SEC_PATRON}', '${SEC_SANS_ORG}', 'Forcé')`, false, SEC_PATRON);
+
+// Isolé du RLS, en superuser : ici seul le déclencheur peut refuser.
+let gardeMsg = '';
+try {
+  await q(`INSERT INTO business_members (owner_id, member_id, member_name)
+             VALUES ('${SEC_PATRON}', '${SEC_AUTRE}', 'Patron détourne')`);
+} catch (ex) { gardeMsg = ex.message; }
+check('19q. rattacher un compte qui possède déjà sa boutique est refusé',
+  /possède déjà sa propre boutique/.test(gardeMsg), gardeMsg || 'insertion acceptée');
+
+// Et la garde ne doit pas tout bloquer : un compte sans boutique reste
+// rattachable, sinon plus aucune invitation ne passerait.
+let normalMsg = '';
+try {
+  await q(`INSERT INTO business_members (owner_id, member_id, member_name)
+             VALUES ('${SEC_PATRON}', '${SEC_SANS_ORG}', 'Caissière')`);
+} catch (ex) { normalMsg = ex.message; }
+check('19r. un compte sans boutique est toujours rattachable',
+  normalMsg === '', normalMsg);
+
+// Le SELECT du patron survit à la suppression de la policy FOR ALL : sans lui,
+// l'équipe devient illisible pour celui qui la dirige.
+await canRead('19s. le patron lit toujours son équipe',
+  `SELECT count(*) FROM business_members WHERE owner_id = '${SEC_PATRON}'`, true, SEC_PATRON);
+await canRead('19t. mais pas celle d\'un autre',
+  `SELECT count(*) FROM business_members WHERE owner_id = '${PATRON}'`, false, SEC_AUTRE);
+
+// 5. sales / sale_items / stock_logs : créées SANS clause FOR, donc pour les
+//    quatre commandes. Leur prédicat `user_id = get_business_owner_id()`
+//    renvoie le PATRON pour un employé — celui-ci passait donc dans le USING
+//    comme dans le WITH CHECK, et pouvait UPDATE/DELETE les ventes de la
+//    boutique depuis le navigateur, avec la seule clé anon.
+// On cherche explicitement une vente POURVUE de lignes : un insert direct
+// dans `sales` (fixtures de certains tests) n'en crée pas.
+const lignePatron = (await q(
+  `SELECT si.id FROM sale_items si
+     JOIN sales s ON s.id = si.sale_id
+    WHERE s.user_id = '${PATRON}' LIMIT 1`)).rows[0]?.id;
+const ventePatron = lignePatron
+  ? (await q(`SELECT sale_id FROM sale_items WHERE id = '${lignePatron}'`)).rows[0]?.sale_id
+  : undefined;
+const journalPatron = (await q(
+  `SELECT id FROM stock_logs WHERE user_id = '${PATRON}' ORDER BY created_at LIMIT 1`)).rows[0]?.id;
+const estMembre = (await q(
+  `SELECT count(*)::int c FROM business_members
+    WHERE owner_id = '${PATRON}' AND member_id = '${EMPLOYE}'`)).rows[0].c;
+
+check('19u. fixtures : vente, ligne et mouvement de stock du patron',
+  !!ventePatron && !!lignePatron && !!journalPatron,
+  `vente=${!!ventePatron} ligne=${!!lignePatron} journal=${!!journalPatron}`);
+check('19v. fixture : l\'employé est bien dans l\'équipe du patron',
+  estMembre >= 1, `${estMembre}`);
+
+if (ventePatron && lignePatron && journalPatron && estMembre >= 1) {
+  await canWrite('19w. un employé ne peut pas modifier une vente',
+    `UPDATE sales SET total_amount = 1 WHERE id = '${ventePatron}'`, false, EMPLOYE);
+  await canWrite('19x. ni la supprimer',
+    `DELETE FROM sales WHERE id = '${ventePatron}'`, false, EMPLOYE);
+  await canRead('19y. mais il lit toujours les ventes',
+    `SELECT count(*) FROM sales WHERE id = '${ventePatron}'`, true, EMPLOYE);
+  await canRead('19z. et leurs lignes',
+    `SELECT count(*) FROM sale_items WHERE id = '${lignePatron}'`, true, EMPLOYE);
+  await canWrite('19aa. il ne peut pas modifier une ligne de vente',
+    `UPDATE sale_items SET quantity = 99 WHERE id = '${lignePatron}'`, false, EMPLOYE);
+  await canWrite('19bb. ni le journal des stocks',
+    `UPDATE stock_logs SET quantity_change = 0 WHERE id = '${journalPatron}'`, false, EMPLOYE);
+  await canWrite('19cc. ni le supprimer — le journal est inaltérable',
+    `DELETE FROM stock_logs WHERE id = '${journalPatron}'`, false, EMPLOYE);
+  await canWrite('19dd. ni y insérer un mouvement (can_manage_products() faux)',
+    `INSERT INTO stock_logs (user_id, product_id, product_name, movement_type, quantity_change, stock_before, stock_after)
+       VALUES ('${PATRON}', '${P1}', 'Mouvement indu', 'adjustment', 99, 0, 99)`, false, EMPLOYE);
+
+  // Le patron, lui, continue : c'est par ce INSERT que passent le
+  // réapprovisionnement et l'inventaire.
+  await canWrite('19ee. le patron insère bien un mouvement de stock',
+    `INSERT INTO stock_logs (user_id, product_id, product_name, movement_type, quantity_change, stock_before, stock_after)
+       VALUES ('${PATRON}', '${P1}', 'Réappro test', 'restock', 5, 10, 15)`, true, PATRON);
+}
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
 process.exit(failures ? 1 : 0);

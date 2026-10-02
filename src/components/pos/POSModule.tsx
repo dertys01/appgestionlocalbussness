@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
   ShoppingCart,
   Trash2,
@@ -34,6 +34,12 @@ interface POSModuleProps {
    * barre latérale changeait d'onglet mais ne remplissait rien.
    */
   addToCartRequest?: { productId: string; token: number } | null;
+  /**
+   * Signale au parent que la demande ci-dessus a été traitée, pour qu'il la
+   * remette à null. Sans ça la requête survit au remontage du POS (changement
+   * d'onglet) et le produit réapparaît dans un panier vide.
+   */
+  onAddToCartHandled?: () => void;
 }
 
 type PaymentMethod = 'cash' | 'momo' | 'credit';
@@ -93,7 +99,7 @@ function readableSaleError(message: string): string {
   return "La vente n'a pas été enregistrée. Aucune modification n'a été appliquée.";
 }
 
-export function POSModule({ products, onSaleComplete, addToCartRequest }: POSModuleProps) {
+export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToCartHandled }: POSModuleProps) {
   const { supabase, ownerId, actorName, org } = useSupabase();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [scanError, setScanError] = useState('');
@@ -224,8 +230,24 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
   // Demande d'ajout venue du scanner (page parente). Le `token` permet de
   // re-scanner deux fois le même SKU : comparer la seule valeur de productId
   // ferait ignorer le second scan.
+  //
+  // La requête est CONSOMMÉE, pas simplement lue : addToCartRequest ne change
+  // jamais dans le parent, alors que products, lui, est remplacé par un
+  // nouveau tableau à chaque fetchProducts() — et onSaleComplete pointe
+  // justement sur fetchProducts. Sans ce jeton, l'enchaînement « scan →
+  // encaissement → setCart([]) → fetchProducts » relançait l'effet et
+  // réajoutait le produit scanné au panier qu'on venait de vider.
+  const consumedToken = useRef<number | null>(null);
   useEffect(() => {
     if (!addToCartRequest) return;
+    // Déjà traité : on ne revient pas, quel que soit le nombre de refreshs.
+    if (consumedToken.current === addToCartRequest.token) return;
+    // Consommé d'office, y compris dans les branches de refus : sinon le
+    // message « rupture de stock » réapparaîtrait à chaque actualisation, et
+    // la requête survivrait au remontage du composant.
+    consumedToken.current = addToCartRequest.token;
+    onAddToCartHandled?.();
+
     const product = products.find((p) => p.id === addToCartRequest.productId);
     if (!product) {
       setScanError('Produit introuvable.');
@@ -237,7 +259,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest }: POSMod
     }
     setScanError('');
     addToCart(product);
-  }, [addToCartRequest, products, addToCart]);
+  }, [addToCartRequest, products, addToCart, onAddToCartHandled]);
 
   const removeFromCart = useCallback((productId: string) => {
     setCart((prev) => prev.filter((i) => i.product.id !== productId));

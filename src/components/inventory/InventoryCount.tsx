@@ -56,7 +56,7 @@ export function InventoryCount({ products, onComplete }: InventoryCountProps) {
     setEntries((prev) =>
       prev.map((e) =>
         e.product.id === productId
-          ? { ...e, counted: value === '' ? '' : Math.max(0, parseInt(value) || 0) }
+          ? { ...e, counted: value === '' ? '' : Math.max(0, Number(value.replace(',', '.')) || 0) }
           : e
       )
     );
@@ -243,6 +243,7 @@ export function InventoryCount({ products, onComplete }: InventoryCountProps) {
                   <input
                     type="number"
                     min="0"
+                    step="any"
                     value={counted}
                     onChange={(e) => setCount(entry.product.id, e.target.value)}
                     placeholder="—"

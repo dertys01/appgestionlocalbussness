@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -46,7 +46,7 @@ type Tab = 'dashboard' | 'pos' | 'inventory' | 'sales' | 'debts' | 'reports' | '
 type ReportView = 'sales' | 'profit' | 'expenses';
 
 export default function HomePage() {
-  const { supabase, user, loading, isEmployee, canManageProducts, org, plan } = useSupabase();
+  const { supabase, user, loading, isEmployee, canManageProducts, org, plan, orgError } = useSupabase();
   const [tab, setTab] = useState<Tab>('dashboard');
   const [reportView, setReportView] = useState<ReportView>('sales');
   const [products, setProducts] = useState<Product[]>([]);
@@ -57,6 +57,13 @@ export default function HomePage() {
   const [productsError, setProductsError] = useState('');
   // Demande transmise au POS pour y ajouter le produit scanné.
   const [addToCartRequest, setAddToCartRequest] = useState<{ productId: string; token: number } | null>(null);
+  // Compteur strictement croissant : deux scans dans la même milliseconde ne
+  // doivent pas recevoir le même jeton, sinon le POS croirait une demande déjà
+  // traitée et n'ajouterait que la première.
+  const scanSeq = useRef(0);
+  // Identité stable : passé en dépendance de l'effet du POS, un arrow inline
+  // le relancerait à chaque render.
+  const handleAddToCartHandled = useCallback(() => setAddToCartRequest(null), []);
 
   // Modals produits
   const [showProductForm, setShowProductForm] = useState(false);
@@ -120,7 +127,8 @@ export default function HomePage() {
       setTab('pos');
       // Le panier vit dans POSModule : on passe par une requête datée, sinon
       // scanner deux fois le même produit n'ajouterait qu'une unité.
-      setAddToCartRequest({ productId: product.id, token: Date.now() });
+      scanSeq.current += 1;
+      setAddToCartRequest({ productId: product.id, token: scanSeq.current });
     } else {
       setScanNotFound(`Aucun produit trouvé pour le code-barres : ${sku}`);
     }
@@ -157,8 +165,11 @@ export default function HomePage() {
   }
 
   // Org absente = register interrompu avant la création de l'org
-  if (!isEmployee && !org && !loading) {
-    return <OrgSetupRequired />;
+  // orgError = la lecture a ÉCHOUÉ. Les deux ne disent pas la même chose :
+  // afficher « Configuration requise » dans le second cas invite à recréer une
+  // boutique qui existe déjà, et l'INSERT échoue sur la clé primaire.
+  if (!isEmployee && !org) {
+    return orgError ? <OrgLoadFailed error={orgError} /> : <OrgSetupRequired />;
   }
 
   const NAV_ITEMS = [
@@ -258,16 +269,20 @@ export default function HomePage() {
       <main className="flex-1 ml-16 lg:ml-56 min-h-screen bg-slate-50">
         <div className="p-4 max-w-5xl mx-auto">
 
+          {/* Erreur de chargement des produits : HORS condition d'onglet.
+              Rendue uniquement dans le dashboard, elle était invisible dès
+              qu'un autre onglet était actif — l'utilisateur voyait une liste
+              vide sans aucune explication. */}
+          {productsError && (
+            <p className="mb-4 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              Impossible de charger les produits : {productsError}
+            </p>
+          )}
+
           {/* ── Dashboard ── */}
           {tab === 'dashboard' && (
             <div className="space-y-4">
               <h2 className="text-xl font-bold text-slate-800">Tableau de bord</h2>
-
-              {productsError && (
-                <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                  Impossible de charger les produits : {productsError}
-                </p>
-              )}
 
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 <Card className="border-slate-200">
@@ -346,6 +361,7 @@ export default function HomePage() {
                 products={products}
                 onSaleComplete={fetchProducts}
                 addToCartRequest={addToCartRequest}
+                onAddToCartHandled={handleAddToCartHandled}
               />
             </div>
           )}
@@ -354,16 +370,22 @@ export default function HomePage() {
             <div className="space-y-4">
               <div className="flex items-center justify-between">
                 <h2 className="text-xl font-bold text-slate-800">Inventaire</h2>
-                <button
-                  onClick={() => setShowInventoryCount(!showInventoryCount)}
-                  className={`text-sm font-medium px-3 py-1.5 rounded-lg border transition-colors ${
-                    showInventoryCount
-                      ? 'bg-indigo-600 text-white border-indigo-600'
-                      : 'border-slate-200 text-slate-600 hover:bg-slate-50'
-                  }`}
-                >
-                  {showInventoryCount ? 'Voir le catalogue' : '📋 Faire un inventaire'}
-                </button>
+                {/* Caché pour un simple caissier : l'inventaire réécrit les
+                    stocks, et products_update impose déjà can_manage_products()
+                    en base. Proposer le bouton, c'était offrir une action que la
+                    base refuse — l'erreur n'apparaissait qu'à l'enregistrement. */}
+                {canManageProducts && (
+                  <button
+                    onClick={() => setShowInventoryCount(!showInventoryCount)}
+                    className={`text-sm font-medium px-3 py-1.5 rounded-lg border transition-colors ${
+                      showInventoryCount
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'border-slate-200 text-slate-600 hover:bg-slate-50'
+                    }`}
+                  >
+                    {showInventoryCount ? 'Voir le catalogue' : '📋 Faire un inventaire'}
+                  </button>
+                )}
               </div>
               {showInventoryCount ? (
                 <InventoryCount products={products} onComplete={() => { setShowInventoryCount(false); fetchProducts(); }} />
@@ -472,6 +494,48 @@ export default function HomePage() {
 }
 
 // ── Fallback org absente ──
+// Lecture de la boutique en échec : réseau coupé, projet Supabase en pause,
+// policy refusée. On ne propose PAS de recréer la boutique — elle existe.
+function OrgLoadFailed({ error }: { error: string }) {
+  const { supabase, refreshOrg } = useSupabase();
+  const [retrying, setRetrying] = useState(false);
+
+  const retry = async () => {
+    setRetrying(true);
+    await refreshOrg();
+    setRetrying(false);
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 to-slate-100">
+      <div className="w-full max-w-sm text-center space-y-4">
+        <AlertTriangle className="mx-auto h-10 w-10 text-amber-500" aria-hidden="true" />
+        <h1 className="text-xl font-bold text-slate-800">Lecture de la boutique impossible</h1>
+        <p className="text-slate-600 text-sm">
+          Votre boutique existe, mais elle n&apos;a pas pu être chargée.
+          Réessayez avant toute chose — ne créez pas un second établissement.
+        </p>
+        <p className="text-red-600 text-xs break-words">{error}</p>
+        <div className="space-y-2">
+          <Button
+            onClick={retry}
+            disabled={retrying}
+            className="w-full bg-indigo-600 hover:bg-indigo-700"
+          >
+            {retrying ? 'Nouvelle tentative…' : 'Réessayer'}
+          </Button>
+          <button
+            onClick={() => supabase.auth.signOut()}
+            className="w-full text-sm text-slate-400 hover:text-slate-600 underline"
+          >
+            Se déconnecter
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function OrgSetupRequired() {
   const { supabase, user, refreshOrg } = useSupabase();
   const [name, setName] = useState('');
@@ -484,8 +548,11 @@ function OrgSetupRequired() {
     setLoading(true);
     setError('');
     const slug = name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') + '-' + Math.random().toString(36).slice(2, 6);
+    // plan n'est pas nommé ici : la colonne vaut déjà 'free' par défaut, et le
+    // client n'a plus le privilège de la citer (migration_security.sql). C'est
+    // Stripe, en service role, qui écrit dans cette colonne.
     const { error: err } = await supabase.from('organizations').insert({
-      id: user.id, name: name.trim(), slug, plan: 'free', onboarding_done: false,
+      id: user.id, name: name.trim(), slug, onboarding_done: false,
     });
     if (err) { setError(err.message); setLoading(false); return; }
     // refreshOrg recharge l'org via le contexte et laisse la SPA reprendre la
@@ -623,33 +690,51 @@ function LoginPage() {
     setError('');
     setInfo('');
 
-    const res = await fetch('/api/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password, businessName }),
-    });
-    const json = await res.json();
+    try {
+      const res = await fetch('/api/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, businessName }),
+      });
 
-    if (!res.ok) {
-      setError(json.error ?? 'Erreur lors de la création du compte.');
+      // res.json() LÈVE si le corps n'est pas du JSON : page HTML servie par
+      // un proxy, 502, coupure. L'exception s'échappait de l'événement,
+      // setLoading(false) n'était jamais atteint — le formulaire tournait
+      // indéfiniment sans le moindre message.
+      let json: { error?: string; access_token?: string; refresh_token?: string } = {};
+      try { json = await res.json(); } catch { /* corps non JSON : on garde {} */ }
+
+      if (!res.ok) {
+        setError(json.error ?? `Erreur lors de la création du compte (HTTP ${res.status}).`);
+        return;
+      }
+
+      if (json.error) {
+        // Compte créé mais login auto échoué → rediriger vers login
+        setInfo(json.error);
+        switchMode('login');
+        return;
+      }
+
+      // res.ok mais pas de jeton : compte créé, session non ouverte. Sans ce
+      // garde, setSession recevait undefined et restait silencieusement muet.
+      if (!json.access_token || !json.refresh_token) {
+        setError('Compte créé, mais la session n\'a pas pu être ouverte. Connectez-vous.');
+        switchMode('login');
+        return;
+      }
+
+      const { error: sessErr } = await supabase.auth.setSession({
+        access_token: json.access_token,
+        refresh_token: json.refresh_token,
+      });
+      if (sessErr) setError(`Compte créé, mais connexion impossible : ${sessErr.message}`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Réseau indisponible. Réessayez.');
+    } finally {
+      // Toujours atteint : plus de rotation infinie sur le bouton.
       setLoading(false);
-      return;
     }
-
-    if (json.error) {
-      // Compte créé mais login auto échoué → rediriger vers login
-      setInfo(json.error);
-      switchMode('login');
-      setLoading(false);
-      return;
-    }
-
-    // Session retournée → injecter dans Supabase client
-    await supabase.auth.setSession({
-      access_token: json.access_token,
-      refresh_token: json.refresh_token,
-    });
-    setLoading(false);
   };
 
   const inputClass = "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500";

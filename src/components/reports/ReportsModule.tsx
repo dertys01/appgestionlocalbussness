@@ -103,8 +103,14 @@ export function ReportsModule() {
     let momo = 0;
     for (const s of sales) {
       revenue += s.total_amount;
+      // Trois cases et non deux : avec un simple `else`, les crédits
+      // (payment_method = 'credit') atterrissaient dans « Mobile Money » — un
+      // client qui doit 50 000 F gonflait la part Mobile Money d'autant.
       if (s.payment_method === 'cash') cash += s.total_amount;
-      else momo += s.total_amount;
+      else if (s.payment_method === 'momo') momo += s.total_amount;
+      // 'credit' : ni encaissé en espèces ni en Mobile Money. Il n'apparaît
+      // que dans totalRevenu, et le camembert affiche des parts qui, elles,
+      // s'additionnent bien au total encaissé.
     }
     return { totalRevenu: revenue, cashTotal: cash, momoTotal: momo };
   }, [sales]);

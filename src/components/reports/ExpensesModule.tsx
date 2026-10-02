@@ -307,7 +307,8 @@ export function ExpensesModule() {
             <div className="text-lg font-bold text-slate-800">{formatCFA(totalExpenses)}</div>
           </CardContent>
         </Card>
-        <Card className={`border-${net >= 0 ? 'emerald' : 'red'}-200 bg-${net >= 0 ? 'emerald' : 'red'}-50`}>
+        {/* Voir ProfitabilityModule : classes interpolées = non compilées par Tailwind. */}
+        <Card className={net >= 0 ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}>
           <CardContent className="p-4">
             <div className={`flex items-center gap-2 text-xs mb-1 ${net >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
               <Wallet className="h-3.5 w-3.5" /> Résultat net
