@@ -26,6 +26,7 @@ chaque item a un critère de fin vérifiable.
 | — | Faille `anon` close : **33 → 2** fonctions appelables par la clé publique | `3e8dbba` |
 | 3 | 3.1 recharts chargé à la demande · 3.2 totaux de période en base + pagination · 3.3 contexte Supabase mémorisé · 3.4 code mort, lint à 0 warning | `9532ba8` `6cc277e` `980c6c9` `6efd2d3` |
 | 4.1 | `page.tsx` découpé : **861 → 261 lignes**, 8 fichiers, aucun changement de comportement | `8a125ee` |
+| — | Recette manuelle des 9 onglets : navigateur, 2 profils (propriétaire + caissier), **0 erreur JS** | `7e7627a` |
 
 **Reste dans le Sprint 4 :** 4.2 (titres de onglet côté serveur, 4 pages sur 4 en
 `'use client'`) et 4.3 (24 `eslint-disable` dans 17 fichiers, au fil de l'eau).
@@ -334,6 +335,7 @@ npm test          → 0
 
 | Date | Commit | Objet |
 |---|---|---|
+| 03/10/2026 | `7e7627a` | Recette manuelle des 9 onglets — navigateur, 2 profils, 0 erreur JS |
 | 03/10/2026 | `8a125ee` | Sprint 4.1 — `page.tsx` découpé : 861 → 261 lignes, 8 fichiers créés |
 | 03/10/2026 | `3e8dbba` | Faille `anon` close — section 7 de `migration_security.sql`, section 22 du harnais |
 | 03/10/2026 | `6cc277e` | Sprint 3.2 — totaux de période en base, liste paginée |
