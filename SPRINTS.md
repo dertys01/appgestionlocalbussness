@@ -24,6 +24,13 @@ chaque item a un critère de fin vérifiable.
 | — | Rate limit de `src/proxy.ts` basculé sur `rate_limits` + `bump_rate_limit()` | `3a179dc` |
 | — | Compteur d'inscription déplacé **après** la validation du corps | `8013458` |
 | — | Faille `anon` close : **33 → 2** fonctions appelables par la clé publique | `3e8dbba` |
+| 3 | 3.1 recharts chargé à la demande · 3.2 totaux de période en base + pagination · 3.3 contexte Supabase mémorisé · 3.4 code mort, lint à 0 warning | `9532ba8` `6cc277e` `980c6c9` `6efd2d3` |
+| 4.1 | `page.tsx` découpé : **861 → 261 lignes**, 8 fichiers, aucun changement de comportement | `8a125ee` |
+
+**Reste dans le Sprint 4 :** 4.2 (titres de onglet côté serveur, 4 pages sur 4 en
+`'use client'`) et 4.3 (24 `eslint-disable` dans 17 fichiers, au fil de l'eau).
+Puis la **recette manuelle des 9 onglets** : elle n'a pas pu être faite, aucun identifiant
+de test n'ayant été fourni.
 
 `supabase/migration_security.sql` porte les **7 sections** (1 `rate_limits` hors portée client ·
 2 `organizations.plan` verrouillé · 3 `subscriptions` une ligne par org · 4 `business_members`
@@ -313,6 +320,7 @@ npm test          → 0
 
 | Date | Commit | Objet |
 |---|---|---|
+| 03/10/2026 | `8a125ee` | Sprint 4.1 — `page.tsx` découpé : 861 → 261 lignes, 8 fichiers créés |
 | 03/10/2026 | `3e8dbba` | Faille `anon` close — section 7 de `migration_security.sql`, section 22 du harnais |
 | 03/10/2026 | `6cc277e` | Sprint 3.2 — totaux de période en base, liste paginée |
 | 03/10/2026 | `980c6c9` | Sprint 3.3 — valeur du contexte Supabase mémorisée |
