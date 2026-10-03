@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { TrendingUp, TrendingDown, AlertTriangle, PackageX, RefreshCw } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
@@ -231,9 +232,12 @@ export function ProfitabilityModule() {
           {loading ? (
             <div className="text-center text-slate-500 py-8 text-sm">Chargement...</div>
           ) : rows.length === 0 ? (
-            <div className="text-center text-slate-500 py-8 text-sm">
-              Aucun produit à analyser
-            </div>
+            <EmptyState
+              icon={PackageX}
+              title="Aucun produit à analyser"
+              hint="Ajoutez vos coûts d’achat et enregistrez des ventes : la marge par produit s’affichera ici."
+              className="py-6"
+            />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">

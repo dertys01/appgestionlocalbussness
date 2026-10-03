@@ -30,6 +30,46 @@ export function DashboardTab({ products, canManageProducts, onNewSale, onAddProd
     <div className="space-y-4">
       <h2 className="text-xl font-bold text-slate-800">Tableau de bord</h2>
 
+      {totalProducts === 0 ? (
+        /* Boutique neuve : les trois cartes afficheraient 0, 0 F et 0 — aucune
+            information, et aucune indication de par où commencer. On les
+            remplace par l'ordre des opérations ; elles réapparaissent dès le
+            premier produit ajouté. */
+        <Card className="border-indigo-200 bg-indigo-50">
+          <CardContent className="p-5 space-y-4">
+            <div>
+              <h3 className="font-semibold text-slate-800">
+                {canManageProducts ? 'Bienvenue — vos trois premiers pas' : 'Boutique encore vide'}
+              </h3>
+              <p className="text-sm text-slate-600 mt-1">
+                {canManageProducts
+                  ? 'Rien n’est enregistré pour l’instant. Tout part de vos produits : le reste s’enchaîne.'
+                  : 'Aucun produit n’est encore enregistré dans cette boutique. Le gérant doit en ajouter avant que vous puissiez encaisser.'}
+              </p>
+            </div>
+
+            {canManageProducts && (
+              <ol className="space-y-2 text-sm text-slate-700">
+                {[
+                  ['Ajoutez vos produits', 'nom, prix de vente et stock de départ'],
+                  ['Enregistrez une vente', 'l’onglet Vente encaisse en quelques secondes'],
+                  ['Suivez ce qui reste dû', 'dettes, rapports et prévisions se remplissent seuls'],
+                ].map(([titre, detail], i) => (
+                  <li key={titre} className="flex items-start gap-3">
+                    <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-indigo-600 text-[11px] font-bold text-white">
+                      {i + 1}
+                    </span>
+                    <span>
+                      <strong className="font-semibold">{titre}</strong>
+                      <span className="text-slate-500"> — {detail}</span>
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </CardContent>
+        </Card>
+      ) : (
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <Card className="border-slate-200">
           <CardContent className="p-4">
@@ -58,6 +98,7 @@ export function DashboardTab({ products, canManageProducts, onNewSale, onAddProd
           </CardContent>
         </Card>
       </div>
+      )}
 
       <div className={`grid gap-3 ${canManageProducts ? 'grid-cols-2' : 'grid-cols-1'}`}>
         <Button onClick={onNewSale} className="h-20 flex flex-col gap-1 bg-indigo-600 hover:bg-indigo-700 rounded-xl">

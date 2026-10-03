@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { ChevronDown, ChevronUp, CreditCard, Handshake, Smartphone, RefreshCw, Download } from 'lucide-react';
+import { ChevronDown, ChevronUp, CreditCard, Handshake, Smartphone, RefreshCw, Download, Receipt } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
@@ -232,9 +233,11 @@ export function SalesHistory() {
 
       {/* Liste des ventes */}
       {totalRows === 0 && !loading && !error ? (
-        <div className="text-center text-slate-500 py-12 text-sm">
-          Aucune vente sur cette période
-        </div>
+        <EmptyState
+          icon={Receipt}
+          title="Aucune vente sur cette période"
+          hint="Élargissez la période ci-dessus, ou enregistrez une vente depuis l’onglet Vente."
+        />
       ) : sales.length > 0 ? (
         <div className="space-y-2">
           {sales.map((sale) => {

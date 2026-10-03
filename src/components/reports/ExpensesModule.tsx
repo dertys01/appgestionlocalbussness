@@ -6,6 +6,7 @@ import {
   AlertTriangle, X, CalendarDays,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
@@ -334,7 +335,7 @@ export function ExpensesModule() {
 
       {/* Avertissement : aucune charge saisie */}
       {expenses.length === 0 && !loading && (
-        <div className="rounded-lg bg-blue-50 border border-blue-200 px-4 py-3 text-sm text-blue-800">
+        <div className="rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
           <div className="flex items-center gap-2 font-medium">
             <AlertTriangle className="h-4 w-4" />
             Aucune charge enregistrée sur la période
@@ -470,9 +471,12 @@ export function ExpensesModule() {
           {loading ? (
             <div className="text-center text-slate-500 py-8 text-sm">Chargement...</div>
           ) : expenses.length === 0 ? (
-            <div className="text-center text-slate-500 py-8 text-sm">
-              Aucune dépense sur la période
-            </div>
+            <EmptyState
+              icon={Wallet}
+              title="Aucune dépense sur la période"
+              hint="Élargissez la période pour retrouver vos charges."
+              className="py-6"
+            />
           ) : (
             <div className="divide-y divide-slate-100">
               {expenses.slice(0, shownExpenses).map((exp) => (

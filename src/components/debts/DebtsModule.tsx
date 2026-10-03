@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { RefreshCw, MessageCircle, Loader2, Handshake, TrendingUp, X } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
@@ -160,9 +161,11 @@ export function DebtsModule() {
       {loading && debts.length === 0 ? (
         <div className="text-center text-slate-500 py-8 text-sm">Chargement...</div>
       ) : debts.length === 0 ? (
-        <div className="text-center text-slate-500 py-10 text-sm">
-          Aucune dette en cours. Tout ce que vous avez vendu a été encaissé.
-        </div>
+        <EmptyState
+          icon={Handshake}
+          title="Aucune dette en cours"
+          hint="Tout ce que vous avez vendu a été encaissé."
+        />
       ) : (
         <div className="space-y-2">
           {debts.slice(0, PAGE).map((d) => {
