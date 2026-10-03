@@ -10,6 +10,7 @@ import {
   BarChart2,
   Brain,
   Users,
+  Menu,
 } from 'lucide-react';
 import { LoginPage } from '@/components/auth/LoginPage';
 import { InventoryTab } from '@/components/inventory/InventoryTab';
@@ -55,6 +56,14 @@ export default function HomePage() {
   // Modals produits
   const [showProductForm, setShowProductForm] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  /**
+   * Tiroir de navigation sur mobile. Le rail de 64 px coûtait un quart de
+   * l'écran d'un téléphone — deux colonnes de produits au lieu de trois — et,
+   * étant en z-40, il passait au-dessus de la barre du bas du POS (z-30), dont
+   * il tronquait le total. À partir de lg le rail est permanent et cet état
+   * n'a plus d'effet.
+   */
+  const [menuOuvert, setMenuOuvert] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [restockProduct, setRestockProduct] = useState<Product | null>(null);
   // Même règle que canManageProducts : un prédicat nommé rend les sites
@@ -140,14 +149,29 @@ export default function HomePage() {
         items={NAV_ITEMS}
         email={user.email}
         loadingProducts={loadingProducts}
+        open={menuOuvert}
+        onClose={() => setMenuOuvert(false)}
         onTab={setTab}
         onScan={() => setShowScanner(true)}
         onRefresh={fetchProducts}
         onSignOut={() => supabase.auth.signOut()}
       />
 
-      {/* ── Contenu principal ── */}
-      <main className="flex-1 ml-16 lg:ml-56 min-h-screen bg-slate-50">
+      {/* Ouverture du tiroir. Occupe la place du rail, qui n'existe plus sous lg. */}
+      {!menuOuvert && (
+        <button
+          onClick={() => setMenuOuvert(true)}
+          className="lg:hidden fixed top-3 left-3 z-30 h-10 w-10 rounded-lg bg-white border border-slate-200 shadow-sm flex items-center justify-center"
+          aria-label="Ouvrir le menu"
+        >
+          <Menu className="h-5 w-5 text-slate-700" />
+        </button>
+      )}
+
+      {/* ── Contenu principal ──
+          ml-0 sous lg : le rail de 64 px a disparu au profit du tiroir. pt-14
+          réserve la place du bouton flottant. */}
+      <main className="flex-1 lg:ml-56 min-h-screen bg-slate-50 pt-14 lg:pt-0">
         <div className="p-4 max-w-5xl mx-auto">
 
           {/* Erreur de chargement des produits : HORS condition d'onglet.

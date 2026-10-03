@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
+import { matchMediaPour } from './setup';
 import { LayoutDashboard, ShoppingCart } from 'lucide-react';
 
 import { Sidebar } from '@/components/layout/Sidebar';
@@ -21,12 +22,13 @@ const items: NavItem[] = [
   { key: 'pos', label: 'Vente', icon: ShoppingCart, locked: true },
 ];
 
-function renderSidebar() {
+function renderSidebar(ouvert = false) {
   const handlers = {
     onTab: vi.fn(),
     onScan: vi.fn(),
     onRefresh: vi.fn(),
     onSignOut: vi.fn(),
+    onClose: vi.fn(),
   };
   render(
     <Sidebar
@@ -34,6 +36,7 @@ function renderSidebar() {
       items={items}
       email={EMAIL}
       loadingProducts={false}
+      open={ouvert}
       {...handlers}
     />
   );
@@ -101,5 +104,88 @@ describe('Sidebar', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Scanner' }));
     expect(onScan).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * Tiroir mobile.
+ *
+ * Le rail de 64 px était en `z-40` et la barre du bas du POS en `z-30` : le
+ * rail passait au-dessus et tronquait le total affiché. Il est devenu un
+ * tiroir hors écran, ce qui rend en plus au catalogue la largeur d'un quart
+ * d'écran.
+ */
+describe('Sidebar — tiroir mobile', () => {
+  it('fermé, il est hors écran et ne montre aucun voile', () => {
+    renderSidebar(false);
+    const aside = document.querySelector('aside');
+    expect(aside?.className).toContain('-translate-x-full');
+    expect(screen.queryByRole('button', { name: 'Fermer le menu' })).toBeNull();
+  });
+
+  it('ouvert, il est à l\'écran et propose sa fermeture', () => {
+    renderSidebar(true);
+    const aside = document.querySelector('aside');
+    expect(aside?.className).toContain('translate-x-0');
+    expect(aside?.className).not.toContain('-translate-x-full');
+    expect(screen.getAllByRole('button', { name: 'Fermer le menu' }).length).toBeGreaterThan(0);
+  });
+
+  it('le voile ne peut pas refermer un tiroir fermé', () => {
+    renderSidebar(false);
+    // S'il existait malgré tout, il masquerait tout l'écran sans raison.
+    expect(screen.queryByRole('button', { name: 'Fermer le menu' })).toBeNull();
+  });
+
+  it('choisir un onglet referme le tiroir, sinon il masque le nouvel écran', () => {
+    const { onClose } = renderSidebar(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Accueil' }));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('échap referme le tiroir', () => {
+    const { onClose } = renderSidebar(true);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('échap ne fait rien quand il est déjà fermé', () => {
+    const { onClose } = renderSidebar(false);
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('chaque entrée garde son nom accessible, tiroir ouvert', () => {
+    renderSidebar(true);
+    // Le libellé visible ne doit pas disparaître du nom accessible : c'est
+    // toute la raison du aria-label posé au Sprint 5, et le tiroir mobile
+    // dépend de lui.
+    expect(screen.getByRole('button', { name: 'Accueil' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Vente' })).toBeInTheDocument();
+  });
+
+  it('fermé sur mobile, le tiroir sort du parcours de tabulation', () => {
+    renderSidebar(false);
+    // Le aside est alors hors écran : sans inert, le clavier y entrait.
+    expect(document.querySelector('aside')?.hasAttribute('inert')).toBe(true);
+  });
+
+  it('ouvert, le tiroir redevient accessible', () => {
+    renderSidebar(true);
+    expect(document.querySelector('aside')?.hasAttribute('inert')).toBe(false);
+  });
+});
+
+// Le tiroir n'existe que sous 1024 px. Sans basculer la largeur, on testerait
+// le rail de grand écran en croyant tester le mobile.
+const matchMediaLarge = window.matchMedia;
+beforeEach(() => {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true, configurable: true, value: matchMediaPour(375),
+  });
+});
+afterEach(() => {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true, configurable: true, value: matchMediaLarge,
   });
 });
