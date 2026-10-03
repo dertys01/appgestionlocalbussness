@@ -21,6 +21,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { formatCFA } from '@/lib/utils/currency';
+import { rechercher } from '@/lib/utils/productSearch';
 import { generateWhatsAppReceiptLink } from '@/lib/utils/whatsapp';
 import { logActivity } from '@/lib/utils/activity';
 import { printReceipt } from '@/lib/utils/print';
@@ -106,6 +107,18 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
   const [cart, setCart] = useState<CartItem[]>([]);
   const [scanError, setScanError] = useState('');
   const [search, setSearch] = useState('');
+  /** Catégorie retenue dans la barre de filtres ; null = tout le catalogue. */
+  const [categorie, setCategorie] = useState<string | null>(null);
+  /**
+   * Quantités vendues par produit sur 30 jours, indexées par identifiant.
+   *
+   * `get_units_sold_since()` exige le plan pro : sur les autres plans l'appel
+   * échoue, et l'absence de cette section ne doit surtout pas se lire comme une
+   * erreur. Une boutique qui vend 200 références n'a pas besoin du classement
+   * pour trouver un téléphone.
+   */
+  const [plusVendus, setPlusVendus] = useState<Record<string, number>>({});
+  const rechercheRef = useRef<HTMLInputElement>(null);
   const [visibleCount, setVisibleCount] = useState(PRODUCT_PAGE_SIZE);
   // Une recherche remet la tranche au début : sans cela, taper « Nokia » après
   // avoir déroulé 400 produits affiche une grille vide alors qu'il y en a 3.
@@ -135,18 +148,104 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
    */
   const [panierOuvert, setPanierOuvert] = useState(false);
 
-  // Recherche produits avec debounce minimal (useMemo suffit pour ce cas)
+  /**
+   * Catalogue de la caisse : en stock, non archivé, puis filtré et classé.
+   *
+   * Le classement vient de `rechercher()`, qui tolère les fautes de frappe,
+   * trouve une variante par son nombre (« 128/6 ») et un article par son prix.
+   * Le simple `includes()` d'avant renvoyait « aucun résultat » sur une faute —
+   * ce que le caissier lit comme une rupture de stock.
+   */
+  const disponibles = useMemo(
+    () => products.filter((p) => p.stock_qty > 0 && p.is_active !== false),
+    [products],
+  );
+
+  /**
+   * Les + vendus remontent devant tout le reste.
+   *
+   * Dans une boutique de quartier, les mêmes références se vendent des
+   * centaines de fois : les classer en tête rend la grille inutile. C'est
+   * ce qui répond à « 1000 articles » : le classement rend la longueur du
+   * catalogue indifférente.
+   */
+  const parFrequence = useMemo(() => {
+    if (Object.keys(plusVendus).length === 0) return disponibles;
+    return [...disponibles].sort((a, b) => {
+      const va = plusVendus[a.id] ?? 0;
+      const vb = plusVendus[b.id] ?? 0;
+      if (va !== vb) return vb - va;
+      return a.name.localeCompare(b.name, 'fr');
+    });
+  }, [disponibles, plusVendus]);
+
   const filtered = useMemo(() => {
-    const q = search.toLowerCase();
-    return products.filter(
-      (p) =>
-        p.stock_qty > 0 &&
-        p.is_active !== false && // archivé : hors caisse
-        (p.name.toLowerCase().includes(q) ||
-          (p.sku ?? '').toLowerCase().includes(q) ||
-          (p.category ?? '').toLowerCase().includes(q))
-    );
-  }, [products, search]);
+    // La recherche porte sur TOUT le catalogue, jamais sur la seule catégorie
+    // retenue. Filtrer sur « laptop » puis chercher « a17 » ne doit pas
+    // disparaître : le caissier taperait trois mots de plus, ne trouverait
+    // rien, croiraitait que le téléphone n'existe pas. La catégorie est un
+    // filtre de parcours ; la recherche est une recherche.
+    if (search.trim()) return rechercher(parFrequence, search).map((r) => r.product);
+    return categorie === null
+      ? parFrequence
+      : parFrequence.filter((p) => (p.category ?? '') === categorie);
+  }, [parFrequence, categorie, search]);
+
+  /** Les catégories présentes dans le catalogue, pour la barre de filtres. */
+  const categories = useMemo(() => {
+    const set = new Set<string>();
+    for (const p of parFrequence) if (p.category?.trim()) set.add(p.category.trim());
+    return [...set].sort((a, b) => a.localeCompare(b, 'fr'));
+  }, [parFrequence]);
+
+  /**
+   * Les + vendus sur 30 jours.
+   *
+   * L'échec est silencieux et assumé : la fonction est verrouillée par plan, et
+   * une bannière d'erreur au-dessus d'une grille de produits nuirait plus au
+   * commerce qu'elle n'informerait.
+   */
+  const chargerPlusVendus = useCallback(async () => {
+    if (!ownerId) return;
+    try {
+      const { data, error } = await supabase.rpc('get_units_sold_since', { p_days: 30 });
+      if (error || !data) return;
+      const map: Record<string, number> = {};
+      for (const l of data as { product_id: string; quantity: number }[]) {
+        if (l?.product_id) map[l.product_id] = Number(l.quantity ?? 0);
+      }
+      setPlusVendus(map);
+    } catch {
+      // plan gratuit ou starter : pas de classement, sans le dire.
+    }
+  }, [supabase, ownerId]);
+
+  useEffect(() => {
+    void chargerPlusVendus();
+  }, [chargerPlusVendus]);
+
+  /**
+   * Une frappe sur une lettre met le curseur dans la recherche.
+   *
+   * C'est le geste de toutes les caisses à clavier : on commence à taper sans
+   * viser un champ. Sans cela il faut viser le champ à la souris, puis taper —
+   * deux gestes là où un seul suffit.
+   */
+  useEffect(() => {
+    const surFrappe = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const cible = e.target as HTMLElement | null;
+      if (cible) {
+        const balise = cible.tagName;
+        if (balise === 'INPUT' || balise === 'TEXTAREA' || balise === 'SELECT') return;
+        if (cible.isContentEditable) return;
+      }
+      if (e.key.length !== 1 || e.key === ' ') return;
+      rechercheRef.current?.focus();
+    };
+    window.addEventListener('keydown', surFrappe);
+    return () => window.removeEventListener('keydown', surFrappe);
+  }, []);
 
   // Rendu par tranches. La recherche porte sur tout le catalogue : une caissière
   // qui tape « Nokia » doit le trouver même si la carte est à la position 800.
@@ -435,13 +534,50 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
           <Input
-            placeholder="Rechercher un produit..."
-            aria-label="Rechercher un produit"
+            ref={rechercheRef}
+            placeholder="Rechercher un produit, une variante ou un prix..."
+            aria-label="Rechercher un produit, une variante ou un prix"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-9"
           />
         </div>
+
+        {/* Barre de catégories, collante sous la recherche.
+            C'est ce qui remplace le défilement quand le catalogue est grand :
+            on choisit un rayon au lieu de parcours 1000 cartes. sticky pour que
+            le filtre reste atteignable au milieu de la liste. */}
+        {categories.length > 1 && (
+          <div className="sticky top-14 lg:top-0 z-10 -mx-1 bg-slate-50/95 backdrop-blur px-1 py-1">
+            <div className="flex gap-1.5 overflow-x-auto pb-1" role="group" aria-label="Filtrer par catégorie">
+              <button
+                onClick={() => setCategorie(null)}
+                aria-pressed={categorie === null}
+                className={`shrink-0 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors ${
+                  categorie === null
+                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                }`}
+              >
+                Tous
+              </button>
+              {categories.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setCategorie(categorie === c ? null : c)}
+                  aria-pressed={categorie === c}
+                  className={`shrink-0 text-xs font-medium px-3 py-1.5 rounded-full border transition-colors ${
+                    categorie === c
+                      ? 'bg-indigo-600 text-white border-indigo-600'
+                      : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Le compteur évite qu'un commerçant cherche un produit absent en
             croyant qu'il n'existe pas : avec 1 000 références, une grille
@@ -450,6 +586,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           <span>
             {filtered.length} produit{filtered.length > 1 ? 's' : ''}
             {search.trim() && ` pour « ${search.trim()} »`}
+            {search.trim() && categorie !== null && ' — tout le catalogue'}
           </span>
           {visibleProducts.length < filtered.length && (
             <span>affichage par tranches</span>
