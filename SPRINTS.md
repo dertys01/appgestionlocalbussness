@@ -29,6 +29,7 @@ chaque item a un critère de fin vérifiable.
 | — | Recette manuelle des 9 onglets : navigateur, 2 profils (propriétaire + caissier), **0 erreur JS** — **locale ET prod** | `7e7627a` |
 | 4.2 | Titres de onglet côté serveur : **3 layouts `metadata`**, `page.tsx` intacts (4/4 toujours client) | `c4ba478` |
 | 5 | Accessibilité et contraste : **Lighthouse a11y 0.83/0.95/0.96 → 1.00** sur 5 écrans · **10 premiers tests de composant React** | `6abaa4c` |
+| 6 | États vides et premier écran : composant `ui/empty-state` appliqué à **9 écrans**, accueil à zéro produit · **10 champs sans étiquette reliée** corrigés (Lighthouse Paramètres **0.94 → 1.00**) · tests **10 → 19** | `68860f0` `d168d56` |
 
 **Reste dans le Sprint 4 :** 4.3 (25 `eslint-disable` dans 17 fichiers, au fil de l'eau).
 
@@ -453,6 +454,94 @@ npm test          → 0  (+ 10 tests de composant)
 
 ---
 
+## Sprint 6 — Ce qui reste à comprendre : premier écran, états vides, étiquettes
+
+Sprint 5 a rendu les écrans existants accessibles. Celui-ci traite ce qui se
+passe **quand il n'y a rien à afficher** — le vrai cas du programme bêta : les
+dix boutiques ouvrent à zéro produit, et aucun de nos comptes de recette ne peut
+montrer cet état (`Test1` porte 9 produits et 21 ventes).
+
+### 6.1 — Le premier écran d'une boutique neuve
+
+**Avant :** trois cartes — `0` produit, `0 F` de valeur stock, `0` stock
+critique. Aucune information, aucune indication de par où commencer.
+
+**Après :** les cartes sont remplacées dès le premier écran par les trois pas du
+métier, numérotés — ajouter des produits → enregistrer une vente → suivre ce qui
+reste dû. Elles réapparaissent dès qu'un produit existe.
+
+Un caissier (`canManageProducts = false`) n'a pas le bouton « Ajouter produit »
+dans sa portée : on lui dit d'aller voir le gérant, plutôt que de lui proposer
+une action qu'il ne pourra jamais faire.
+
+### 6.2 — États vides homogènes
+
+**Avant :** ~20 états vides réinventés à chaque écran — du `text-slate-500` nu,
+parfois une icône, parfois une bouton, jamais la même densité. « Aucun produit »
+arrête l'utilisateur sans lui dire quoi faire.
+
+Le composant `src/components/ui/empty-state.tsx` impose la même structure :
+pictogramme enterré dans `aria-hidden`, ce qu'on attendait, et surtout **pourquoi
+c'est vide et quoi faire ensuite**. Appliqué à 9 écrans : Vente, Historique,
+Rapports, Prévisions, Équipe (membres et journal), Rentabilité, Dettes,
+Dépenses, Stock.
+
+Deux corrections de couleur dans la foulée :
+
+- l'avertissement « aucune charge » passait de **bleu à ambre** — c'était le seul
+  bleu de l'application, portant un message d'alerte dans un système qui réserve
+  l'ambre à cela ;
+- le badge « Réappro. » du journal passait de **bleu à sarcelle** : `blue-100` et
+  `indigo-100` étaient visuellement identiques — deux actions distinctes se
+  ressemblaient.
+
+### 6.3 — Étiquettes de champs
+
+Lighthouse tombe à **0.94** sur Paramètres (échec `label`). Le défaut est plus
+large que la page auditée : le balayage des 9 onglets trouve **10 contrôles sans
+nom accessible**, sur 4 d'entre eux.
+
+| Onglet | Champs | Nature du défaut |
+|---|---|---|
+| Paramètres | 4 | `<label>` en toutes lettres, mais sans `htmlFor` : l'input est son frère, jamais son enfant. Le 4ᵉ n'avait même pas de placeholder |
+| Vente | 4 | aucun libellé ; le dernier portait pourtant un `<label>` visible « Montant donné (FCFA) » |
+| Stock | 1 | champ à icône seule |
+| Équipe | 1 | adresse email d'invitation |
+
+Deux correctifs, choisis à la lumière de **WCAG 2.5.3** (le nom accessible doit
+contenir le libellé visible) :
+
+- **libellé visible** → vrai rattachement `htmlFor` + `id`. Sur mobile, tapoter le
+  libellé met le champ au point — ce que ne fait pas un `aria-label` ;
+- **aucune ligne de texte** (icône seule, placeholder) → `aria-label`.
+
+L'IFU perd son parenthèse dans le libellé : « IFU » reste le nom accessible,
+l'aide devient une description rattachée via `aria-describedby`, plutôt qu'une
+étiquette de dix mots.
+
+### 6.4 — Tests
+
+`tests/ui/dashboard.test.tsx` (6) et `tests/ui/empty-state.test.tsx` (3) portent
+les états que **nulle recette ne peut montrer** : le premier écran à zéro
+produit, et le comportement d'un état vide.
+
+**10 → 19 tests de composant.**
+
+### Définition de fini — Sprint 6
+
+```
+npx tsc --noEmit  → 0
+npm run lint      → 0 problems
+npm run build     → 0
+npm test          → 0  (+ 19 tests de composant)
++ balayage des 9 onglets : 0 champ sans nom accessible
++ Lighthouse a11y → 1.00 sur Accueil ET Paramètres (0.94 → 1.00)
++ recette prod : 9/9 onglets, 0 erreur JavaScript
++ dette eslint-disable → 25 (inchangée)
+```
+
+---
+
 ## Hors périmètre (volontairement)
 
 | Sujet | Pourquoi |
@@ -478,6 +567,9 @@ npm test          → 0  (+ 10 tests de composant)
 
 | Date | Commit | Objet |
 |---|---|---|
+| 03/10/2026 | `d168d56` | Accessibilité — **10 champs sans étiquette reliée** sur 4 onglets, balayage des 9 onglets |
+| 03/10/2026 | `68860f0` | Sprint 6 — états vides homogènes sur 9 écrans + premier écran d'une boutique neuve, tests 10 → 19 |
+| 03/10/2026 | — | Recette **prod** du Sprint 6 — 9/9 onglets, 0 erreur JS, 0 champ sans étiquette, Lighthouse 1.00 sur Accueil et Paramètres |
 | 03/10/2026 | `6abaa4c` | Sprint 5 — accessibilité et contraste (Lighthouse a11y → 1.00 sur 5 écrans) + 10 tests de composant |
 | 03/10/2026 | `3657542` | Recette des 9 onglets **en prod** — 2 profils, 0 erreur JavaScript |
 | 03/10/2026 | `ae012a6` | Recomptage de la dette `eslint-disable` (24 → 25) et origine du 25ᵉ |
