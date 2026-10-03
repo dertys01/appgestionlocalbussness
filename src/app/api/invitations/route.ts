@@ -75,13 +75,17 @@ export async function POST(req: NextRequest) {
     if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
     const parsedBody = z
-      .object({ email: z.string().email('Adresse email invalide') })
+      .object({
+        email: z.string().email('Adresse email invalide'),
+        role: z.enum(['employee', 'manager']).optional().default('employee'),
+      })
       .safeParse(await req.json().catch(() => null));
     if (!parsedBody.success) {
       return NextResponse.json({ error: 'Adresse email invalide' }, { status: 400 });
     }
 
     const clean = parsedBody.data.email.trim().toLowerCase();
+    const role = parsedBody.data.role;
 
     // Un lien en attente pour la même adresse : on le renvoie plutôt que d'en
     // créer un second. Deux liens actifs pour un employé, c'est deux occasions
@@ -103,7 +107,7 @@ export async function POST(req: NextRequest) {
       const newExpiry = new Date(Date.now() + INVITATION_DAYS * 86400_000).toISOString();
       const { error: updErr } = await auth.adminClient
         .from('employee_invitations')
-        .update({ token: newHash, expires_at: newExpiry })
+        .update({ token: newHash, role, expires_at: newExpiry })
         .eq('id', existing.id);
       if (updErr) throw updErr;
       return NextResponse.json({
@@ -162,6 +166,7 @@ export async function POST(req: NextRequest) {
       .insert({
         owner_id: auth.user.id,
         email: clean,
+        role,
         token: tokenHash,
         expires_at: new Date(Date.now() + INVITATION_DAYS * 86400_000).toISOString(),
       })

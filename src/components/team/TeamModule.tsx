@@ -47,6 +47,7 @@ export function TeamModule() {
 
   // Formulaire d'invitation
   const [email, setEmail] = useState('');
+  const [role, setRole] = useState<'employee' | 'manager'>('employee');
   const [adding, setAdding] = useState(false);
   const [formError, setFormError] = useState('');
   const [lastLink, setLastLink] = useState('');
@@ -181,7 +182,7 @@ export function TeamModule() {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify({ email }),
+        body: JSON.stringify({ email, role }),
       });
       const json = await res.json().catch(() => null);
       if (!res.ok) throw new Error(json?.error ?? `Erreur serveur (${res.status})`);
@@ -309,6 +310,18 @@ export function TeamModule() {
                   className="bg-white"
                   autoComplete="off"
                 />
+                <div className="space-y-1">
+                  <label htmlFor="invite-role" className="text-xs font-medium text-slate-600">Rôle</label>
+                  <select
+                    id="invite-role"
+                    value={role}
+                    onChange={(e) => setRole(e.target.value as 'employee' | 'manager')}
+                    className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  >
+                    <option value="employee">Employé — encaisse et consulte le stock</option>
+                    <option value="manager">Manager — gère aussi les produits et réassorts</option>
+                  </select>
+                </div>
                 {formError && <p className="text-red-600 text-sm">{formError}</p>}
                 <Button type="submit" disabled={adding} className="w-full bg-indigo-600 hover:bg-indigo-700 gap-2">
                   {adding
@@ -364,6 +377,7 @@ export function TeamModule() {
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-slate-800 truncate">{inv.email}</div>
                       <div className="text-xs text-amber-700">
+                        {inv.role === 'manager' ? 'Manager · ' : 'Employé · '}
                         Expire le {new Date(inv.expires_at).toLocaleDateString('fr-FR')}
                       </div>
                     </div>
