@@ -31,6 +31,7 @@ chaque item a un critère de fin vérifiable.
 | 5 | Accessibilité et contraste : **Lighthouse a11y 0.83/0.95/0.96 → 1.00** sur 5 écrans · **10 premiers tests de composant React** | `6abaa4c` |
 | 6 | États vides et premier écran : composant `ui/empty-state` appliqué à **9 écrans**, accueil à zéro produit · **10 champs sans étiquette reliée** corrigés (Lighthouse Paramètres **0.94 → 1.00**) · tests **10 → 19** | `68860f0` `d168d56` |
 | 7 | **Résultat net corrigé** : le coût des marchandises vendues est déduit. L'écran affichait **1 161 200 F (86,1 %)** pour un bénéfice réel de **207 444 F (15,4 %)** — **section 8** de `migration_security.sql` · tests **19 → 23** | `693947b` |
+| 8 | **Import CSV de produits** : l'application n'avait qu'un export. Analyseur tolérant (`520.000`, `110k`, Excel FR), refus explicite de la vente à perte, produits existants jamais écrasés · **dépôt public protégé** (`import-local/`) · tests **23 → 65** | `40082cb` `e451839` `953c7f9` |
 
 **Reste dans le Sprint 4 :** 4.3 (25 `eslint-disable` dans 17 fichiers, au fil de l'eau).
 
@@ -640,6 +641,108 @@ npm test          → 0  (+ 23 tests de composant, 432 vérifications)
 
 ---
 
+## Sprint 8 — Charger un tarif sans saisir 35 fiches
+
+### 8.1 — Le manque
+
+Le projet n'avait qu'un **export** CSV : aucune route d'import parmi les 8
+routes API, aucun composant d'import. Le bouton « CSV » de l'Inventaire
+appelle `handleExport`. Charger un tarif demandait donc une saisie manuelle
+par produit — à chaque trimestre, pour chacune des boutiques du bêta.
+
+### 8.2 — L'analyseur (`src/lib/utils/importProducts.ts`)
+
+Fonction pure : ni réseau, ni base, ni React. Ce qu'elle peut refuser est
+donc testable sans lever de serveur.
+
+**Tolérant**, parce que le fichier vient d'Excel et que les prix s'écrivent
+comme les gens les écrivent :
+
+| Écriture | Lue comme |
+|---|---|
+| `520.000` | 520 000 — **et non 520**, c'est le piège du genre de fichier |
+| `1.349.400` | 1 349 400 |
+| `110k`, `123K` | 110 000, 123 000 |
+| `15 000`, `1 200,50` | 15 000, 1 200,50 |
+| `1200.5` | 1 200,5 — la décimale n'est pas un milliers |
+| `1.200,50` | 1 200,50 |
+
+Plus : point-virgule d'un Excel français, BOM, CRLF, guillemets `""`.
+En-têtes acceptées en français (« Prix achat (F) ») comme en noms de
+colonnes de la base (`price_buy`) — le fichier peut venir d'ailleurs.
+
+**Refusés**, et c'est une feature, pas une gêne :
+
+- nom manquant, montant illisible, valeur négative ;
+- **prix de vente sous le prix d'achat** — une vente à perte ne doit pas
+  entrer par la porte de derrière ;
+- doublon dans le fichier ;
+- **produit déjà en boutique : ses prix ne bougent pas.** Charger un tarif
+  ne doit jamais écraser un prix saisi à la main.
+
+### 8.3 — Les bugs que les tests ont attrapés
+
+Les 22 tests de l'analyseur ont échoué **deux fois** pendant leur écriture, et
+les deux échecs étaient de vrais bugs :
+
+1. **Les deux branches de `1.200,50` étaient inversées.** Résultat : `1,2005`
+   au lieu de `1200,5`. Le séparateur décimal est le plus à droite des deux —
+   règle écrite à l'envers.
+2. **Un guillemet nu au milieu d'un nom avalait la fin de la ligne.** Le
+   `14"` d'un nom de machine ouvrait un champ cité, et toute la ligne était
+   avalée. Un guillemet n'ouvre un champ que s'il est son premier caractère.
+
+### 8.4 — La modale
+
+L'aperçu **est** la confirmation : verdict par ligne, détail des lignes
+écartées, bouton désactivé s'il n'y a rien d'importable. Pas de dialogue de
+confirmation supplémentaire — c'est l'aperçu qui doit être vu pour corriger
+son fichier.
+
+La limite de plan est vérifiée **avant** l'envoi. Elle est appliquée en base
+produit par produit : un lot coupé en deux laisserait une moitié importée et
+l'autre refusée, sans rien dire. Si l'import s'arrête en cours de route, le
+nombre déjà importé est **annoncé** — sinon le commerçant recharge son
+fichier et tombe sur ce qu'il vient d'importer.
+
+« Télécharger le modèle » : sans lui le format est invisible, et le problème
+est circulaire.
+
+### 8.5 — Le dépôt est public
+
+Le dépôt GitHub est en `PUBLIC`. Un CSV de prix d'achat n'y a pas sa place :
+`import-local/` est gitignoré (`953c7f9`), et c'est le dossier entier qui est
+couvert, pas une extension — un `.csv` écrit à la main ailleurs passerait.
+
+### 8.6 — Le fichier livré est vérifié
+
+`tests/ui/import-livre.test.ts` lit `import-local/produits-import.csv` depuis
+le disque. Les autres tests partaient d'un CSV écrit à la main dans le test :
+ils prouvent que l'analyseur tolère tel format, **pas** que le fichier livré
+passe. Si quelqu'un régénère le CSV avec un séparateur, une colonne renommée
+ou une catégorie mal orthographiée, la suite tombe là.
+
+### 8.7 — Un point d'accessibilité réglé au passage
+
+Les trois boutons de la barre de l'Inventaire n'avaient **aucun nom
+accessible** sous `sm` : le libellé est masqué (`hidden sm:inline`) et il ne
+restait qu'une icône. Étiquetés, en appliquant la règle « au fil de l'eau »
+puisque le fichier était touché.
+
+### Définition de fini — Sprint 8
+
+```
+npx tsc --noEmit  → 0
+npm run lint      → 0 problems
+npm run build     → 0
+npm test          → 0  (55 vérifications SQL, 65 tests de composant)
++ prod : bouton « Importer » présent et nommé, modale ouverte,
+  bouton d'import désactivé tant qu'aucun fichier n'est choisi
++ le fichier livré passe l'analyseur : 35 produits, 0 refus, 0 parasite
+```
+
+---
+
 ## Hors périmètre (volontairement)
 
 | Sujet | Pourquoi |
@@ -662,6 +765,12 @@ npm test          → 0  (+ 23 tests de composant, 432 vérifications)
   `DROP FUNCTION IF EXISTS` puis `CREATE`, **jamais** par `CREATE OR REPLACE`. Et toute migration
   qui définit une fonction déjà redéfinie plus loin doit porter ce `DROP` : le harnais rejoue
   chaque fichier sur une base déjà corrigée.
+- **Le dépôt GitHub est `PUBLIC`.** Aucun prix d'achat, aucune marge, aucun
+  fichier client : `import-local/` est gitignoré. Vérifier `visibility` avant
+  d'ajouter un fichier de données.
+- Un **bouton dont le libellé est masqué** (`hidden sm:inline`) doit porter un
+  `aria-label` : sous ce seuil il ne reste qu'une icône, qui n'a pas de nom
+  accessible.
 - La recherche `GET /admin/users?email=` de ce GoTrue **ignore** le paramètre : ne pas
   « simplifier » la pagination de `invitations/accept`.
 - Aucune suppression de données sans afficher la liste et obtenir le feu vert.
@@ -670,6 +779,10 @@ npm test          → 0  (+ 23 tests de composant, 432 vérifications)
 
 | Date | Commit | Objet |
 |---|---|---|
+| 03/10/2026 | `e451839` | Sprint 8 (suite) — le fichier **livré** est vérifié par la suite de tests, plus seulement un CSV écrit en dur |
+| 03/10/2026 | `40082cb` | Sprint 8 — import CSV de produits : analyseur, modale, câblage, tests 23 → 55 |
+| 03/10/2026 | `953c7f9` | Dépôt public : `import-local/` gitignoré, les prix d'achat n'y entrent pas |
+| 03/10/2026 | — | Recette **prod** du Sprint 8 — bouton présent et nommé, garde-fou « rien n'est écrit sans fichier » vérifié |
 | 03/10/2026 | — | Recette **prod** du Sprint 7 — écran Charges : **207 444 F / 15,4 %** (contre 1 161 200 F / 86,1 %), 0 erreur JS, verrou `anon` intact |
 | 03/10/2026 | `693947b` | Sprint 7 — **résultat net corrigé** : section 8 de `migration_security.sql`, CMV déduit, 5ᵉ carte, tests 19 → 23 |
 | 03/10/2026 | `d168d56` | Accessibilité — **10 champs sans étiquette reliée** sur 4 onglets, balayage des 9 onglets |
