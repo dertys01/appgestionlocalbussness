@@ -1,3 +1,5 @@
+import type { ElementType } from 'react';
+
 export interface Product {
   id: string;
   user_id: string;
@@ -156,4 +158,32 @@ export interface CartItem {
    * côté serveur (`sale_items.list_price`), donc la remise est traçable.
    */
   unitPrice: number | null;
+}
+
+/**
+ * Navigation du tableau de bord.
+ *
+ * Ces types vivent ici plutôt que dans `page.tsx` : la sidebar, les onglets et
+ * la page les partagent tous. Un type importé depuis une page forcerait la
+ * sidebar à importer la coquille qui la rend elle-même.
+ */
+export type Tab =
+  | 'dashboard'
+  | 'pos'
+  | 'inventory'
+  | 'sales'
+  | 'debts'
+  | 'reports'
+  | 'forecast'
+  | 'team'
+  | 'settings';
+
+/** Sous-vue de l'onglet Rapports. */
+export type ReportView = 'sales' | 'profit' | 'expenses';
+
+export interface NavItem {
+  key: Tab;
+  label: string;
+  icon: ElementType;
+  locked: boolean;
 }

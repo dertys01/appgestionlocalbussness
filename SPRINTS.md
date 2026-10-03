@@ -196,25 +196,51 @@ par petites étapes, chaque étape étant compilée et testée avant la suivante
 
 ### 4.1 Découpage de `src/app/page.tsx`
 
-**État :** **845 lignes**, `'use client'` en l.1, **4 composants** déclarés au niveau module :
+**État au départ :** **861 lignes**, `'use client'` en l.1, **4 composants** déclarés au
+niveau module (`HomePage`, `OrgLoadFailed`, `OrgSetupRequired`, `LoginPage`).
+**État à l'arrivée :** **261 lignes.**
 
-| Ligne | Composant | Rôle |
-|---|---|---|
-| 48 | `HomePage` | shell + les **9 onglets** (l.283 → l.472) + modals (l.473 → l.498) |
-| 499 | `OrgLoadFailed` | état d'erreur d'organisation |
-| 539 | `OrgSetupRequired` | état d'onboarding |
-| 600 | `LoginPage` | **246 lignes**, de la l.600 à la l.845 |
+| Extrait vers | Ce que ça contenait |
+|---|---|
+| `src/components/auth/LoginPage.tsx` (255 l.) | connexion / inscription / mot de passe oublié — aucune dépendance vers les onglets |
+| `src/components/onboarding/OrgLoadFailed.tsx` (49 l.) | état « lecture de la boutique impossible » |
+| `src/components/onboarding/OrgSetupRequired.tsx` (66 l.) | état « configuration requise » |
+| `src/components/layout/Sidebar.tsx` (97 l.) | navigation, logo, scanner, actualiser, e-mail, déconnexion |
+| `src/components/dashboard/DashboardTab.tsx` (102 l.) | stats Produits / Valeur stock / Stock critique + actions |
+| `src/components/inventory/InventoryTab.tsx` (51 l.) | catalogue ou fiche d'inventaire + bouton d'inventaire |
+| `src/components/reports/ReportsTab.tsx` (66 l.) | sélecteur Ventes / Rentabilité / Charges + le `dynamic` de recharts |
+| `src/lib/hooks/useProducts.ts` (54 l.) | état + premier chargement + rechargement du catalogue |
+| `src/types/index.ts` | `Tab`, `ReportView`, `NavItem` — types partagés, sinon la sidebar importerait la page qui l'importe |
 
-**Ordre de découpage proposé** (du plus sûr au plus structurant) :
+**Ce qui est resté dans `page.tsx`, volontairement :** les gardes d'authentification, l'état
+d'interface (onglet, sous-vue des rapports, scanner, modals produits), `NAV_ITEMS`, le shell,
+les 6 onglets triviaux et les 3 modals.
 
-1. `LoginPage` (l.600-845) → `src/components/auth/LoginPage.tsx` — extrême, aucune dépendance vers les onglets.
-2. `OrgLoadFailed` + `OrgSetupRequired` (l.499-599) → `src/components/onboarding/` — deux composants d'état pur.
-3. Les **modals** (l.473-498 : `ProductForm`, `RestockModal`, `BarcodeScanner`, `OnboardingWizard`) → déplacement simple, déjà importés en l.35-39.
-4. L'onglet **dashboard** (l.283-356, JSX interne : stats Produits / Valeur stock / Stock critique) → `src/components/dashboard/DashboardTab.tsx`.
-5. Ne restent dans `page.tsx` que le shell, `NAV_ITEMS` (l.176-184) et le `switch` des onglets.
+**Écarts au plan initial — et pourquoi :**
+
+- Étape 3 (**extraire les modals**) : **non faite**. 19 lignes de JSX pour **12 props** à
+  redescendre serait un échange négatif. Les modals restent à côté de l'état qui les pilote.
+- Étape 5 (ne laisser que shell + `NAV_ITEMS` + switch) : atteinte, mais **pas par cette
+  voie**. Shell + switch + état pèsent ~410 lignes : le plan initial sous-estimait son propre
+  résultat. Ce sont `Sidebar`, `InventoryTab`, `ReportsTab` et le hook `useProducts` qui
+  ont fait la différence.
+- Un helper `TabPanel` (la coquille `<div className="space-y-4"><h2>` copiée 7 fois) a été
+  écrit puis **supprimé** : la coquille faisait déjà une ligne par élément, le gain réel était
+  de 10 lignes pour une abstraction de plus. Code mort, pas gardé.
 
 **Fini quand :** `page.tsx < 300 lignes`, `tsc`/`lint`/`build`/`npm test` à 0, et **aucun
-changement de comportement** — le Sprint 4.1 est un déplacement, pas une refonte.
+changement de comportement** — le Sprint 4.1 est un déplacement, pas une refonte. ✔ fait.
+
+**Preuve du « aucun changement de comportement » :** les **644 lignes** retirées de
+`page.tsx` ont été re-coupées ligne à ligne contre les 8 fichiers créés, après neutralisation
+de l'indentation et des renommages de props. **17 lignes** ne matchent pas, toutes
+explicables : 9 imports d'icônes devenues inutiles, `useEffect`/`useMemo` partis avec leur
+code, les déclarations `Tab`/`ReportView` migrées vers `@/types`, la signature `NAV_ITEMS`
+passée de `as {...}[]` à `: NavItem[]`, et 3 `function X()` devenues `export function X()`.
+
+> **Reste à faire dans le Sprint 4 :** 4.2 (titres de onglet côté serveur) et 4.3 (dette
+> TypeScript), puis la **recette manuelle des 9 onglets** — non faite : aucun identifiant
+> de test n'a été fourni.
 
 ### 4.2 Remettre du server-side là où ça a un sens
 
