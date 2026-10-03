@@ -50,14 +50,14 @@ export function OrgSetupRequired() {
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 />
               </div>
-              {error && <p className="text-red-500 text-sm">{error}</p>}
+              {error && <p className="text-red-600 text-sm">{error}</p>}
               <Button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700">
                 {loading ? 'Création...' : 'Créer ma boutique'}
               </Button>
             </form>
           </CardContent>
         </Card>
-        <button onClick={() => supabase.auth.signOut()} className="mt-4 w-full text-sm text-slate-400 hover:text-slate-600 underline">
+        <button onClick={() => supabase.auth.signOut()} className="mt-4 w-full text-sm text-slate-500 hover:text-slate-600 underline">
           Se déconnecter
         </button>
       </div>

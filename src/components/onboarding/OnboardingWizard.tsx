@@ -89,9 +89,9 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
           {steps.map((s, i) => (
             <div key={s.id} className="flex items-center">
               <div className={`flex items-center justify-center h-7 w-7 rounded-full text-xs font-bold transition-colors ${
-                i < stepIndex ? 'bg-emerald-500 text-white' :
+                i < stepIndex ? 'bg-emerald-700 text-white' :
                 i === stepIndex ? 'bg-indigo-600 text-white' :
-                'bg-slate-200 text-slate-400'
+                'bg-slate-200 text-slate-500'
               }`}>
                 {i < stepIndex ? '✓' : i + 1}
               </div>
@@ -122,18 +122,18 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                 <div className="rounded-xl bg-slate-50 p-3 space-y-1">
                   <Package className="h-5 w-5 text-indigo-600" />
                   <p className="text-sm font-medium text-slate-700">Gérez votre stock</p>
-                  <p className="text-xs text-slate-400">Produits, catégories, alertes</p>
+                  <p className="text-xs text-slate-500">Produits, catégories, alertes</p>
                 </div>
                 <div className="rounded-xl bg-slate-50 p-3 space-y-1">
-                  <Users className="h-5 w-5 text-emerald-600" />
+                  <Users className="h-5 w-5 text-emerald-700" />
                   <p className="text-sm font-medium text-slate-700">Votre équipe</p>
-                  <p className="text-xs text-slate-400">Caissiers avec accès limités</p>
+                  <p className="text-xs text-slate-500">Caissiers avec accès limités</p>
                 </div>
               </div>
               <Button onClick={() => setStep('first-product')} className="w-full bg-indigo-600 hover:bg-indigo-700 gap-2">
                 Commencer la configuration <ArrowRight className="h-4 w-4" />
               </Button>
-              <button onClick={handleSkipOrComplete} className="text-sm text-slate-400 hover:text-slate-600 underline">
+              <button onClick={handleSkipOrComplete} className="text-sm text-slate-500 hover:text-slate-600 underline">
                 Passer et aller au tableau de bord
               </button>
             </div>
@@ -168,12 +168,12 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                       placeholder="0" min="0" />
                   </div>
                 </div>
-                {error && <p className="text-red-500 text-sm">{error}</p>}
+                {error && <p className="text-red-600 text-sm">{error}</p>}
                 <Button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 gap-2">
                   {loading ? <><Loader2 className="h-4 w-4 animate-spin" /> Ajout...</> : <>Ajouter ce produit <ArrowRight className="h-4 w-4" /></>}
                 </Button>
               </form>
-              <button onClick={() => setStep('invite')} className="w-full text-sm text-slate-400 hover:text-slate-600 underline">
+              <button onClick={() => setStep('invite')} className="w-full text-sm text-slate-500 hover:text-slate-600 underline">
                 Passer cette étape
               </button>
             </div>
@@ -183,7 +183,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
           {step === 'invite' && (
             <div className="text-center space-y-5">
               <div className="h-12 w-12 rounded-xl bg-emerald-100 flex items-center justify-center mx-auto">
-                <Users className="h-6 w-6 text-emerald-600" />
+                <Users className="h-6 w-6 text-emerald-700" />
               </div>
               <div>
                 <h2 className="text-lg font-bold text-slate-800">Invitez votre équipe</h2>
@@ -211,7 +211,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
           {step === 'done' && (
             <div className="text-center space-y-5">
               <div className="h-16 w-16 rounded-full bg-emerald-100 flex items-center justify-center mx-auto">
-                <CheckCircle className="h-9 w-9 text-emerald-600" />
+                <CheckCircle className="h-9 w-9 text-emerald-700" />
               </div>
               <div>
                 <h2 className="text-xl font-bold text-slate-800">Tout est prêt !</h2>

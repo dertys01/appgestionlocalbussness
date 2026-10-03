@@ -107,7 +107,7 @@ export function RestockModal({ product, onClose, onSaved }: RestockModalProps) {
       <div className="bg-white w-full sm:max-w-sm rounded-t-2xl sm:rounded-2xl">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
           <h2 className="font-bold text-slate-800">Réapprovisionner</h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-600" aria-label="Fermer">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -140,20 +140,20 @@ export function RestockModal({ product, onClose, onSaved }: RestockModalProps) {
           </div>
 
           {parseQty(qty) > 0 && (
-            <div className="text-sm text-emerald-600 font-medium">
+            <div className="text-sm text-emerald-700 font-medium">
               Nouveau stock : {product.stock_qty + parseQty(qty)} {product.unit}
-              <span className="block text-xs text-slate-400 font-normal">
+              <span className="block text-xs text-slate-500 font-normal">
                 (calculé sur le stock affiché, il sera revérifié à l&apos;enregistrement)
               </span>
             </div>
           )}
 
-          {error && <p className="text-red-500 text-sm">{error}</p>}
+          {error && <p className="text-red-600 text-sm">{error}</p>}
 
           <Button
             type="submit"
             disabled={loading}
-            className="w-full bg-emerald-600 hover:bg-emerald-700 font-semibold gap-2"
+            className="w-full bg-emerald-700 hover:bg-emerald-800 font-semibold gap-2"
           >
             {loading ? (
               <><Loader2 className="h-4 w-4 animate-spin" /> Enregistrement...</>

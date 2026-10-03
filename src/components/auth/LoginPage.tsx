@@ -150,7 +150,7 @@ export function LoginPage() {
   const inputClass = "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500";
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 to-slate-100">
+    <main className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 to-slate-100">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-indigo-600">GestionLocal</h1>
@@ -164,13 +164,13 @@ export function LoginPage() {
           <div className="flex rounded-xl bg-slate-100 p-1 mb-4">
             <button
               onClick={() => switchMode('login')}
-              className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${mode === 'login' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}
+              className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${mode === 'login' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'}`}
             >
               Se connecter
             </button>
             <button
               onClick={() => switchMode('register')}
-              className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${mode === 'register' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}
+              className={`flex-1 py-2 text-sm font-medium rounded-lg transition-colors ${mode === 'register' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'}`}
             >
               Créer un compte
             </button>
@@ -183,18 +183,18 @@ export function LoginPage() {
               <form onSubmit={handleForgot} className="space-y-4">
                 <div className="text-center mb-2">
                   <p className="text-sm font-semibold text-slate-700">Réinitialiser le mot de passe</p>
-                  <p className="text-xs text-slate-400 mt-1">Un lien de réinitialisation sera envoyé à votre email</p>
+                  <p className="text-xs text-slate-500 mt-1">Un lien de réinitialisation sera envoyé à votre email</p>
                 </div>
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-slate-700">Email</label>
                   <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="vous@exemple.com" className={inputClass} />
                 </div>
-                {error && <p className="text-red-500 text-sm">{error}</p>}
-                {info && <p className="text-emerald-600 text-sm">{info}</p>}
+                {error && <p className="text-red-600 text-sm">{error}</p>}
+                {info && <p className="text-emerald-700 text-sm">{info}</p>}
                 <Button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 font-semibold">
                   {loading ? 'Envoi...' : 'Envoyer le lien'}
                 </Button>
-                <button type="button" onClick={() => switchMode('login')} className="w-full text-sm text-slate-400 hover:text-slate-600 underline">
+                <button type="button" onClick={() => switchMode('login')} className="w-full text-sm text-slate-500 hover:text-slate-600 underline">
                   Retour à la connexion
                 </button>
               </form>
@@ -207,17 +207,22 @@ export function LoginPage() {
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-slate-700">Mot de passe</label>
                   <div className="relative">
-                    <input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="••••••••" className={inputClass} />
-                    <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    <input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="••••••••" className={inputClass + ' pr-11'} />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                      className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-500 hover:text-slate-700 hover:bg-slate-50 rounded-r-lg focus:outline-none"
+                    >
+                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                     </button>
                   </div>
                 </div>
-                {error && <p className="text-red-500 text-sm">{error}</p>}
+                {error && <p className="text-red-600 text-sm">{error}</p>}
                 <Button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 font-semibold">
                   {loading ? 'Connexion...' : 'Se connecter'}
                 </Button>
-                <button type="button" onClick={() => switchMode('forgot')} className="w-full text-sm text-slate-400 hover:text-slate-600 underline">
+                <button type="button" onClick={() => switchMode('forgot')} className="w-full text-sm text-slate-500 hover:text-slate-600 underline">
                   Mot de passe oublié ?
                 </button>
               </form>
@@ -234,13 +239,18 @@ export function LoginPage() {
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-slate-700">Mot de passe</label>
                   <div className="relative">
-                    <input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="8 caractères minimum" minLength={6} className={inputClass} />
-                    <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600">
-                      {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                    <input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="8 caractères minimum" minLength={6} className={inputClass + ' pr-11'} />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                      className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-500 hover:text-slate-700 hover:bg-slate-50 rounded-r-lg focus:outline-none"
+                    >
+                      {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                     </button>
                   </div>
                 </div>
-                {error && <p className="text-red-500 text-sm">{error}</p>}
+                {error && <p className="text-red-600 text-sm">{error}</p>}
                 {info && <p className="text-indigo-600 text-sm">{info}</p>}
                 <Button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700 font-semibold">
                   {loading ? 'Création...' : 'Créer mon compte'}
@@ -250,6 +260,6 @@ export function LoginPage() {
           </CardContent>
         </Card>
       </div>
-    </div>
+    </main>
   );
 }

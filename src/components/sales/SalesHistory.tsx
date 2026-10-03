@@ -232,7 +232,7 @@ export function SalesHistory() {
 
       {/* Liste des ventes */}
       {totalRows === 0 && !loading && !error ? (
-        <div className="text-center text-slate-400 py-12 text-sm">
+        <div className="text-center text-slate-500 py-12 text-sm">
           Aucune vente sur cette période
         </div>
       ) : sales.length > 0 ? (
@@ -244,7 +244,7 @@ export function SalesHistory() {
                 <button className="w-full text-left" onClick={() => setExpanded(isOpen ? null : sale.id)}>
                   <CardContent className="p-4 flex items-center gap-3">
                     <div className={`h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${
-                      sale.payment_method === 'momo' ? 'bg-emerald-100 text-emerald-600'
+                      sale.payment_method === 'momo' ? 'bg-emerald-100 text-emerald-700'
                       : sale.payment_method === 'credit' ? 'bg-amber-100 text-amber-700'
                       : 'bg-slate-100 text-slate-600'
                     }`}>
@@ -273,7 +273,7 @@ export function SalesHistory() {
                               : 'Espèces'}
                         </Badge>
                       </div>
-                      <div className="text-xs text-slate-400 mt-0.5">
+                      <div className="text-xs text-slate-500 mt-0.5">
                         {formatDate(sale.created_at)} — {sale.sale_items.length} article{sale.sale_items.length > 1 ? 's' : ''}
                         {/* Vente à crédit partiellement réglée : sans cette ligne,
                             l'historique affiche 130 000 F alors que la caisse n'a
@@ -282,20 +282,20 @@ export function SalesHistory() {
                         {sale.payment_method === 'credit'
                           && Number(sale.amount_received ?? 0) > 0
                           && Number(sale.amount_received) < Number(sale.total_amount) && (
-                          <span className="text-amber-600">
+                          <span className="text-amber-700">
                             {' '}— {formatCFA(sale.amount_received)} reçus, {formatCFA(Number(sale.total_amount) - Number(sale.amount_received))} dus
                           </span>
                         )}
                       </div>
                     </div>
-                    {isOpen ? <ChevronUp className="h-4 w-4 text-slate-400 shrink-0" /> : <ChevronDown className="h-4 w-4 text-slate-400 shrink-0" />}
+                    {isOpen ? <ChevronUp className="h-4 w-4 text-slate-500 shrink-0" /> : <ChevronDown className="h-4 w-4 text-slate-500 shrink-0" />}
                   </CardContent>
                 </button>
                 {isOpen && (
                   <div className="border-t border-slate-100 bg-slate-50 px-4 py-3 space-y-1">
                     {sale.sale_items.map((item) => (
                       <div key={item.id} className="flex justify-between text-sm">
-                        <span className="text-slate-600">{item.product_name} <span className="text-slate-400">x{item.quantity}</span></span>
+                        <span className="text-slate-600">{item.product_name} <span className="text-slate-500">x{item.quantity}</span></span>
                         <span className="font-medium text-slate-800">{formatCFA(item.subtotal)}</span>
                       </div>
                     ))}
@@ -315,6 +315,7 @@ export function SalesHistory() {
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-3">
           <button
+            aria-label="Page précédente"
             onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
             disabled={currentPage === 1}
             className="px-3 py-1 text-sm rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50"
@@ -323,6 +324,7 @@ export function SalesHistory() {
           </button>
           <span className="text-sm text-slate-500">{currentPage} / {totalPages}</span>
           <button
+            aria-label="Page suivante"
             onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
             disabled={currentPage === totalPages}
             className="px-3 py-1 text-sm rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50"

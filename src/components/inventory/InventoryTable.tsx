@@ -173,7 +173,7 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
       {/* Barre recherche + boutons */}
       <div className="flex gap-2">
         <div className="relative flex-1">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
           <Input
             placeholder="Rechercher..."
             value={search}
@@ -220,7 +220,7 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
           <TableBody>
             {filtered.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="text-center text-slate-400 py-10">
+                <TableCell colSpan={5} className="text-center text-slate-500 py-10">
                   {products.length === 0 ? (
                     <div className="space-y-2">
                       <p>Aucun produit. Commencez par en ajouter un.</p>
@@ -238,7 +238,7 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
                   <TableRow key={p.id} className="hover:bg-slate-50">
                     <TableCell>
                       <div className="font-medium text-slate-800">{p.name}</div>
-                      {p.sku && <div className="text-xs text-slate-400 font-mono">{p.sku}</div>}
+                      {p.sku && <div className="text-xs text-slate-500 font-mono">{p.sku}</div>}
                     </TableCell>
                     <TableCell>
                       <span className="text-sm text-slate-500">{p.category ?? '—'}</span>
@@ -260,7 +260,7 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
                           <button
                             onClick={() => onRestock(p)}
                             title="Réapprovisionner"
-                            className="p-1.5 rounded-lg text-emerald-600 hover:bg-emerald-50"
+                            className="p-1.5 rounded-lg text-emerald-700 hover:bg-emerald-50"
                           >
                             <PackagePlus className="h-4 w-4" />
                           </button>
@@ -275,13 +275,13 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
                             onClick={() => handleArchive(p)}
                             disabled={deletingId === p.id}
                             title="Archiver"
-                            className="p-1.5 rounded-lg text-red-400 hover:bg-red-50 disabled:opacity-40"
+                            className="p-1.5 rounded-lg text-red-500 hover:bg-red-50 disabled:opacity-40"
                           >
                             <Trash2 className="h-4 w-4" />
                           </button>
                         </div>
                       ) : (
-                        <span className="text-xs text-slate-300">—</span>
+                        <span className="text-xs text-slate-500">—</span>
                       )}
                     </TableCell>
                   </TableRow>
@@ -293,12 +293,13 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
       </div>
 
       <div className="flex items-center justify-between">
-        <p className="text-xs text-slate-400">
+        <p className="text-xs text-slate-500">
           {filtered.length} / {products.length} produit{products.length > 1 ? 's' : ''}
         </p>
         {totalPages > 1 && (
           <div className="flex items-center gap-2">
             <button
+              aria-label="Page précédente"
               onClick={() => setCurrentPage(Math.max(1, safePage - 1))}
               disabled={safePage === 1}
               className="px-2 py-1 text-xs rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50"
@@ -307,6 +308,7 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
             </button>
             <span className="text-xs text-slate-500">{safePage} / {totalPages}</span>
             <button
+              aria-label="Page suivante"
               onClick={() => setCurrentPage(Math.min(totalPages, safePage + 1))}
               disabled={safePage === totalPages}
               className="px-2 py-1 text-xs rounded border border-slate-200 disabled:opacity-40 hover:bg-slate-50"

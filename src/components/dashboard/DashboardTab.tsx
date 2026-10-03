@@ -49,7 +49,7 @@ export function DashboardTab({ products, canManageProducts, onNewSale, onAddProd
         </Card>
         <Card className={`col-span-2 sm:col-span-1 ${lowStockCount > 0 ? 'border-red-200 bg-red-50' : 'border-slate-200'}`}>
           <CardContent className="p-4">
-            <div className={`flex items-center gap-2 text-sm mb-1 ${lowStockCount > 0 ? 'text-red-500' : 'text-slate-500'}`}>
+            <div className={`flex items-center gap-2 text-sm mb-1 ${lowStockCount > 0 ? 'text-red-600' : 'text-slate-500'}`}>
               <AlertTriangle className="h-4 w-4" /> Stock critique
             </div>
             <div className={`text-2xl font-bold ${lowStockCount > 0 ? 'text-red-600' : 'text-slate-800'}`}>
@@ -82,12 +82,12 @@ export function DashboardTab({ products, canManageProducts, onNewSale, onAddProd
               <CardContent className="p-3 flex justify-between items-center">
                 <div>
                   <div className="font-medium text-slate-800 text-sm">{p.name}</div>
-                  <div className="text-xs text-red-500">Stock : {p.stock_qty} / min {p.min_stock_level}</div>
+                  <div className="text-xs text-red-600">Stock : {p.stock_qty} / min {p.min_stock_level}</div>
                 </div>
                 {canManageProducts && (
                   <button
                     onClick={() => onRestock(p)}
-                    className="text-xs bg-emerald-600 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-emerald-700"
+                    className="text-xs bg-emerald-700 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-emerald-800"
                   >
                     Réappro.
                   </button>

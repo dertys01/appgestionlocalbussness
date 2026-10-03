@@ -164,16 +164,16 @@ export function SettingsModule() {
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-slate-700">
                     IFU
-                    <span className="ml-1 text-xs text-slate-400 font-normal">(pour factures normalisées — Plan Pro)</span>
+                    <span className="ml-1 text-xs text-slate-500 font-normal">(pour factures normalisées — Plan Pro)</span>
                   </label>
                   <Input value={orgIfu} onChange={(e) => setOrgIfu(e.target.value)} placeholder="Ex: 1234567890123" />
                 </div>
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-slate-700">Email du compte</label>
-                  <Input value={user?.email ?? ''} disabled className="bg-slate-50 text-slate-400" />
+                  <Input value={user?.email ?? ''} disabled className="bg-slate-50 text-slate-500" />
                 </div>
-                {orgError && <p className="text-red-500 text-sm">{orgError}</p>}
-                {orgSuccess && <p className="text-emerald-600 text-sm">{orgSuccess}</p>}
+                {orgError && <p className="text-red-600 text-sm">{orgError}</p>}
+                {orgSuccess && <p className="text-emerald-700 text-sm">{orgSuccess}</p>}
                 <Button type="submit" disabled={savingOrg} className="gap-2 bg-indigo-600 hover:bg-indigo-700">
                   {savingOrg ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                   Enregistrer
@@ -219,7 +219,7 @@ export function SettingsModule() {
       {tab === 'billing' && (
         <div className="space-y-4">
           {billingError && (
-            <p className="text-red-500 text-xs rounded-lg bg-red-50 border border-red-200 px-3 py-2">
+            <p className="text-red-600 text-xs rounded-lg bg-red-50 border border-red-200 px-3 py-2">
               {billingError}
             </p>
           )}
@@ -247,7 +247,7 @@ export function SettingsModule() {
                       <ul className="space-y-0.5">
                         {p.features.map((f) => (
                           <li key={f} className="text-xs text-slate-500 flex items-center gap-1.5">
-                            <CheckCircle className="h-3 w-3 text-emerald-500 shrink-0" />
+                            <CheckCircle className="h-3 w-3 text-emerald-600 shrink-0" />
                             {f}
                           </li>
                         ))}
@@ -291,7 +291,7 @@ export function SettingsModule() {
                     <p className="text-sm font-medium text-slate-700">Stripe</p>
                     <Badge className="bg-emerald-100 text-emerald-700 text-xs">Disponible</Badge>
                   </div>
-                  <p className="text-xs text-slate-400">Carte bancaire internationale</p>
+                  <p className="text-xs text-slate-500">Carte bancaire internationale</p>
                 </div>
                 {plan !== 'free' && (
                   <Button variant="outline" size="sm" onClick={openPortal} disabled={loadingPortal} className="gap-2 shrink-0">
@@ -311,9 +311,9 @@ export function SettingsModule() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-medium text-slate-700">FedaPay</p>
-                    <Badge className="bg-slate-100 text-slate-500 text-xs">Bientôt disponible</Badge>
+                    <Badge className="bg-slate-100 text-slate-600 text-xs">Bientôt disponible</Badge>
                   </div>
-                  <p className="text-xs text-slate-400">Mobile Money (MTN, Moov) · Paiement local</p>
+                  <p className="text-xs text-slate-500">Mobile Money (MTN, Moov) · Paiement local</p>
                 </div>
               </CardContent>
             </Card>

@@ -150,7 +150,7 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
           <h2 className="font-bold text-slate-800">
             {product ? 'Modifier le produit' : 'Nouveau produit'}
           </h2>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-600" aria-label="Fermer">
             <X className="h-5 w-5" />
           </button>
         </div>
@@ -183,7 +183,7 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
           <div className="space-y-1">
             <label className="text-sm font-medium text-slate-700">
               Catégorie
-              <span className="text-slate-400 font-normal ml-1">(existante ou nouvelle)</span>
+              <span className="text-slate-500 font-normal ml-1">(existante ou nouvelle)</span>
             </label>
             <input
               list="categories-list"
@@ -221,7 +221,7 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
           <div className="space-y-1">
             <label className="text-sm font-medium text-slate-700">
               Fournisseur
-              <span className="text-slate-400 font-normal ml-1">(facultatif)</span>
+              <span className="text-slate-500 font-normal ml-1">(facultatif)</span>
             </label>
             <SupplierSelect
               value={form.supplier_id}
@@ -259,7 +259,7 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
           <div className="space-y-1">
             <label className="text-sm font-medium text-slate-700">
               Unité de vente
-              <span className="text-slate-400 font-normal ml-1">
+              <span className="text-slate-500 font-normal ml-1">
                 (le stock et les quantités s&apos;expriment dans cette unité)
               </span>
             </label>
@@ -311,7 +311,7 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
             </div>
           </div>
 
-          {error && <p className="text-red-500 text-sm">{error}</p>}
+          {error && <p className="text-red-600 text-sm">{error}</p>}
 
           <Button
             type="submit"

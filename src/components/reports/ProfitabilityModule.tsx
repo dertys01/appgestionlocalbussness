@@ -95,9 +95,10 @@ export function ProfitabilityModule() {
           Combien vous gagnez <strong>réellement</strong> sur ce que vous vendez
         </p>
         <button
+          aria-label="Actualiser"
           onClick={load}
           disabled={loading}
-          className="p-2 text-slate-400 hover:text-indigo-600 disabled:opacity-40"
+          className="p-2 text-slate-500 hover:text-indigo-600 disabled:opacity-40"
         >
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
         </button>
@@ -127,7 +128,7 @@ export function ProfitabilityModule() {
             carte perdait sa bordure et son fond. */}
         <Card className={profit >= 0 ? 'border-emerald-200 bg-emerald-50' : 'border-red-200 bg-red-50'}>
           <CardContent className="p-4">
-            <div className={`flex items-center gap-2 text-xs mb-1 ${profit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+            <div className={`flex items-center gap-2 text-xs mb-1 ${profit >= 0 ? 'text-emerald-700' : 'text-red-600'}`}>
               <TrendingUp className="h-3.5 w-3.5" /> Marge brute
             </div>
             <div className={`text-lg font-bold ${profit >= 0 ? 'text-emerald-700' : 'text-red-700'}`}>
@@ -138,10 +139,10 @@ export function ProfitabilityModule() {
         <Card className="border-slate-200">
           <CardContent className="p-4">
             <div className="text-slate-500 text-xs mb-1">Taux de marge</div>
-            <div className={`text-lg font-bold ${marginPct >= 20 ? 'text-emerald-600' : 'text-amber-600'}`}>
+            <div className={`text-lg font-bold ${marginPct >= 20 ? 'text-emerald-700' : 'text-amber-700'}`}>
               {marginPct.toFixed(1)} %
             </div>
-            <div className="text-xs text-slate-400 mt-0.5">
+            <div className="text-xs text-slate-500 mt-0.5">
               {marginPct >= 20 ? 'correct' : 'faible pour ce type de commerce'}
             </div>
           </CardContent>
@@ -228,16 +229,16 @@ export function ProfitabilityModule() {
           </div>
 
           {loading ? (
-            <div className="text-center text-slate-400 py-8 text-sm">Chargement...</div>
+            <div className="text-center text-slate-500 py-8 text-sm">Chargement...</div>
           ) : rows.length === 0 ? (
-            <div className="text-center text-slate-400 py-8 text-sm">
+            <div className="text-center text-slate-500 py-8 text-sm">
               Aucun produit à analyser
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="text-left text-xs text-slate-400 border-b border-slate-200">
+                  <tr className="text-left text-xs text-slate-500 border-b border-slate-200">
                     <th className="pb-2 font-medium">Produit</th>
                     <th className="pb-2 font-medium text-right">Achat</th>
                     <th className="pb-2 font-medium text-right">Vente</th>
@@ -262,10 +263,10 @@ export function ProfitabilityModule() {
                         <td className="py-2 pr-3">
                           <div className="font-medium text-slate-700 truncate max-w-[10rem]">{r.name}</div>
                           {r.category && (
-                            <div className="text-xs text-slate-400">{r.category}</div>
+                            <div className="text-xs text-slate-500">{r.category}</div>
                           )}
                           {aPerte > 0 && (
-                            <div className="text-[10px] text-red-600 mt-0.5">
+                            <div className="text-[11px] text-red-600 mt-0.5">
                               {aPerte} vendu(s) à perte
                             </div>
                           )}
@@ -276,7 +277,7 @@ export function ProfitabilityModule() {
                         <td className="py-2 text-right text-slate-500 tabular-nums">
                           {formatCFA(r.unit_price)}
                           {avg !== null && Math.abs(avg - Number(r.unit_price)) >= 1 && (
-                            <div className="text-[10px] text-amber-600">
+                            <div className="text-[11px] text-amber-700">
                               moyen {formatCFA(avg)}
                             </div>
                           )}
@@ -284,7 +285,7 @@ export function ProfitabilityModule() {
                         <td className="py-2 text-right text-slate-500 tabular-nums">
                           {r.units_sold}
                           {remise > 0 && (
-                            <div className="text-[10px] text-amber-600">
+                            <div className="text-[11px] text-amber-700">
                               −{formatCFA(remise)}
                             </div>
                           )}
@@ -293,12 +294,12 @@ export function ProfitabilityModule() {
                           {formatCFA(r.revenue)}
                         </td>
                         <td className={`py-2 text-right tabular-nums font-medium ${
-                          isLoss ? 'text-red-600' : 'text-emerald-600'
+                          isLoss ? 'text-red-600' : 'text-emerald-700'
                         }`}>
                           {isNoCost ? '—' : formatCFA(r.gross_profit)}
                         </td>
                         <td className={`py-2 text-right tabular-nums ${
-                          isNoCost ? 'text-slate-300' : isLoss ? 'text-red-600' : 'text-emerald-600'
+                          isNoCost ? 'text-slate-500' : isLoss ? 'text-red-600' : 'text-emerald-700'
                         }`}>
                           {pct === null ? '—' : `${pct.toFixed(0)}%`}
                         </td>
@@ -310,7 +311,7 @@ export function ProfitabilityModule() {
             </div>
           )}
 
-          <p className="text-xs text-slate-400 mt-3">
+          <p className="text-xs text-slate-500 mt-3">
             La marge est calculée avec le prix d&apos;achat enregistré au moment de chaque vente. Un
             produit vendu à perte (marge &lt; 10 %) apparaît en rouge.
           </p>

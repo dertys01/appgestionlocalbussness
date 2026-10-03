@@ -415,7 +415,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
       {/* ── Grille produits ── */}
       <div className="flex-1 space-y-4">
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
           <Input
             placeholder="Rechercher un produit..."
             value={search}
@@ -427,7 +427,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         {/* Le compteur évite qu'un commerçant cherche un produit absent en
             croyant qu'il n'existe pas : avec 1 000 références, une grille
             tronquée sans indication paraît vide. */}
-        <div className="flex items-center justify-between text-xs text-slate-400">
+        <div className="flex items-center justify-between text-xs text-slate-500">
           <span>
             {filtered.length} produit{filtered.length > 1 ? 's' : ''}
             {search.trim() && ` pour « ${search.trim()} »`}
@@ -451,12 +451,12 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                     {inCart.quantity}
                   </span>
                 )}
-                <div className="text-xs text-slate-400 mb-1">{p.category ?? '—'}</div>
+                <div className="text-xs text-slate-500 mb-1">{p.category ?? '—'}</div>
                 <div className="font-semibold text-slate-800 text-sm leading-tight line-clamp-2">
                   {p.name}
                 </div>
                 <div className="mt-2 font-bold text-indigo-600">{formatCFA(p.price_sell)}</div>
-                <div className="text-xs text-slate-400">
+                <div className="text-xs text-slate-500">
                   Stock : {formatQty(p.stock_qty)} {p.unit ?? 'pce'}
                 </div>
               </button>
@@ -464,7 +464,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           })}
 
           {filtered.length === 0 && (
-            <div className="col-span-full text-center text-slate-400 py-12">
+            <div className="col-span-full text-center text-slate-500 py-12">
               {search.trim() ? 'Aucun produit ne correspond à cette recherche' : 'Aucun produit disponible'}
             </div>
           )}
@@ -480,7 +480,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
             className="w-full py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-600 transition-colors"
           >
             Afficher plus de produits
-            <span className="text-slate-400 font-normal">
+            <span className="text-slate-500 font-normal">
               {' '}({visibleProducts.length} / {filtered.length})
             </span>
           </button>
@@ -500,7 +500,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         {/* Articles */}
         <div className="flex-1 space-y-2 max-h-[45vh] overflow-y-auto pr-1">
           {cart.length === 0 ? (
-            <div className="text-center text-slate-400 py-10 text-sm">
+            <div className="text-center text-slate-500 py-10 text-sm">
               Cliquez sur un produit pour l&apos;ajouter
             </div>
           ) : (
@@ -538,12 +538,13 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                         aria-label={`Quantité pour ${item.product.name}`}
                         className="w-14 rounded-lg border border-slate-200 px-1.5 py-0.5 text-sm font-bold text-center focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
-                      <span className="text-[10px] text-slate-400 w-8">
+                      <span className="text-[11px] text-slate-500 w-8">
                         {item.product.unit ?? 'pce'}
                       </span>
                       <button
+                        aria-label="Retirer du panier"
                         onClick={() => removeFromCart(item.product.id)}
-                        className="ml-1 text-red-400 hover:text-red-600"
+                        className="ml-1 text-red-500 hover:text-red-600"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </button>
@@ -566,13 +567,13 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                         aria-label={`Prix unitaire négocié pour ${item.product.name}`}
                         className="w-full rounded-lg border border-slate-200 px-2 py-1 text-xs pr-14 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
-                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 pointer-events-none">
+                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-slate-500 pointer-events-none">
                         {formatCFA(item.product.price_sell)}
                       </span>
                     </div>
 
                     {remise > 0 && (
-                      <span className="text-[10px] font-medium text-amber-600 whitespace-nowrap">
+                      <span className="text-[11px] font-medium text-amber-700 whitespace-nowrap">
                         −{formatCFA(remise * item.quantity)}
                       </span>
                     )}
@@ -582,7 +583,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                       Écouler un stock aging est un motif légitime ; ce qui ne
                       l'est pas, c'est de le faire sans le savoir. */}
                   {sousCout && (
-                    <p className="text-[10px] text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-1">
+                    <p className="text-[11px] text-red-600 bg-red-50 border border-red-200 rounded px-1.5 py-1">
                       Sous le prix d&apos;achat ({formatCFA(item.product.price_buy)})
                     </p>
                   )}
@@ -630,7 +631,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
               sans lui, le commerçant ne peut plus contrôler ce qu'il
               concède, et l'écart se normalise sans qu'on s'en aperçoive. */}
           {totalDiscount > 0 && (
-            <div className="flex justify-between text-xs text-slate-400">
+            <div className="flex justify-between text-xs text-slate-500">
               <span>Prix catalogue</span>
               <span className="line-through">{formatCFA(total + totalDiscount)}</span>
             </div>
@@ -640,7 +641,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
             <span className="text-indigo-600">{formatCFA(total)}</span>
           </div>
           {totalDiscount > 0 && (
-            <div className="flex justify-between text-xs text-amber-600 font-medium">
+            <div className="flex justify-between text-xs text-amber-700 font-medium">
               <span>Remise accordée</span>
               <span>− {formatCFA(totalDiscount)}</span>
             </div>
@@ -761,7 +762,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                   </span>
                 </div>
               )}
-              <p className="text-[11px] text-slate-400">
+              <p className="text-[11px] text-slate-500">
                 L&apos;acompte compte au chiffre d&apos;affaires aujourd&apos;hui. Le reste
                 apparaîtra dans l&apos;écran Dettes, et le client sera relance&apos; par
                 WhatsApp.
@@ -770,7 +771,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           )}
 
           {checkoutError && (
-            <p className="text-red-500 text-xs rounded-lg bg-red-50 border border-red-200 px-3 py-2">
+            <p className="text-red-600 text-xs rounded-lg bg-red-50 border border-red-200 px-3 py-2">
               {checkoutError}
             </p>
           )}
@@ -797,7 +798,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
       <Dialog open={!!receipt} onOpenChange={() => setReceipt(null)}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle className={`flex items-center gap-2 ${receipt?.isCredit ? 'text-amber-600' : 'text-emerald-600'}`}>
+            <DialogTitle className={`flex items-center gap-2 ${receipt?.isCredit ? 'text-amber-700' : 'text-emerald-700'}`}>
               {receipt?.isCredit ? '🤝 Vente cédée à crédit' : '✅ Vente enregistrée !'}
             </DialogTitle>
           </DialogHeader>
@@ -815,13 +816,13 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
             {receipt?.isCredit && receipt.advance > 0 && (
               <div className="grid grid-cols-2 gap-2">
                 <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2 text-center">
-                  <div className="text-[10px] text-emerald-600">Encaissé</div>
+                  <div className="text-[11px] text-emerald-700">Encaissé</div>
                   <div className="text-sm font-bold text-emerald-700 tabular-nums">
                     {formatCFA(receipt.advance)}
                   </div>
                 </div>
                 <div className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-center">
-                  <div className="text-[10px] text-amber-600">Reste dû</div>
+                  <div className="text-[11px] text-amber-700">Reste dû</div>
                   <div className="text-sm font-bold text-amber-800 tabular-nums">
                     {formatCFA(receipt.due)}
                   </div>
@@ -844,7 +845,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                     : 'Partager le reçu WhatsApp'}
               </a>
               {!receipt?.clientPhone && (
-                <p className="text-xs text-slate-400 text-center -mt-1">
+                <p className="text-xs text-slate-500 text-center -mt-1">
                   Renseignez un téléphone ci-dessus pour envoyer directement au client.
                 </p>
               )}
@@ -879,7 +880,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                 </Button>
               ) : (
                 <button
-                  className="text-xs text-slate-400 flex items-center justify-center gap-1"
+                  className="text-xs text-slate-500 flex items-center justify-center gap-1"
                   onClick={() => setReceipt(null)}
                 >
                   <FileText className="h-3 w-3" />

@@ -34,6 +34,7 @@ export function Sidebar({ tab, items, email, loadingProducts, onTab, onScan, onR
             key={key}
             onClick={() => { if (!locked) onTab(key); else onTab('settings'); }}
             title={locked ? `${label} — Plan supérieur requis` : label}
+            aria-label={label}
             className={`w-full flex items-center gap-3 px-2 py-2.5 rounded-lg text-sm font-medium transition-colors ${
               tab === key
                 ? 'bg-indigo-50 text-indigo-600'
@@ -56,6 +57,7 @@ export function Sidebar({ tab, items, email, loadingProducts, onTab, onScan, onR
         <button
           onClick={() => onTab('settings')}
           title="Paramètres"
+          aria-label="Paramètres"
           className={`w-full flex items-center gap-3 px-2 py-2.5 rounded-lg text-sm font-medium transition-colors ${
             tab === 'settings' ? 'bg-indigo-50 text-indigo-600' : 'text-slate-500 hover:bg-slate-50'
           }`}
@@ -66,6 +68,7 @@ export function Sidebar({ tab, items, email, loadingProducts, onTab, onScan, onR
         <button
           onClick={onScan}
           title="Scanner"
+          aria-label="Scanner"
           className="w-full flex items-center gap-3 px-2 py-2.5 rounded-lg text-sm text-slate-500 hover:bg-slate-50"
         >
           <ScanBarcode className="h-5 w-5 shrink-0" />
@@ -75,18 +78,31 @@ export function Sidebar({ tab, items, email, loadingProducts, onTab, onScan, onR
           onClick={onRefresh}
           disabled={loadingProducts}
           title="Actualiser"
+          aria-label="Actualiser"
           className="w-full flex items-center gap-3 px-2 py-2.5 rounded-lg text-sm text-slate-500 hover:bg-slate-50 disabled:opacity-40"
         >
           <RefreshCw className={`h-5 w-5 shrink-0 ${loadingProducts ? 'animate-spin' : ''}`} />
           <span className="hidden lg:block">Actualiser</span>
         </button>
-        <div className="hidden lg:block px-2 py-1">
-          <p className="text-xs text-slate-400 truncate">{email}</p>
-        </div>
+        {/* Compte : pastille sous lg (rail d'icônes), e-mail complet à partir de lg */}
+        {email && (
+          <div className="px-2 py-1">
+            <div
+              role="img"
+              aria-label={email}
+              title={email}
+              className="mx-auto flex h-7 w-7 items-center justify-center rounded-full bg-indigo-100 text-xs font-semibold text-indigo-700 lg:hidden"
+            >
+              {email.charAt(0).toUpperCase()}
+            </div>
+            <p className="hidden lg:block text-xs text-slate-500 truncate">{email}</p>
+          </div>
+        )}
         <button
           onClick={onSignOut}
           title="Déconnexion"
-          className="w-full flex items-center gap-3 px-2 py-2.5 rounded-lg text-sm text-red-400 hover:bg-red-50 hover:text-red-600"
+          aria-label="Déconnexion"
+          className="w-full flex items-center gap-3 px-2 py-2.5 rounded-lg text-sm text-red-600 hover:bg-red-50 hover:text-red-700"
         >
           <LogOut className="h-5 w-5 shrink-0" />
           <span className="hidden lg:block">Déconnexion</span>

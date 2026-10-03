@@ -82,7 +82,7 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 to-slate-100">
+    <main className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 to-slate-100">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-indigo-600">GestionLocal</h1>
@@ -97,8 +97,8 @@ export default function RegisterPage() {
             <div key={s} className="flex items-center gap-2">
               <div className={`h-7 w-7 rounded-full flex items-center justify-center text-xs font-bold transition-colors ${
                 step === s ? 'bg-indigo-600 text-white' :
-                (i === 0 && step === 'org') ? 'bg-emerald-500 text-white' :
-                'bg-slate-200 text-slate-400'
+                (i === 0 && step === 'org') ? 'bg-emerald-700 text-white' :
+                'bg-slate-200 text-slate-500'
               }`}>
                 {i === 0 && step === 'org' ? '✓' : i + 1}
               </div>
@@ -131,15 +131,19 @@ export default function RegisterPage() {
                       onChange={(e) => setPassword(e.target.value)}
                       required
                       placeholder="6 caractères minimum"
-                      className="pr-10"
+                      className="pr-11"
                     />
-                    <button type="button" onClick={() => setShowPwd(!showPwd)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400">
-                      {showPwd ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    <button
+                      type="button"
+                      onClick={() => setShowPwd(!showPwd)}
+                      aria-label={showPwd ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+                      className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-500 hover:text-slate-700 hover:bg-slate-50 rounded-r-lg focus:outline-none"
+                    >
+                      {showPwd ? <EyeOff className="h-[18px] w-[18px]" /> : <Eye className="h-[18px] w-[18px]" />}
                     </button>
                   </div>
                 </div>
-                {error && <p className="text-red-500 text-sm">{error}</p>}
+                {error && <p className="text-red-600 text-sm">{error}</p>}
                 <Button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700">
                   {loading ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Création...</> : 'Continuer'}
                 </Button>
@@ -159,9 +163,9 @@ export default function RegisterPage() {
                     placeholder="Ex: Boutique Amen, Super Shop..."
                     autoFocus
                   />
-                  <p className="text-xs text-slate-400">Ce nom apparaîtra dans vos reçus et rapports</p>
+                  <p className="text-xs text-slate-500">Ce nom apparaîtra dans vos reçus et rapports</p>
                 </div>
-                {error && <p className="text-red-500 text-sm">{error}</p>}
+                {error && <p className="text-red-600 text-sm">{error}</p>}
                 <Button type="submit" disabled={loading} className="w-full bg-indigo-600 hover:bg-indigo-700">
                   {loading ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Création...</> : 'Créer ma boutique'}
                 </Button>
@@ -170,10 +174,10 @@ export default function RegisterPage() {
           </CardContent>
         </Card>
 
-        <p className="text-center text-xs text-slate-400 mt-4">
+        <p className="text-center text-xs text-slate-500 mt-4">
           Plan gratuit — aucune carte bancaire requise
         </p>
       </div>
-    </div>
+    </main>
   );
 }

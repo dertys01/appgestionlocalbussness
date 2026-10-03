@@ -136,7 +136,7 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
     urgent: { color: 'border-red-200 bg-red-50', badge: 'bg-red-100 text-red-700 hover:bg-red-100', label: 'Urgent' },
     warning: { color: 'border-amber-200 bg-amber-50', badge: 'bg-amber-100 text-amber-700 hover:bg-amber-100', label: 'Attention' },
     ok: { color: 'border-emerald-200 bg-emerald-50', badge: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100', label: 'OK' },
-    nodata: { color: 'border-slate-200', badge: 'bg-slate-100 text-slate-500 hover:bg-slate-100', label: 'Pas de données' },
+    nodata: { color: 'border-slate-200', badge: 'bg-slate-100 text-slate-600 hover:bg-slate-100', label: 'Pas de données' },
   };
 
   return (
@@ -147,9 +147,10 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
           Basé sur les ventes des <strong>30 derniers jours</strong>
         </p>
         <button
+          aria-label="Actualiser"
           onClick={() => fetchForecasts()}
           disabled={loading}
-          className="p-2 text-slate-400 hover:text-indigo-600 disabled:opacity-40"
+          className="p-2 text-slate-500 hover:text-indigo-600 disabled:opacity-40"
         >
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
         </button>
@@ -167,30 +168,30 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
           <CardContent className="p-3 text-center">
             <AlertTriangle className="h-5 w-5 text-red-500 mx-auto mb-1" />
             <div className="text-2xl font-bold text-red-600">{urgent.length}</div>
-            <div className="text-xs text-red-500">Rupture &lt; 7j</div>
+            <div className="text-xs text-red-600">Rupture &lt; 7j</div>
           </CardContent>
         </Card>
         <Card className="border-amber-200 bg-amber-50">
           <CardContent className="p-3 text-center">
-            <TrendingDown className="h-5 w-5 text-amber-500 mx-auto mb-1" />
-            <div className="text-2xl font-bold text-amber-600">{warning.length}</div>
-            <div className="text-xs text-amber-500">Attention &lt; 14j</div>
+            <TrendingDown className="h-5 w-5 text-amber-600 mx-auto mb-1" />
+            <div className="text-2xl font-bold text-amber-700">{warning.length}</div>
+            <div className="text-xs text-amber-700">Attention &lt; 14j</div>
           </CardContent>
         </Card>
         <Card className="border-emerald-200 bg-emerald-50">
           <CardContent className="p-3 text-center">
-            <CheckCircle className="h-5 w-5 text-emerald-500 mx-auto mb-1" />
-            <div className="text-2xl font-bold text-emerald-600">{ok.length}</div>
-            <div className="text-xs text-emerald-500">Stock suffisant</div>
+            <CheckCircle className="h-5 w-5 text-emerald-600 mx-auto mb-1" />
+            <div className="text-2xl font-bold text-emerald-700">{ok.length}</div>
+            <div className="text-xs text-emerald-700">Stock suffisant</div>
           </CardContent>
         </Card>
       </div>
 
       {/* Liste produits */}
       {loading ? (
-        <div className="text-center text-slate-400 py-10 text-sm">Analyse en cours...</div>
+        <div className="text-center text-slate-500 py-10 text-sm">Analyse en cours...</div>
       ) : forecasts.length === 0 ? (
-        <div className="text-center text-slate-400 py-10 text-sm">Aucun produit</div>
+        <div className="text-center text-slate-500 py-10 text-sm">Aucun produit</div>
       ) : (
         <div className="space-y-2">
           {forecasts.map((f) => {
@@ -216,15 +217,15 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
 
                       <div className="grid grid-cols-3 gap-2 mt-2 text-xs text-slate-500">
                         <div>
-                          <span className="block text-slate-400">Stock actuel</span>
+                          <span className="block text-slate-500">Stock actuel</span>
                           <span className="font-semibold text-slate-700">{f.product.stock_qty}</span>
                         </div>
                         <div>
-                          <span className="block text-slate-400">Vendu / 30j</span>
+                          <span className="block text-slate-500">Vendu / 30j</span>
                           <span className="font-semibold text-slate-700">{f.soldLast30Days}</span>
                         </div>
                         <div>
-                          <span className="block text-slate-400">Moy. / jour</span>
+                          <span className="block text-slate-500">Moy. / jour</span>
                           <span className="font-semibold text-slate-700">
                             {f.avgPerDay > 0 ? f.avgPerDay.toFixed(1) : '—'}
                           </span>
@@ -242,7 +243,7 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
                           direct — c'est déjà le canal de la cible. */}
                       {f.supplierName && (
                         <div className="mt-1.5 flex items-center gap-2 flex-wrap">
-                          <span className="text-xs text-slate-400 flex items-center gap-1">
+                          <span className="text-xs text-slate-500 flex items-center gap-1">
                             <Truck className="h-3 w-3 shrink-0" />
                             {f.supplierName}
                           </span>
@@ -251,7 +252,7 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
                               href={`https://wa.me/${f.supplierPhone.replace(/[^0-9]/g, '')}`}
                               target="_blank"
                               rel="noopener noreferrer"
-                              className="text-xs text-emerald-600 hover:text-emerald-700 font-medium inline-flex items-center gap-1"
+                              className="text-xs text-emerald-700 hover:text-emerald-700 font-medium inline-flex items-center gap-1"
                             >
                               <MessageCircle className="h-3 w-3" />
                               Commander

@@ -104,13 +104,13 @@ export function BarcodeScanner({ onScan, onClose, errorMessage }: BarcodeScanner
             <Camera className="h-5 w-5 text-indigo-600" />
             Scanner un code-barres
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
+          <button onClick={onClose} className="text-slate-500 hover:text-slate-600" aria-label="Fermer">
             <X className="h-5 w-5" />
           </button>
         </div>
 
         {cameraError ? (
-          <div className="text-red-500 text-sm text-center py-6">{cameraError}</div>
+          <div className="text-red-600 text-sm text-center py-6">{cameraError}</div>
         ) : (
           <div id={containerId} className="rounded-lg overflow-hidden" />
         )}
