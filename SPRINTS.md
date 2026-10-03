@@ -34,6 +34,7 @@ chaque item a un critère de fin vérifiable.
 | 8 | **Import CSV de produits** : l'application n'avait qu'un export. Analyseur tolérant (`520.000`, `110k`, Excel FR), refus explicite de la vente à perte, produits existants jamais écrasés · **dépôt public protégé** (`import-local/`) · tests **23 → 65** | `40082cb` `e451839` `953c7f9` |
 | 9 | **Caisse atteignable au POS** : sur mobile le panier était sous la grille de produits — il fallait défiler tout le catalogue pour encaisser. Barre fixe + panier plein écran, total toujours visible | `811e7eb` |
 | 10 | **Rail latéral devenu tiroir sur mobile** : il passait au-dessus de la barre du bas (z-40 contre z-30) et mangeait 64 px de largeur. **64 px rendus au catalogue** · tests **71 → 80** | `0bd81ea` |
+| 11 | **Trouver un article sans parcourir le catalogue** : recherche tolérante aux fautes, par variante (« 128/6 ») et par prix · barre de catégories · **+ vendus sur 30 jours** · reprendre la dernière vente · une lettre tape dans la recherche · tests **80 → 122** | `40bcf87` `14df2b3` |
 
 **Reste dans le Sprint 4 :** 4.3 (25 `eslint-disable` dans 17 fichiers, au fil de l'eau).
 
@@ -888,6 +889,83 @@ npm test          → 0  (55 vérifications SQL, 80 tests de composant)
 
 ---
 
+## Sprint 11 — Trouver un article sans parcourir le catalogue
+
+Reproche du mainteneur : « si 1000 articles, difficile de les sélectionner un
+à un ». La réponse n'est pas de défiler plus vite, c'est de **ne plus avoir à
+chercher**.
+
+### 11.1 — La recherche (`productSearch.ts`, fonction pure)
+
+C'était un `includes()`. Une faute de frappe renvoyait « aucun résultat », que le
+caissier lit comme une **rupture de stock** — c'est le danger principal.
+
+| Saisie | Effet |
+|---|---|
+| `samsng` | trouve Samsung — et `samsng a26` aussi |
+| `128/6` | trouve la **6 Go**, pas la 4 Go |
+| `150000` | trouve le produit acheté 150 000 |
+| `HP1311` | trouve par code-barres |
+| `laptop` | trouve par catégorie |
+
+Classement : commence par > contient > mot > code > prix > approximation.
+
+**Trois bugs trouvés en écrivant les tests :**
+
+1. **Correspondance intérieure notée au-dessus du préfixe.** Chercher
+   « samsung a17 » ramenait « Coque pour Samsung A17 » en premier.
+2. **Une saisie composée n'était satisfaite qu'à moitié.** « 128/6 » ramenait
+   aussi « A17 128/4 » : un seul des deux mots suffisait. Une correspondance
+   partielle est maintenant **éliminatoire** — le caissier encaisse alors la
+   mauvaise variante et l'écart de prix part dans la mauvaise caisse.
+3. **Le piège le plus discret :** « 4 » et « 6 » sont à une distance d'édition
+   de **1**. La tolérance aux fautes rapprochait donc « 128/6 » de « 128/4 ».
+   Sous trois caractères, une différence n'est jamais une faute de frappe,
+   c'est une autre référence. Tolérance **à zéro**.
+
+### 11.2 — La lecture des montants, factorisée
+
+Extraite dans `nombres.ts`, partagé avec l'import CSV qui faisait la même chose
+autrement. Deux copies d'un calcul subtil ont déjà produit deux prix faux
+(`520.000` lu 520, `1.200,50` lu 1,2005) ; une seule, testée, reste.
+
+`lireEntier` refuse volontairement `a17` : une lecture trop permissive
+comparerait un **numéro de modèle** aux prix de la boutique.
+
+### 11.3 — Catégories, + vendus, reprise de vente
+
+- **Barre de catégories collante** : on choisit un rayon au lieu de parcourir
+  1000 cartes.
+- **+ vendus sur 30 jours** en tête de grille. C'est la réponse franche à
+  « 1000 articles » : le classement rend la longueur du catalogue indifférente.
+  `get_units_sold_since()` est verrouillée par plan — sur les autres plans
+  l'appel échoue **en silence**. Un classement absent n'est pas une panne, et
+  une bannière d'erreur nuirait plus au commerce qu'elle n'informerait.
+- **La recherche porte sur tout le catalogue**, jamais sur la seule catégorie
+  retenue. Filtrer sur « laptop » puis chercher « a17 » et ne rien trouver est
+  une impasse que le caissier ne peut pas expliquer.
+- **Reprendre la dernière vente** : standard de tout POS du commerce. Ça
+  **ajoute** au panier, ça ne remplace jamais — donc aucune confirmation, et un
+  clic ne peut rien détruire. Stock plafonné, lignes disparues comptées à part.
+- **Une lettre place le curseur dans la recherche** : un geste au lieu de deux.
+
+### 11.4 — Une erreur d'ergonomie trouvée au passage
+
+La barre du bas et la pastille d'un produit comptaient les **lignes** de
+panier, pas les unités. Deux GSM identiques s'affichaient « 1 article » — le
+caissier y lit une erreur, et la pastille est fausse.
+
+### Définition de fini — Sprint 11
+
+```
+npx tsc --noEmit  → 0
+npm run lint      → 0 problems
+npm run build     → 0
+npm test          → 0  (55 vérifications SQL, 122 tests de composant)
+```
+
+---
+
 ## Hors périmètre (volontairement)
 
 | Sujet | Pourquoi |
@@ -932,6 +1010,10 @@ npm test          → 0  (55 vérifications SQL, 80 tests de composant)
 ## Journal
 
 | Date | Commit | Objet |
+|---|---|---|
+| 03/10/2026 | — | Recette **prod** du Sprint 11 — barre de catégories, + vendus, reprise de vente, recherche tolérante |
+| 03/10/2026 | `14df2b3` | POS — proposition 3 : reprendre la dernière vente (fusion, jamais écrasement) ; unités et non lignes au compteur |
+| 03/10/2026 | `40bcf87` | POS — propositions 1 et 2 : recherche tolérante, catégories, + vendus sur 30 jours |
 |---|---|---|
 | 03/10/2026 | — | Recette **prod** du Sprint 10 — tiroir absent de l'arbre d'accessibilité quand il est fermé, `ml-16` supprimé, 64 px rendus au catalogue |
 | 03/10/2026 | `0bd81ea` | Sprint 10 — le rail latéral passe en tiroir sur mobile (il recouvrait la barre du bas du POS) |
