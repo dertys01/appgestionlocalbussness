@@ -35,7 +35,10 @@ Vérifications de référence, à maintenir à chaque étape :
 
 ## Sprint 3 — Le poids mort : la performance avant les fonctionnalités
 
-Aucune écriture SQL. **Aucun SQL à coller** pour ce sprint entier.
+**Aucun SQL à coller** pour ce sprint entier. Une seule écriture SQL, en 3.2
+(`migration_sales_summary.sql`) : les agrégats PostgREST sont désactivés sur ce projet
+(`PGRST123` — `sum()` → `PGRST200`, `count()` → `PGRST123`), donc aucun total O(1) n'est
+atteignable sans fonction. Appliquée par MCP, comme depuis `ab2aef0`. Tout le reste est du code.
 
 ### 3.1 Sortir recharts du bundle initial
 
@@ -71,6 +74,42 @@ toutes.
 
 **Fini quand :** sur une boutique de test avec 10 000 ventes, ouvrir l'historique et les rapports
 ne télécharge plus que la période demandée, page par page.
+
+**Fait le 03/10/2026 — `6cc277e`.**
+
+- `migration_sales_summary.sql` : `get_sales_summary(p_from, p_to, p_tz)` renvoie **une ligne
+  par jour de vente** (CA, part espèces, part Mobile Money, transactions) ; `get_top_products
+  (p_from, p_to, p_tz, p_limit)` le top produits, plafonné à 100 lignes. Les deux en
+  `SECURITY INVOKER` — la RLS isole les tenants toute seule.
+- **Le fuseau du navigateur part en paramètre.** Le client découpe les journées avec
+  `new Date().getDate()`, donc dans *son* fuseau, alors que SQL calcule dans celui de la
+  session. Sans ce paramètre, chaque barre du graphique se serait décalée d'une case.
+  Bornage exprimé en **instants** et non en dates, sinon `(created_at AT TIME ZONE ...)` ne
+  serait pas sargable et Postgres relirait toute la table — on aurait déplacé le coût.
+- `get_cash_flow()` **non réutilisée** : elle additionne `amount_received` (l'argent entré),
+  les rapports additionnent `total_amount` (le prix de vente). Deux mesures justes,
+  différentes ; les réutiliser l'une pour l'autre aurait fait bouger les chiffres affichés.
+- `SalesHistory` : pagination serveur (`.range()` + `count: 'exact'`) et total de période
+  agrégé en base. L'export CSV recupère de son côté **toutes** les lignes de la période —
+  exporter la seule page visible au nom de la période entière serait un export tronqué en
+  silence.
+- `ReportsModule` : **zéro ligne de vente téléchargée**. Les quatre agrégats lisent la
+  synthèse ; `salesByDay` ne fait plus que replacer les jours dans les seaux `bucketKey()`.
+- Harnais : section 21, **8 assertions** d'équivalence stricte avec l'ancien calcul client
+  (total, espèces, Mobile Money, transactions, découpage par jour, top produits, plafond,
+  privilèges). `ALTER DEFAULT PRIVILEGES` ajouté au harnais pour reproduire ceux de
+  Supabase — sans cela, l'assertion 21h passait en local **pour ne rien prouver**.
+- Vérifié en production : `886 800 F` de CA, `744 800 F` d'espèces, 16 transactions,
+  3 jours — identique au calcul SQL de référence.
+
+⚠ **Anomalie découverte au passage et laissée ouverte :** les **36 autres** fonctions du
+schéma public restent appelables par la clé `anon` en production. Les `REVOKE ... FROM
+PUBLIC` des migrations ne leur retirent rien, Supabase posant des privilèges **directs** sur
+`anon` (pas via `PUBLIC`). Vérifié par appel réel et sans jeu de mots : `beta_status()`
+répond à la clé anonyme, alors que la migration la réserve au `service_role`. Comme
+`close_beta_program()` est `SECURITY DEFINER` **sans aucune garde**, la seule clé publique du
+navigateur suffirait à fermer le programme bêta — et `set_beta_slots()` le rouvrirrait. Les
+deux fonctions créées ici ciblent `anon` explicitement ; **le reste reste à arbitrer.**
 
 ### 3.3 Mémoriser le contexte Supabase
 
@@ -210,6 +249,10 @@ npm test          → 0
 
 | Date | Commit | Objet |
 |---|---|---|
+| 03/10/2026 | `6cc277e` | Sprint 3.2 — totaux de période en base, liste paginée |
+| 03/10/2026 | `980c6c9` | Sprint 3.3 — valeur du contexte Supabase mémorisée |
+| 03/10/2026 | `9532ba8` | Sprint 3.1 — recharts chargé à la demande |
+| 03/10/2026 | `6efd2d3` | Sprint 3.4 — code mort supprimé, lint à 0 warning |
 | 03/10/2026 | `8013458` | Compteur d'inscription après validation |
 | 03/10/2026 | `3a179dc` | Rate limit de `proxy.ts` en production |
 | 02/10/2026 | `ab2aef0` | Réparation de l'API Auth et de la suppression de compte |
