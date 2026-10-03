@@ -29,8 +29,9 @@ chaque item a un critère de fin vérifiable.
 
 **Reste dans le Sprint 4 :** 4.2 (titres de onglet côté serveur, 4 pages sur 4 en
 `'use client'`) et 4.3 (24 `eslint-disable` dans 17 fichiers, au fil de l'eau).
-Puis la **recette manuelle des 9 onglets** : elle n'a pas pu être faite, aucun identifiant
-de test n'ayant été fourni.
+
+**Recette manuelle des 9 onglets : faite** le 03/10/2026, navigateur, deux profils,
+0 erreur JavaScript — détail en fin de section 4.1.
 
 `supabase/migration_security.sql` porte les **7 sections** (1 `rate_limits` hors portée client ·
 2 `organizations.plan` verrouillé · 3 `subscriptions` une ligne par org · 4 `business_members`
@@ -245,9 +246,22 @@ explicables : 9 imports d'icônes devenues inutiles, `useEffect`/`useMemo` parti
 code, les déclarations `Tab`/`ReportView` migrées vers `@/types`, la signature `NAV_ITEMS`
 passée de `as {...}[]` à `: NavItem[]`, et 3 `function X()` devenues `export function X()`.
 
-> **Reste à faire dans le Sprint 4 :** 4.2 (titres de onglet côté serveur) et 4.3 (dette
-> TypeScript), puis la **recette manuelle des 9 onglets** — non faite : aucun identifiant
-> de test n'a été fourni.
+> **Recette manuelle des 9 onglets : FAITE le 03/10/2026**, dans le navigateur, en local sur
+> `localhost:3001`, sur les **deux profils** (propriétaire `dertys01`, caissier `dermarc8`).
+> **0 erreur JavaScript** en console sur toute la session.
+>
+> Chiffres conformes à la base : 8 produits · valeur stock 5 131 600 F · stock critique 0 ·
+> Ventes 993 400 F / 20 transactions · Rapports 993 400 F / espèces 789 800 / MoMo 61 600 ·
+> top RIZ 19,5 / Nokia 105 Duos 8 / Tete chargeur 8 · Rentabilité 32,6 % · Charges 188 200 F.
+> Profil caissier : 1 produit / 2 000 000 F, **aucun** bouton Ajouter ni d'inventaire,
+> titre « Journal d'activité », Rapports à 0.
+>
+> Deux points relevés au passage, **préexistants** et non liés au découpage : l'état de
+> l'onglet et de la sous-vue des rapports survit à la déconnexion (le composant reste monté),
+> et le verrou de la sidebar dépend du **plan** et non du rôle — deux organisations en `pro`
+> donnent les mêmes 9 entrées déverrouillées.
+>
+> **Reste dans le Sprint 4 :** 4.2 (titres de onglet côté serveur) et 4.3 (dette TypeScript).
 
 ### 4.2 Remettre du server-side là où ça a un sens
 
@@ -290,7 +304,7 @@ npx tsc --noEmit  → 0
 npm run lint      → 0 problems
 npm run build     → 0
 npm test          → 0
-+ recette manuelle des 9 onglets
++ recette manuelle des 9 onglets  → ✓ faite le 03/10/2026
 ```
 
 ---
