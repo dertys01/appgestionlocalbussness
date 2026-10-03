@@ -119,12 +119,6 @@ async function bootstrap() {
   await e(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role;`);
 }
 
-async function asUser(id, fn) {
-  await q(`SELECT set_config('request.jwt.claim.sub', ${q2(id)}, false)`);
-  return fn();
-}
-const q2 = (v) => `'${v}'`;
-
 // ─── 1. Application des migrations ──────────────────────────
 console.log('\n▸ Application des migrations');
 await bootstrap();
@@ -444,7 +438,7 @@ const canRead = async (label, sql, expectVisible, as) => {
   try {
     const r = await q(sql);
     value = Number(r.rows[0].count);
-  } catch (ex) {
+  } catch {
     value = -1;
   }
   await e('RESET ROLE');
@@ -752,7 +746,7 @@ const TODAY = '2026-06-15';
       `SELECT count(*)::int c FROM expenses WHERE user_id = '${AUTRE3}'`)).rows[0].c);
     const cf = (await q(`SELECT * FROM get_cash_flow('2026-06-15','2026-06-15')`)).rows[0];
     cfExpenses = Number(cf.expenses);
-  } catch (err) {
+  } catch {
     leaked = -2;
   }
   await e('RESET ROLE');
@@ -1476,12 +1470,6 @@ await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
 await q(`INSERT INTO products (id, user_id, name, price_buy, price_sell, stock_qty)
          VALUES ('${ART_C}', '${PATRON}', 'Article crédit', 4000, 10000, 100)`);
 
-const vendreC = async (qty) => {
-  const r = await q(`SELECT record_credit_sale(
-    '[{"product_id":"${ART_C}","quantity":${qty}}]'::jsonb, 'Test', '+229 97 00 00 01', null) AS v`);
-  const b = r.rows[0]?.v;
-  return typeof b === 'string' ? JSON.parse(b) : b;
-};
 const credit = async (qty, nom, tel) => {
   const r = await q(`SELECT record_credit_sale(
     '[{"product_id":"${ART_C}","quantity":${qty}}]'::jsonb, '${nom}', '${tel}', null) AS v`);
