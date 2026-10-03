@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { requireEnv, sanitizeError } from '@/lib/utils/server';
+import { z } from 'zod';
+
+const RegisterBody = z.object({
+  email: z.string().email(),
+  password: z.string().min(1),
+  businessName: z.string().min(1),
+});
 
 // Validées AVANT tout appel réseau : createClient(URL, undefined) produisait
 // une erreur d'en-tête invalide dont le message affichait la clé utilisée.
@@ -69,25 +76,23 @@ export async function POST(req: NextRequest) {
     // Le volume brut, lui, reste borné par le proxy — 10 écritures/min par
     // couple (IP, chemin), valides ou non — donc une boucle de requêtes
     // invalides ne devient pas gratuite pour autant.
-    let body: { email?: string; password?: string; businessName?: string };
+    let rawBody: unknown;
     try {
-      body = await req.json();
+      rawBody = await req.json();
     } catch {
       // Corps illisible : 400 SANS compter. C'est exactement le cas que le
       // compteur ne doit plus griller — un client sur réseau capricieux qui
       // renvoie un JSON tronqué paierait une heure entière pour rien.
       return NextResponse.json({ error: 'Requête invalide.' }, { status: 400 });
     }
-    const { email: rawEmail, password, businessName } = body ?? {};
-    if (!rawEmail || !password || !businessName) {
-      return NextResponse.json({ error: 'Tous les champs sont requis.' }, { status: 400 });
+    const parsed = RegisterBody.safeParse(rawBody);
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Tous les champs sont requis et valides.' }, { status: 400 });
     }
-    if (typeof rawEmail !== 'string' || typeof password !== 'string' || typeof businessName !== 'string') {
-      return NextResponse.json({ error: 'Requête invalide.' }, { status: 400 });
-    }
+    const { password, businessName } = parsed.data;
     // Sans normalisation, `Register@Exemple.com ` et `register@exemple.com`
     // créent deux comptes pour la même personne — ou une session introuvable.
-    const email = rawEmail.trim().toLowerCase();
+    const email = parsed.data.email.trim().toLowerCase();
     if (password.length < 6) {
       return NextResponse.json({ error: 'Mot de passe : 6 caractères minimum.' }, { status: 400 });
     }

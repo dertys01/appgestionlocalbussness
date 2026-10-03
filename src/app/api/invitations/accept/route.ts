@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
+import { createHash } from 'crypto';
 import { serverError, requireEnv } from '@/lib/utils/server';
+import { z } from 'zod';
 
 const SUPABASE_URL = requireEnv('NEXT_PUBLIC_SUPABASE_URL');
 const SERVICE_ROLE_KEY = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
@@ -19,17 +21,23 @@ function getAdminClient() {
 // compte correspond bien à l'email invité, en base, sous verrou.
 export async function POST(req: NextRequest) {
   try {
-    const { token, name, password } = await req.json();
+    const parsed = z
+      .object({
+        token: z.string().min(16),
+        name: z.string().min(1),
+        password: z.string().min(6, 'Le mot de passe doit faire au moins 6 caractères.'),
+      })
+      .safeParse(await req.json().catch(() => null));
 
-    if (!token || !name || !password) {
-      return NextResponse.json({ error: 'Lien, nom et mot de passe sont obligatoires' }, { status: 400 });
+    if (!parsed.success) {
+      const first = parsed.error.issues[0]?.message ?? 'Requête invalide.';
+      return NextResponse.json({ error: first }, { status: 400 });
     }
-    if (typeof password !== 'string' || password.length < 6) {
-      return NextResponse.json({ error: 'Le mot de passe doit faire au moins 6 caractères.' }, { status: 400 });
-    }
-    if (typeof name !== 'string' || name.trim().length === 0) {
-      return NextResponse.json({ error: 'Indiquez votre nom.' }, { status: 400 });
-    }
+    const { token, name, password } = parsed.data;
+
+    // Le jeton présenté n'est comparé que sous forme de hash : la table ne
+    // contient plus le lien utilisable, même en cas de fuite.
+    const tokenHash = createHash('sha256').update(String(token)).digest('hex');
 
     const adminClient = getAdminClient();
 
@@ -60,7 +68,7 @@ export async function POST(req: NextRequest) {
     const { data: inv, error: invError } = await adminClient
       .from('employee_invitations')
       .select('email, accepted_at, expires_at, owner_id')
-      .eq('token', String(token))
+      .eq('token', tokenHash)
       .maybeSingle();
 
     if (invError) throw invError;
@@ -133,7 +141,7 @@ export async function POST(req: NextRequest) {
     // 3. Consommer l'invitation. La fonction est atomique et refait le contrôle
     //    email : c'est elle qui fait foi, même en cas de double soumission.
     const { data: redeemed, error: redeemError } = await adminClient.rpc('redeem_invitation', {
-      p_token: String(token),
+      p_token: tokenHash,
       p_member_id: userId,
       p_member_name: name.trim(),
     });

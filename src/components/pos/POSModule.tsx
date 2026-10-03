@@ -801,8 +801,8 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         <div className="flex items-center gap-2 font-semibold text-slate-700">
           <ShoppingCart className="h-5 w-5 text-indigo-600" />
           Panier
-          {cart.length > 0 && (
-            <Badge className="ml-auto bg-indigo-600">{cart.length}</Badge>
+          {unites > 0 && (
+            <Badge className="ml-auto bg-indigo-600">{unites}</Badge>
           )}
           {/* Présent seulement quand le panneau a été ouvert, c'est-à-dire
               depuis la barre du bas. Sans le `lg:hidden`, un passage en
@@ -1242,17 +1242,17 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
       >
         <span className="relative shrink-0">
           <ShoppingCart className="h-5 w-5 text-indigo-600" />
-          {cart.length > 0 && (
+          {unites > 0 && (
             <span className="absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 rounded-full bg-indigo-600 text-white text-[10px] leading-4 text-center font-bold">
-              {cart.length}
+              {unites}
             </span>
           )}
         </span>
         <span className="min-w-0">
           <span className="block text-xs text-slate-500">
-            {cart.length === 0
+            {unites === 0
               ? 'Panier vide'
-              : `${cart.length} article${cart.length > 1 ? 's' : ''} · Total`}
+              : `${unites} article${unites > 1 ? 's' : ''} · Total`}
           </span>
           <span className="block text-base font-bold text-slate-800">{formatCFA(total)}</span>
         </span>
