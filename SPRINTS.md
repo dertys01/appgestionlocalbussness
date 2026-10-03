@@ -26,13 +26,13 @@ chaque item a un critère de fin vérifiable.
 | — | Faille `anon` close : **33 → 2** fonctions appelables par la clé publique | `3e8dbba` |
 | 3 | 3.1 recharts chargé à la demande · 3.2 totaux de période en base + pagination · 3.3 contexte Supabase mémorisé · 3.4 code mort, lint à 0 warning | `9532ba8` `6cc277e` `980c6c9` `6efd2d3` |
 | 4.1 | `page.tsx` découpé : **861 → 261 lignes**, 8 fichiers, aucun changement de comportement | `8a125ee` |
-| — | Recette manuelle des 9 onglets : navigateur, 2 profils (propriétaire + caissier), **0 erreur JS** | `7e7627a` |
+| — | Recette manuelle des 9 onglets : navigateur, 2 profils (propriétaire + caissier), **0 erreur JS** — **locale ET prod** | `7e7627a` |
 | 4.2 | Titres de onglet côté serveur : **3 layouts `metadata`**, `page.tsx` intacts (4/4 toujours client) | `c4ba478` |
 
 **Reste dans le Sprint 4 :** 4.3 (24 `eslint-disable` dans 17 fichiers, au fil de l'eau).
 
 **Recette manuelle des 9 onglets : faite** le 03/10/2026, navigateur, deux profils,
-0 erreur JavaScript — détail en fin de section 4.1.
+**en local puis en prod**, 0 erreur JavaScript — détail en fin de section 4.1.
 
 `supabase/migration_security.sql` porte les **7 sections** (1 `rate_limits` hors portée client ·
 2 `organizations.plan` verrouillé · 3 `subscriptions` une ligne par org · 4 `business_members`
@@ -257,6 +257,19 @@ passée de `as {...}[]` à `: NavItem[]`, et 3 `function X()` devenues `export f
 > Profil caissier : 1 produit / 2 000 000 F, **aucun** bouton Ajouter ni d'inventaire,
 > titre « Journal d'activité », Rapports à 0.
 >
+> **Rejouée le même jour sur la prod** (`appgestionlocalbussness.vercel.app`, déploiement
+> Vercel déclenché par le push) : 9/9 onglets chez le propriétaire, les 4 différences
+> caissier conformes, **0 erreur JS** aussi. Titres de onglet servis par les layouts du
+> Sprint 4.2, vérifiés dans le HTML brut.
+>
+> ⚠️ Une **vente réelle de 380 000 F** (hp 15, espèces) est tombée en base à 04:29 UTC,
+> c'est-à-dire **entre la lecture de l'onglet Stock et celle de l'onglet Ventes** pendant
+> cette recette — saisie par quelqu'un d'autre que l'agent, qui n'a fait que lire. Vérifié
+> en SQL : `stock_qty` du `hp` est bien passé **5 → 4**, `valeur stock` 5 131 600 →
+> 4 781 600 (relecture du tableau de bord : conforme), CA 993 400 → 1 373 400,
+> 20 → 21 transactions. **Aucune incohérence** : les agrégats ont suivi la vente à chaque
+> étape.
+>
 > Deux points relevés au passage, **préexistants** et non liés au découpage : l'état de
 > l'onglet et de la sous-vue des rapports survit à la déconnexion (le composant reste monté),
 > et le verrou de la sidebar dépend du **plan** et non du rôle — deux organisations en `pro`
@@ -357,7 +370,7 @@ npm test          → 0
 | Date | Commit | Objet |
 |---|---|---|
 | 03/10/2026 | `c4ba478` | Sprint 4.2 — 3 layouts serveur portant `metadata` (titres de onglet) |
-| 03/10/2026 | `7e7627a` | Recette manuelle des 9 onglets — navigateur, 2 profils, 0 erreur JS |
+| 03/10/2026 | `7e7627a` | Recette manuelle des 9 onglets — navigateur, 2 profils, 0 erreur JS (local + prod) |
 | 03/10/2026 | `8a125ee` | Sprint 4.1 — `page.tsx` découpé : 861 → 261 lignes, 8 fichiers créés |
 | 03/10/2026 | `3e8dbba` | Faille `anon` close — section 7 de `migration_security.sql`, section 22 du harnais |
 | 03/10/2026 | `6cc277e` | Sprint 3.2 — totaux de période en base, liste paginée |
