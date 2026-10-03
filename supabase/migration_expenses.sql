@@ -134,6 +134,13 @@ CREATE INDEX IF NOT EXISTS idx_expenses_user_category ON expenses(user_id, categ
 -- ─── 3. Résultat journalier ────────────────────────────────
 -- SECURITY INVOKER : l'isolation vient de la RLS de sales et expenses.
 -- Aucune règle de tenancy dupliquée.
+-- get_cash_flow() est redéfinie plus loin, avec un type de retour différent :
+-- PostgreSQL refuse « cannot change return type of existing function » sur un
+-- CREATE OR REPLACE. Le DROP rend ce fichier rejouable sur une base qui porte
+-- déjà la version corrigée de la section 8 de migration_security.sql — version
+-- que le harnais rétablit en fin de rejouabilité.
+DROP FUNCTION IF EXISTS get_cash_flow(date, date);
+
 CREATE OR REPLACE FUNCTION get_cash_flow(p_from date, p_to date)
 RETURNS TABLE (
   day          date,

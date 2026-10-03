@@ -354,3 +354,137 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 
 GRANT EXECUTE ON FUNCTION get_business_owner_id() TO anon;
 GRANT EXECUTE ON FUNCTION can_manage_products()   TO anon;
+
+-- ─── 8. get_cash_flow() : le résultat net déduit le coût des ventes ──────
+--
+-- L'écran « Charges » affichait « Résultat net = CA − charges ». Le calcul
+-- tient entre les chiffres montrés — et il est faux. Il oublie ce que la
+-- marchandise a coûté. Relevé en production sur 30 jours :
+--
+--     chiffre d'affaires                     1 349 400 F
+--     coût des marchandises vendues            953 756 F   ← absent
+--     charges de structure                     188 200 F
+--     résultat affiché                       1 161 200 F   (86,1 %)
+--     résultat réel                            207 444 F   (15,4 %)
+--
+-- L'écart est exactement le coût d'achat : le commerçant paraissait 5,6 fois
+-- plus riche qu'il n'était. Un taux de marge nette de 86 % n'existe dans aucun
+-- commerce de détail — 15 % est la marque d'une boutique saine. « CA − charges »
+-- n'est ni le résultat net ni la marge brute : il lui manque le CMV.
+--
+-- Le coût vient de sale_items.unit_cost, figé à la vente par
+-- freeze_sale_item_cost() : l'historique ne bouge pas quand le prix d'achat est
+-- corrigé aujourd'hui. Il est proratisé sur amount_received / total_amount,
+-- exactement comme le CA — une vente à crédit ne doit débiter que la part
+-- encaissée, sinon ventes et coûts ne seraient pas sur la même base et le
+-- résultat fausserait dans les deux sens.
+--
+-- Une colonne s'ajoute, rien ne se supprime : le client lit les champs par leur
+-- nom, un champ de plus est donc sans effet sur le code antérieur.
+--
+-- DROP puis CREATE, et non CREATE OR REPLACE : PostgreSQL refuse de changer le
+-- type de retour d'une fonction existante (« cannot change return type of
+-- existing function »). Rejouable : le IF EXISTS et le GRANT en fin de section.
+
+DROP FUNCTION IF EXISTS get_cash_flow(date, date);
+
+CREATE FUNCTION get_cash_flow(p_from date, p_to date)
+RETURNS TABLE (
+  day          date,
+  revenue      numeric,
+  cogs         numeric,
+  expenses     numeric,
+  net          numeric,
+  transactions bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+AS $$
+  WITH bounds AS (
+    -- Fuseau de l'organisation, avec repli sur celui du pays si absent.
+    SELECT COALESCE(
+             (SELECT o.timezone FROM organizations o
+               WHERE o.id = get_business_owner_id()),
+             'Africa/Porto-Novo'
+           ) AS tz
+  ),
+  sales_by_day AS (
+    SELECT
+      (s.created_at AT TIME ZONE (SELECT tz FROM bounds))::date AS d,
+      -- Base de caisse, sans exception : le chiffre d'affaires est ce qui est
+      -- réellement rentré, et amount_received est la seule colonne qui le sait.
+      -- Une vente espèces vaut son prix, une vente à crédit vaut son acompte.
+      SUM(s.amount_received) AS rev,
+      COUNT(*)               AS tx
+    FROM sales s
+    WHERE (s.created_at AT TIME ZONE (SELECT tz FROM bounds))::date
+          BETWEEN p_from AND p_to
+    GROUP BY 1
+  ),
+  -- Le même prorata que le CA, appliqué au coût figé à la vente. Les deux
+  -- colonnes sortent donc sur une base identique, ce qui est la condition pour
+  -- qu'une soustraction ait un sens.
+  items_by_day AS (
+    SELECT
+      (s.created_at AT TIME ZONE (SELECT tz FROM bounds))::date AS d,
+      SUM(si.unit_cost * si.quantity * CASE
+             WHEN s.total_amount > 0 THEN s.amount_received / s.total_amount
+             ELSE 0
+           END) AS cost
+    FROM sales s
+    JOIN sale_items si ON si.sale_id = s.id
+    WHERE si.unit_cost IS NOT NULL
+      AND (s.created_at AT TIME ZONE (SELECT tz FROM bounds))::date
+          BETWEEN p_from AND p_to
+    GROUP BY 1
+  ),
+  expenses_by_day AS (
+    SELECT x.day AS d, SUM(x.amount) AS spent
+    FROM expenses x
+    WHERE x.day BETWEEN p_from AND p_to
+    GROUP BY 1
+  ),
+  -- Journées vues par au moins un des deux flux. Un jour sans vente mais avec
+  -- charge doit apparaître : c'est ce que faisait le FULL OUTER JOIN. Une
+  -- UNION de jours puis trois LEFT JOIN donne le même résultat sans que la
+  -- couverture dépendre de l'ordre des jointures, et le garde de plan reste
+  -- atteint dès qu'une ligne existe — comme avant.
+  jours AS (
+    SELECT d FROM sales_by_day
+    UNION
+    SELECT d FROM expenses_by_day
+  )
+  SELECT
+    j.d                                              AS day,
+    COALESCE(s.rev, 0)                               AS revenue,
+    COALESCE(i.cost, 0)                              AS cogs,
+    COALESCE(x.spent, 0)                             AS expenses,
+    COALESCE(s.rev, 0) - COALESCE(i.cost, 0)
+      - COALESCE(x.spent, 0)                         AS net,
+    COALESCE(s.tx, 0)                                AS transactions
+  FROM jours j
+  LEFT JOIN sales_by_day    s ON s.d = j.d
+  LEFT JOIN items_by_day    i ON i.d = j.d
+  LEFT JOIN expenses_by_day x ON x.d = j.d
+  -- VERROU DE PLAN. Même raison que get_product_profitability() : l'appel RPC
+  -- contourne le cadenas du menu. Ici, ce que le client gratuit lirait est le
+  -- résultat net par jour — exactement ce qui se trouve au bas de la page
+  -- « Charges », la ligne que le plan vend.
+  -- require_feature est VOLATILE : elle ne peut être ni écartée ni mise en
+  -- cache par le planificateur. Aucune ligne = aucun chiffre divulgué.
+  WHERE (SELECT true FROM require_feature('reports'))
+  ORDER BY 1;
+$$;
+
+COMMENT ON FUNCTION get_cash_flow(date, date) IS
+  'Résultat journalier : CA − coût des marchandises vendues − charges. '
+  'Le CMV provient de sale_items.unit_cost figé à la vente, proraté sur '
+  'amount_received comme le CA. L''isolation vient de la RLS de sales et '
+  'expenses (SECURITY INVOKER). Repli sur Africa/Porto-Novo si la timezone '
+  'de l''organisation est absente.';
+
+REVOKE ALL ON FUNCTION get_cash_flow(date, date) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION get_cash_flow(date, date) TO authenticated;
+GRANT  EXECUTE ON FUNCTION get_cash_flow(date, date) TO service_role;

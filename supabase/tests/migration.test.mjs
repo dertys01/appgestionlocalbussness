@@ -180,7 +180,7 @@ const DERNIERE_VERSION = [
   //   products_with_supplier, et il lui faut la table suppliers pour ce faire.
   'migration_suppliers.sql',     // products_with_supplier (remise en état)
   'migration_profitability.sql',  // archive_product, restore_product, gel du cout
-  'migration_expenses.sql',       // seed_expense_categories, get_cash_flow
+  'migration_expenses.sql',       // seed_expense_categories
   'migration_invitations.sql',    // redeem_invitation, purge_accepted_invitations
   'migration_roles.sql',          // can_manage_products
   'migration_credit_fns.sql',     // normalize_phone, record_credit_sale, pay, soldes
@@ -190,6 +190,14 @@ const DERNIERE_VERSION = [
   //   n'est pas une redéfinition de fonction : la rejouer donnait une
   //   organisation fantôme à l'employé du test 4k et cassait deux assertions.
   //   Un seed de données n'a pas à être rejoué pour que le schéma soit bon.
+  //
+  // get_cash_flow() porte un type de retour différent depuis la section 8 de
+  // migration_security.sql (colonne cogs ajoutée). Son corps n'existe donc
+  // qu'à un seul endroit, et c'est ici qu'on le rétablit : la rejouabilité a
+  // pu réinstaller l'ancienne version via migration_expenses.sql, et la
+  // remise en état s'arrête à migration_partial_payment.sql.
+  // En DERNIÈRE position, comme la règle du dépôt l'impose.
+  'migration_security.sql',
 ];
 
 console.log(`\n▸ Rejouabilité (${REPLAYABLE.length} migrations incrémentales)`);
@@ -717,6 +725,31 @@ const TODAY = '2026-06-15';
   const row = (await q(`SELECT * FROM get_cash_flow('${d}', '${d}')`)).rows[0];
   check('7j. journée sans vente mais avec charge visible', !!row && Number(row.revenue) === 0,
     row ? `revenue ${row.revenue}` : 'jour absent');
+}
+
+// Le coût des marchandises vendues fait partie du résultat. Sans lui, l'écran
+// « Charges » affichait CA − charges : un bénéfice fictif, puisque le prix de
+// la marchandise n'était déduit nulle part. Relevé en prod sur 30 jours :
+// 1 161 200 F affichés pour 207 444 F réels, l'écart valant exactement le CMV.
+{
+  const d = '2026-06-18';
+  const p = '9c9c9c9c-0000-4000-8000-000000000001';
+  const s = '9c9c9c9c-0000-4000-8000-000000000002';
+  await q(`INSERT INTO products (id, user_id, name, price_buy, price_sell, stock_qty)
+           VALUES ('${p}', '${PATRON}', 'Sac de riz 25 kg', 4000, 10000, 50)`);
+  await q(`INSERT INTO sales (id, user_id, total_amount, payment_method, created_at)
+           VALUES ('${s}', '${PATRON}', 30000, 'cash', '${d}T09:00:00+00:00')`);
+  await q(`INSERT INTO sale_items
+             (sale_id, product_id, product_name, quantity, unit_price, subtotal, unit_cost)
+           VALUES ('${s}', '${p}', 'Sac de riz 25 kg', 3, 10000, 30000, 4000)`);
+
+  const row = (await q(`SELECT * FROM get_cash_flow('${d}', '${d}')`)).rows[0];
+  check('7o. CA du jour = 30 000', Number(row?.revenue) === 30000, `obtenu ${row?.revenue}`);
+  check('7p. coût des marchandises = 12 000 (3 × 4 000)', Number(row?.cogs) === 12000,
+    `obtenu ${row?.cogs}`);
+  check('7q. le résultat déduit bien le coût : CA − CMV − charges',
+    Number(row?.net) === Number(row?.revenue) - Number(row?.cogs) - Number(row?.expenses),
+    `net ${row?.net} pour CA ${row?.revenue}, CMV ${row?.cogs}, charges ${row?.expenses}`);
 }
 
 // RLS : un employé lit mais n'écrit pas
