@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
+import dynamic from 'next/dynamic';
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -27,7 +28,6 @@ import { InventoryCount } from '@/components/inventory/InventoryCount';
 import { POSModule } from '@/components/pos/POSModule';
 import { SalesHistory } from '@/components/sales/SalesHistory';
 import { DebtsModule } from '@/components/debts/DebtsModule';
-import { ReportsModule } from '@/components/reports/ReportsModule';
 import { ProfitabilityModule } from '@/components/reports/ProfitabilityModule';
 import { ExpensesModule } from '@/components/reports/ExpensesModule';
 import { ForecastModule } from '@/components/forecast/ForecastModule';
@@ -44,6 +44,22 @@ import type { Product } from '@/types';
 
 type Tab = 'dashboard' | 'pos' | 'inventory' | 'sales' | 'debts' | 'reports' | 'forecast' | 'team' | 'settings';
 type ReportView = 'sales' | 'profit' | 'expenses';
+
+// Chargé à la demande : recharts ne doit pas entrer dans le bundle initial,
+// qui est téléchargé à chaque ouverture de la caisse. L'onglet Rapports n'est
+// jamais rendu au premier affichage (onglet par défaut : dashboard), donc
+// personne n'attend ce chargement.
+const ReportsModule = dynamic(
+  () => import('@/components/reports/ReportsModule').then((mod) => mod.ReportsModule),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex items-center justify-center py-16">
+        <div className="animate-spin h-8 w-8 rounded-full border-4 border-indigo-600 border-t-transparent" />
+      </div>
+    ),
+  }
+);
 
 export default function HomePage() {
   const { supabase, user, loading, isEmployee, canManageProducts, org, plan, orgError } = useSupabase();
