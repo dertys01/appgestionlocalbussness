@@ -2600,5 +2600,114 @@ const anon = (await q(`
 check('21h. la clé anon ne peut pas appeler ces fonctions',
   anon.a === false && anon.b === false, `anon=${anon.a}/${anon.b}`);
 
+// ─── 22. La clé anon ne doit plus rien appeler ────────────────
+// Constat qui a motivé la 7ᵉ section de migration_security.sql : Supabase
+// accorde EXECUTE à anon, authenticated et service_role au moment de la
+// CRÉATION de chaque fonction (ALTER DEFAULT PRIVILEGES). Le grant vient du
+// rôle, pas de PUBLIC — donc tous les `REVOKE ... FROM PUBLIC` écrits dans les
+// migrations ne lui retiraient rien, et la clé publique du navigateur appelait
+// 33 des 35 fonctions, dont 20 en SECURITY DEFINER.
+//
+// Sans cette section, le harnais restait vert pendant que la base réelle
+// laissait la porte ouverte : c'est exactement ce qui s'est passé.
+console.log('\n▸ Exposition de la clé anon');
+
+const anonFns = (await q(`
+  SELECT p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')' AS sig
+    FROM pg_proc p
+    JOIN pg_namespace ns ON ns.oid = p.pronamespace
+   WHERE ns.nspname = 'public' AND p.prokind = 'f'
+     AND has_function_privilege('anon', p.oid, 'EXECUTE')
+   ORDER BY 1`)).rows.map((r) => r.sig);
+
+// Deux, et deux seulement : celles que les policies RLS appellent. Elles
+// s'évaluent sous le rôle de l'appelant, donc les retirer ferait renvoyer
+// « permission denied » au lieu de zéro ligne. Pour anon elles renvoient
+// NULL / false — aucun accès concédé.
+const anonAttendues = ['can_manage_products()', 'get_business_owner_id()'];
+check('22a. anon ne garde que les deux helpers des policies RLS',
+  JSON.stringify(anonFns) === JSON.stringify(anonAttendues),
+  `${anonFns.length} fonction(s) : ${anonFns.join(', ')}`);
+
+// Ce que le navigateur appelle réellement, relevé par grep sur `.rpc(`.
+const duNavigateur = [
+  'create_sale', 'record_credit_sale', 'archive_product', 'get_customer_debts',
+  'pay_customer_debt', 'get_sales_summary', 'get_top_products', 'get_cash_flow',
+  'get_product_profitability', 'get_units_sold_since', 'seed_expense_categories',
+  'current_org_plan',
+];
+const privs = (await q(`
+  SELECT DISTINCT p.proname
+    FROM pg_proc p
+    JOIN pg_namespace ns ON ns.oid = p.pronamespace
+   WHERE ns.nspname = 'public' AND p.prokind = 'f'
+     AND p.proname IN (${duNavigateur.map((f) => `'${f}'`).join(', ')})
+     AND has_function_privilege('authenticated', p.oid, 'EXECUTE')`)).rows
+  .map((r) => r.proname).sort();
+const attendues = [...duNavigateur].sort();
+check('22b. authenticated appelle toujours les 12 fonctions du navigateur',
+  JSON.stringify(privs) === JSON.stringify(attendues),
+  `présentes : ${privs.join(', ')}`);
+
+// Le vrai risque d'un REVOKE trop large : une policy RLS qui ne s'évalue plus.
+// On passe en rôle anon, on vide les variables JWT laissées par les sections
+// précédentes (sans quoi auth.uid() répond encore et le test ne prouve rien),
+// puis on interroge les deux helpers et on vérifie qu'une fonction de garde
+// est bien refusée.
+let helperOwner, helperRole, gardeBloquee;
+try {
+  await e(`SET ROLE anon;
+           SELECT set_config('request.jwt.claim.sub', '', false);
+           SELECT set_config('request.jwt.role', 'anon', false);`);
+  helperOwner = (await q(`SELECT get_business_owner_id() IS NULL AS v`)).rows[0].v;
+  helperRole = (await q(`SELECT can_manage_products() AS v`)).rows[0].v;
+  try {
+    await q(`SELECT close_beta_program()`);
+    gardeBloquee = false;
+  } catch {
+    gardeBloquee = true;
+  }
+} finally {
+  await e(`RESET ROLE`);
+}
+check('22c. en rôle anon, get_business_owner_id() répond NULL (et non une erreur)',
+  helperOwner === true, `valeur : ${helperOwner}`);
+// `NULL = NULL` vaut NULL, et `NULL OR false` vaut NULL : la fonction répond
+// NULL à anon, pas false. Ce qui compte n'est pas le type mais l'effet — il
+// faudrait `true` pour ouvrir quoi que ce soit.
+check('22d. en rôle anon, can_manage_products() n’accorde rien',
+  helperRole !== true, `valeur : ${String(helperRole)}`);
+check('22e. en rôle anon, close_beta_program() est refusée',
+  gardeBloquee === true, gardeBloquee ? 'permission denied' : 'elle a répondu');
+
+// Et le verrou doit tenir pour les créations futures : une fonction ajoutée
+// par la PROCHAINE migration naît déjà fermée, sinon elle rouvrirait la porte
+// d'elle-même — exactement ce qui s'est produit sept fois de suite.
+await e(`CREATE FUNCTION tmp_porte_fermee() RETURNS int LANGUAGE sql AS 'SELECT 1'`);
+const aclFutur = (await q(`
+  SELECT coalesce(proacl::text, '(ACL implicite = PUBLIC)') AS a
+    FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
+   WHERE ns.nspname = 'public' AND p.proname = 'tmp_porte_fermee'`)).rows[0].a;
+await e(`DROP FUNCTION tmp_porte_fermee()`);
+check('22f. une fonction créée après le verrou naît déjà fermée',
+  aclFutur !== '(ACL implicite = PUBLIC)' && !aclFutur.includes('anon'),
+  `acl : ${aclFutur}`);
+
+// Les deux helpers ne servent pas qu'aux policies : migration_credit_fns,
+// migration_expenses, migration_plan_gate, migration_profitability et
+// migration_suppliers les appellent depuis des fonctions SECURITY INVOKER,
+// donc SOUS LE RÔLE DE L'APPELANT. Révoquer PUBLIC les couperait aussi pour
+// authenticated — et le harnais tourne en postgres, il ne le verrait pas.
+const authHelpers = (await q(`
+  SELECT p.proname
+    FROM pg_proc p JOIN pg_namespace ns ON ns.oid = p.pronamespace
+   WHERE ns.nspname = 'public' AND p.prokind = 'f'
+     AND p.proname IN ('get_business_owner_id', 'can_manage_products')
+     AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
+   ORDER BY p.proname`)).rows.map((r) => r.proname);
+check('22g. authenticated appelle toujours les deux helpers des policies',
+  JSON.stringify(authHelpers) === JSON.stringify(['can_manage_products', 'get_business_owner_id']),
+  `présentes : ${authHelpers.join(', ') || 'aucune'}`);
+
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
 process.exit(failures ? 1 : 0);

@@ -24,9 +24,10 @@ chaque item a un critère de fin vérifiable.
 | — | Rate limit de `src/proxy.ts` basculé sur `rate_limits` + `bump_rate_limit()` | `3a179dc` |
 | — | Compteur d'inscription déplacé **après** la validation du corps | `8013458` |
 
-`supabase/migration_security.sql` porte les **6 sections** (1 `rate_limits` hors portée client ·
+`supabase/migration_security.sql` porte les **7 sections** (1 `rate_limits` hors portée client ·
 2 `organizations.plan` verrouillé · 3 `subscriptions` une ligne par org · 4 `business_members`
-lecture seule · 5 `sales`/`sale_items`/`stock_logs` lecture seule · 6 suppression de compte).
+lecture seule · 5 `sales`/`sale_items`/`stock_logs` lecture seule · 6 suppression de compte ·
+7 clé `anon` révoquée).
 
 Vérifications de référence, à maintenir à chaque étape :
 `npx tsc --noEmit` · `npm run lint` · `npm run build` · `npm test` — tous en **code de sortie 0**.
@@ -102,16 +103,46 @@ ne télécharge plus que la période demandée, page par page.
 - Vérifié en production : `886 800 F` de CA, `744 800 F` d'espèces, 16 transactions,
   3 jours — identique au calcul SQL de référence.
 
-⚠ **Anomalie découverte au passage et laissée ouverte :** **33 des 35** fonctions du
-schéma public restent appelables par la clé `anon` en production — dont **20 en
-`SECURITY DEFINER`**, qui traversent la RLS. Les `REVOKE ... FROM
-PUBLIC` des migrations ne leur retirent rien, Supabase posant des privilèges **directs** sur
-`anon` (pas via `PUBLIC`). Vérifié par appel réel et sans jeu de mots : `beta_status()`
-répond à la clé anonyme, alors que la migration la réserve au `service_role`. Comme
-`close_beta_program()` est `SECURITY DEFINER` **sans aucune garde**, la seule clé publique du
-navigateur suffirait à fermer le programme bêta — et `set_beta_slots()` le rouvrirrait. Les
-deux fonctions créées ici font partie des **deux seules** correctement verrouillées ;
-**les 33 autres restent à arbitrer.**
+**Faille `anon` relevée pendant la 3.2, corrigée dans la foulée.** **33 des 35** fonctions du
+schéma public répondaient à la seule clé publique du navigateur — dont **20 en
+`SECURITY DEFINER`**, qui traversent la RLS. Vérifié par appel réel et sans jeu de mots :
+`beta_status()` répondait à la clé anonyme alors que la migration la réserve au
+`service_role`, et `close_beta_program()` — `SECURITY DEFINER` **sans aucune garde** —
+aurait permis de fermer le programme bêta pour toutes les boutiques, `set_beta_slots()`
+de le rouvrir.
+
+**Corrigée** — section 7 de `migration_security.sql`, appliquée en production le 03/10/2026.
+Deux mécanismes, et il a fallu traiter les deux :
+
+- Supabase accorde `EXECUTE` à `anon` **au moment de la création** de chaque fonction
+  (`ALTER DEFAULT PRIVILEGES`) : le grant vient du rôle, donc un `REVOKE ... FROM
+  PUBLIC`, écrit partout dans les migrations, ne lui retire rien.
+- PostgreSQL accorde par ailleurs `EXECUTE` à `PUBLIC` sur toute fonction dont l'ACL n'a
+  pas été touchée, et `anon` en hérite. C'était le cas de **12 fonctions**
+  (`update_updated_at`, `check_product_limit`, `purge_rate_limits`…), sans aucun
+  `REVOKE` dans leur migration. Le harnais l'a révélé : le premier verrou n'en avait
+  fermé que 23.
+
+**Deux exceptions, et elles ne sont pas des indulgences :** `get_business_owner_id()` et
+`can_manage_products()` sont appelées par les policies RLS, qui s'évaluent sous le rôle de
+l'appelant — les retirer ferait renvoyer « permission denied » au lieu de zéro ligne. Pour
+`anon`, les deux répondent NULL, donc faux : aucun accès concédé. Elles sont aussi
+appelées par des fonctions `SECURITY INVOKER` (crédit, dépenses, plan gate, marge,
+fournisseurs), donc sous le rôle `authenticated`.
+
+`authenticated` n'a **pas** été re-granté en bloc : ce serait rouvrir
+`close_beta_program()`, `set_beta_slots()` et `revoke_all_beta()` à tout client connecté.
+
+Vérifié en production : **33 → 2** fonctions appelables par `anon` ; refus réel en 401 sur
+`beta_status`, `close_beta_program`, `get_sales_summary` et `bump_rate_limit` ;
+`GET /rest/v1/products` répond toujours `200 []` ; exécution réelle en rôle
+`authenticated` sur les 14 fonctions de l'application, dont `get_sales_summary`
+(`993 400 F`, 20 transactions, 3 jours, `RIZ / Nokia 105 Duos / Tete chargeur Iphone 25w`).
+Harnais : **section 22, 7 assertions**.
+
+**Résiduel connu :** `postgres` n'a pas le droit de modifier les privilèges par défaut de
+`supabase_admin`, dont la ligne contient encore `anon`. Toutes les migrations du dépôt
+tournent en `postgres`, dont la ligne a été nettoyée — c'est celle qui sert à la création.
 
 ### 3.3 Mémoriser le contexte Supabase
 
@@ -242,6 +273,10 @@ npm test          → 0
 
 - `bump_rate_limit()` doit rester en **`SECURITY DEFINER`**.
 - `supabase/migration_security.sql` doit rester la **dernière** migration du dépôt.
+- La clé **`anon`** ne doit appeler que `get_business_owner_id()` et
+  `can_manage_products()` — les deux helpers des policies RLS. Toute nouvelle fonction
+  qui ne doit pas être exposée sans session doit en être consciente dès sa création, et
+  l'assertion **22a** du harnais échoue si elle l'est.
 - Toute modification SQL passe par `npm run test:db` **et** `npm run test:db:existing`.
 - La recherche `GET /admin/users?email=` de ce GoTrue **ignore** le paramètre : ne pas
   « simplifier » la pagination de `invitations/accept`.

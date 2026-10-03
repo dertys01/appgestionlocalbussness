@@ -3,7 +3,7 @@
 -- A exécuter dans Supabase SQL Editor
 -- ============================================================
 --
--- Six trous, du plus rapide au plus structurant :
+-- Sept trous, du plus rapide au plus structurant :
 --
 --   1. rate_limits sans RLS      — le compteur d'inscription est effaçable
 --                                   par n'importe quel client, clé anon en
@@ -31,6 +31,22 @@
 --                                   toute lecture d'utilisateur, et la
 --                                   suppression d'un compte pourvu de ventes
 --                                   échouait sur une FK.
+--   7. la clé anon appelle tout   — Supabase accorde EXECUTE aux rôles anon,
+--                                   authenticated et service_role au MOMENT DE
+--                                   LA CRÉATION de chaque fonction
+--                                   (ALTER DEFAULT PRIVILEGES). Le grant vient
+--                                   du rôle, pas de PUBLIC : un
+--                                   `REVOKE ... FROM PUBLIC`, écrit partout
+--                                   dans les migrations, ne lui retire rien.
+--                                   Constat en base le 03/10/2026 : 33 des 35
+--                                   fonctions du schéma public répondaient à
+--                                   la seule clé publique du navigateur, dont
+--                                   20 en SECURITY DEFINER. Vérifié par appel
+--                                   réel, la clé anonyme obtenait beta_status()
+--                                   — réservée au service_role — et
+--                                   close_beta_program(), SECURITY DEFINER
+--                                   sans la moindre garde, aurait pu fermer le
+--                                   programme bêta pour toutes les boutiques.
 --
 -- Le point 4 est refermé ici à deux niveaux (policy + trigger) et un troisième
 -- dans l'application : la suppression du compte Auth en cascade n'est plus
@@ -280,3 +296,61 @@ ALTER TABLE sale_items
 
 ALTER TABLE stock_logs
   ALTER CONSTRAINT stock_logs_product_id_fkey DEFERRABLE INITIALLY DEFERRED;
+
+
+-- ─── 7. La clé anon ne doit plus rien appeler ───────────────
+--
+-- 33 des 35 fonctions du schéma public répondaient à la seule clé publique du
+-- navigateur, dont 20 en SECURITY DEFINER. Deux mécanismes, et il faut les
+-- traiter tous les deux :
+--
+--   · Supabase accorde EXECUTE à anon, authenticated et service_role au moment
+--     de la CRÉATION de chaque fonction (ALTER DEFAULT PRIVILEGES). Le grant
+--     vient du rôle, donc un `REVOKE ... FROM PUBLIC` — écrit partout dans les
+--     migrations — ne lui retire rien.
+--   · PostgreSQL accorde par ailleurs EXECUTE à PUBLIC sur toute fonction
+--     dont l'ACL n'a pas été touchée. anon hérite de ce droit comme de tout
+--     autre : vérifié, c'était le cas de 12 fonctions (update_updated_at,
+--     check_product_limit, fill_amount_received, purge_rate_limits…).
+--
+-- Aucun chemin de l'application n'en avait besoin — vérifié fonction par
+-- fonction :
+--
+--   · les huit routes API construisent leur client avec la service role,
+--     l'unique exception étant /api/register qui n'utilise le client anon que
+--     pour auth.signInWithPassword ;
+--   · src/proxy.ts appelle bump_rate_limit() et purge_rate_limits() en fetch
+--     direct, avec la service role ;
+--   · les modules du tableau de bord ne se montrent qu'après
+--     `if (!user) return <LoginPage />` — donc jamais en rôle anon ;
+--   · les trois pages publiques (inscription, invitation, réinitialisation)
+--     n'appellent que GoTrue, jamais une fonction SQL.
+--
+-- Deux exceptions, et elles ne sont pas des indulgences. Les policies RLS
+-- appellent get_business_owner_id() et can_manage_products(), et une policy
+-- s'évalue sous le rôle de l'appelant : sans EXECUTE, une lecture non
+-- authentifiée renverrait « permission denied for function » au lieu de zéro
+-- ligne. Pour anon, les deux renvoient NULL, donc faux — aucun accès n'est
+-- concédé, seul le code de retour changerait.
+--
+-- `authenticated` n'est PAS re-granté en bloc : ce serait rouvrir
+-- close_beta_program(), set_beta_slots() et revoke_all_beta() à n'importe quel
+-- client connecté. Les migrations concernées accordent déjà EXECUTE à qui de
+-- droit, et le harnais vérifie en 22b que les douze fonctions que le
+-- navigateur appelle réellement le restent.
+--
+-- Les ALTER DEFAULT PRIVILEGES doublent le REVOKE sur ALL : sans eux, la
+-- prochaine migration créerait une fonction et lui rouvrirait la porte
+-- d'elle-même.
+--
+-- Rejouable : REVOKE et GRANT sont idempotents.
+
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC, anon;
+
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  REVOKE EXECUTE ON FUNCTIONS FROM anon;
+
+GRANT EXECUTE ON FUNCTION get_business_owner_id() TO anon;
+GRANT EXECUTE ON FUNCTION can_manage_products()   TO anon;

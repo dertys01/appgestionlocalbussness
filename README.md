@@ -63,12 +63,18 @@ point à vérifier après un `git pull`.
 | 17 | `migration_suppliers.sql` | `suppliers`, `products.supplier_id`, `products_with_supplier` |
 | 18 | `migration_credit_fns.sql` | `record_credit_sale()`, `pay_customer_debt()`, `get_customer_debts()` |
 | 18b | `migration_sales_summary.sql` | `get_sales_summary()`, `get_top_products()` — totaux et top produits d'une période sans télécharger les ventes |
-| 19 | `migration_security.sql` | RLS sur `rate_limits`, verrou de `organizations.plan`, index unique de `subscriptions`, policies de `business_members`, réparation de la suppression de compte (jetons `auth.users`, FK différées) |
+| 19 | `migration_security.sql` | RLS sur `rate_limits`, verrou de `organizations.plan`, index unique de `subscriptions`, policies de `business_members`, réparation de la suppression de compte (jetons `auth.users`, FK différées), **retrait de la clé `anon`** (section 7) |
 
 `migration_security.sql` **doit fermer la série** : elle réécrit ce que les
 migrations précédentes ont posé (policies de `business_members`, garde de
 `redeem_invitation` par déclencheur). La placer avant laisserait les failles
-revenir à la migration suivante.
+revenir à la migration suivante. Sa section 7 révoque `EXECUTE` sur `PUBLIC`
+**et** `anon` pour tout le schéma `public`, puis altère les privilèges par
+défaut : sinon la migration suivante rouvrirait la porte d'elle-même. Deux
+fonctions sont re-grantées à `anon` — `get_business_owner_id()` et
+`can_manage_products()` — parce que les policies RLS les appellent sous le rôle
+de l'appelant, et qu'un refus y valait « permission denied » au lieu de zéro
+ligne. Exécuter `npm run test:db` (section 22) avant d'y toucher.
 
 `APPLY_MIGRATIONS.sql` concatène les 23 migrations pour partir d'une base
 vide. Sur une base existante, appliquer la seule migration concernée.
