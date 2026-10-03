@@ -3913,7 +3913,7 @@ GRANT EXECUTE ON FUNCTION get_top_products(date, date, text, int) TO service_rol
 -- anon, authenticated et service_role (ALTER DEFAULT PRIVILEGES) : le grant
 -- ne vient pas de PUBLIC. `REVOKE ... FROM PUBLIC` seul y laisse donc la clé
 -- anonyme parfaitement capable d'appeler la fonction — ce qui est exactement
--- ce qui est arrivé en production aux 36 autres fonctions du schéma public,
+-- ce qui est arrivé en production à 33 des 35 fonctions du schéma public,
 -- malgré des REVOKE écrits partout dans les migrations. Vérifié en base le
 -- 03/10/2026.
 

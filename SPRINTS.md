@@ -102,14 +102,16 @@ ne télécharge plus que la période demandée, page par page.
 - Vérifié en production : `886 800 F` de CA, `744 800 F` d'espèces, 16 transactions,
   3 jours — identique au calcul SQL de référence.
 
-⚠ **Anomalie découverte au passage et laissée ouverte :** les **36 autres** fonctions du
-schéma public restent appelables par la clé `anon` en production. Les `REVOKE ... FROM
+⚠ **Anomalie découverte au passage et laissée ouverte :** **33 des 35** fonctions du
+schéma public restent appelables par la clé `anon` en production — dont **20 en
+`SECURITY DEFINER`**, qui traversent la RLS. Les `REVOKE ... FROM
 PUBLIC` des migrations ne leur retirent rien, Supabase posant des privilèges **directs** sur
 `anon` (pas via `PUBLIC`). Vérifié par appel réel et sans jeu de mots : `beta_status()`
 répond à la clé anonyme, alors que la migration la réserve au `service_role`. Comme
 `close_beta_program()` est `SECURITY DEFINER` **sans aucune garde**, la seule clé publique du
 navigateur suffirait à fermer le programme bêta — et `set_beta_slots()` le rouvrirrait. Les
-deux fonctions créées ici ciblent `anon` explicitement ; **le reste reste à arbitrer.**
+deux fonctions créées ici font partie des **deux seules** correctement verrouillées ;
+**les 33 autres restent à arbitrer.**
 
 ### 3.3 Mémoriser le contexte Supabase
 
