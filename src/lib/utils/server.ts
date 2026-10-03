@@ -17,9 +17,21 @@ export function serverError(
   e: unknown,
   userMessage = 'Erreur interne du serveur. Réessayez dans un moment.'
 ): { error: string } {
-  const detail = e instanceof Error ? e.message : String(e);
-  console.error(`[${scope}]`, detail);
+  console.error(`[${scope}]`, sanitizeError(e));
   return { error: userMessage };
+}
+
+/**
+ * Message d'erreur sûr à journaliser.
+ *
+ * L'erreur du client Supabase inclut l'en-tête `Authorization: Bearer <clé>` :
+ * loguer l'objet brut ou son message tel quel consignait la clé service role
+ * dans les logs Vercel. On retire tout jeton Bearer, on tronque, et on ne
+ * garde que le message (jamais la pile ni la requête à l'origine de l'erreur).
+ */
+export function sanitizeError(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e);
+  return raw.replace(/Bearer\s+\S+/gi, 'Bearer [masqué]').slice(0, 300);
 }
 
 /**

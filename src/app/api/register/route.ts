@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { requireEnv } from '@/lib/utils/server';
+import { requireEnv, sanitizeError } from '@/lib/utils/server';
 
 // Validées AVANT tout appel réseau : createClient(URL, undefined) produisait
 // une erreur d'en-tête invalide dont le message affichait la clé utilisée.
@@ -145,7 +145,7 @@ export async function POST(req: NextRequest) {
     // l'en-tête Authorization — donc la clé service role exposée à l'écran
     // (visible sur la capture « Headers.append: "Bearer eyJ…" is an invalid
     // header value »). On ne renvoie plus que le type d'erreur.
-    console.error('[register] échec inattendu', e instanceof Error ? e.message : e);
+    console.error('[register] échec inattendu', sanitizeError(e));
     return NextResponse.json(
       { error: 'Erreur interne du serveur. Réessayez dans un moment.' },
       { status: 500 }

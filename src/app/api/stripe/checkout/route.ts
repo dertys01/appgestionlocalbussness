@@ -33,15 +33,26 @@ export async function POST(req: NextRequest) {
     if (authError || !user) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 });
 
     const { plan } = await req.json();
+    if (plan !== 'starter' && plan !== 'pro') {
+      return NextResponse.json({ error: 'Plan invalide.' }, { status: 400 });
+    }
     const priceId = PRICE_IDS[plan];
-    if (!priceId) return NextResponse.json({ error: `Plan "${plan}" invalide ou non configuré` }, { status: 400 });
+    if (!priceId) return NextResponse.json({ error: 'Plan non configuré' }, { status: 400 });
 
     // Récupère ou crée le customer Stripe
     const { data: sub } = await adminClient
       .from('subscriptions')
-      .select('stripe_customer_id')
+      .select('stripe_customer_id, status')
       .eq('org_id', user.id)
       .maybeSingle();
+
+    // Un abonnement déjà actif ne doit pas pouvoir en re-souscrire un second.
+    if (sub?.status === 'active' || sub?.status === 'trialing') {
+      return NextResponse.json(
+        { error: 'Un abonnement est déjà actif. Gérez-le depuis le portail.' },
+        { status: 409 }
+      );
+    }
 
     let customerId = sub?.stripe_customer_id;
     if (!customerId) {

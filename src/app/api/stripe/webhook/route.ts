@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
-import { requireEnv } from '@/lib/utils/server';
+import { requireEnv, sanitizeError } from '@/lib/utils/server';
 import { createClient } from '@supabase/supabase-js';
 
 type Plan = 'free' | 'starter' | 'pro';
@@ -72,38 +72,42 @@ export async function POST(req: NextRequest) {
 
   // ── Idempotence ──
   // Stripe renvoie le même événement jusqu'à ce qu'il reçoive un 2xx, et le
-  // rejoue aussi après un 500. Sans ce garde, un checkout rejoué réécrit les
-  // abonnements — et un événement en retard peut rétrograder un plan déjà
-  // payant. Seul un événement déjà traité avec succès est court-circuité :
-  // un 'error' est justement celui qu'on veut rejouer.
-  const { data: prior, error: priorError } = await adminClient
-    .from('webhook_events')
-    .select('status')
-    .eq('event_id', event.id)
-    .maybeSingle();
-
-  if (priorError) {
-    // On ne sait pas si on a déjà traité : on n'écrit rien et on renvoie 500,
-    // Stripe rejouera. Traiter à l'aveugle reviendrait à perdre l'idempotence.
-    return NextResponse.json({ error: 'journal inaccessible' }, { status: 500 });
-  }
-  if (prior?.status === 'processed') {
-    return NextResponse.json({ received: true, duplicate: true });
-  }
-
+  // rejoue aussi après un 500. claim_webhook_event() atomise la prise en
+  // charge : la lecture puis l'upsert n'étaient pas atomiques, deux
+  // livraisons concurrentes du même event_id pouvaient toutes deux traiter.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const eventData = event.data.object as any;
   const orgId = eventData.metadata?.org_id ?? null;
   const activeStatuses = ['active', 'trialing'];
 
-  // Log l'événement reçu (idempotent via event_id unique)
-  const { error: logError } = await adminClient.from('webhook_events').upsert({
-    event_id: event.id,
-    event_type: event.type,
-    org_id: orgId,
-    status: 'received',
-  }, { onConflict: 'event_id', ignoreDuplicates: true });
-  if (logError) return NextResponse.json({ error: 'journal inaccessible' }, { status: 500 });
+  const { data: claimed, error: claimError } = await adminClient.rpc('claim_webhook_event', {
+    p_event_id: event.id,
+    p_event_type: event.type,
+    p_org_id: orgId,
+  });
+
+  if (claimError) {
+    // Fonction pas encore déployée : on retombe sur l'ancien chemin non
+    // atomique plutôt que de perdre l'événement (500 → Stripe rejoue).
+    const { data: prior, error: priorError } = await adminClient
+      .from('webhook_events')
+      .select('status')
+      .eq('event_id', event.id)
+      .maybeSingle();
+    if (priorError) return NextResponse.json({ error: 'journal inaccessible' }, { status: 500 });
+    if (prior?.status === 'processed') return NextResponse.json({ received: true, duplicate: true });
+
+    const { error: logError } = await adminClient.from('webhook_events').upsert({
+      event_id: event.id,
+      event_type: event.type,
+      org_id: orgId,
+      status: 'received',
+    }, { onConflict: 'event_id', ignoreDuplicates: true });
+    if (logError) return NextResponse.json({ error: 'journal inaccessible' }, { status: 500 });
+  } else if (claimed !== true) {
+    // Déjà traité, ou une autre instance est en train de le traiter.
+    return NextResponse.json({ received: true, duplicate: true });
+  }
 
   let processError: string | null = null;
 
@@ -111,7 +115,11 @@ export async function POST(req: NextRequest) {
     switch (event.type) {
       case 'checkout.session.completed': {
         if (!orgId) break;
-        const subId = eventData.subscription as string;
+        const subId = eventData.subscription as string | null;
+        // Session en mode `payment` ou incomplète : pas d'abonnement à activer.
+        // stripe.subscriptions.retrieve(null) levait et faisait échouer la
+        // livraison en boucle.
+        if (!subId) break;
         const sub = await stripe.subscriptions.retrieve(subId);
 
         const priceId = sub.items?.data?.[0]?.price?.id as string | undefined;
@@ -181,7 +189,7 @@ export async function POST(req: NextRequest) {
     // complète : le message brut du client Supabase contient l'en-tête
     // Authorization.
     processError = e instanceof Error ? e.message : 'erreur inconnue';
-    console.error('[Webhook] Erreur traitement', event.type, e);
+    console.error('[Webhook] Erreur traitement', event.type, sanitizeError(e));
   }
 
   // Mettre à jour le statut du log. Un échec ici ne peut pas passer pour un
