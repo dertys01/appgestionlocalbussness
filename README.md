@@ -4,6 +4,9 @@ Application de gestion commerciale (caisse, stock, équipe, rapports) pour petit
 boutiques, avec abonnements Stripe. Supabase (Postgres + Auth + RLS) comme
 socle de données, Next.js 16 en App Router.
 
+Plan de développement, état d'avancement et critères de fin des Sprints 1 à 4 :
+voir [SPRINTS.md](SPRINTS.md).
+
 ## Démarrage
 
 ```bash
