@@ -12,16 +12,21 @@ import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
 import { PLAN_LIMITS } from '@/lib/utils/plans';
 import {
-  buildBuckets, bucketFor, bucketKey, daysBetween, rangeFromDays, toISODate,
+  buildBuckets, bucketFor, bucketKey, daysBetween, localTimeZone, rangeFromDays,
   type DateRange,
 } from '@/lib/utils/period';
-import type { Plan, Sale, SaleItem } from '@/types';
-
-interface SaleWithItems extends Sale {
-  sale_items: SaleItem[];
-}
+import type { Plan } from '@/types';
 
 const COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+
+/** Une ligne journalière renvoyée par get_sales_summary(). */
+interface SummaryDay {
+  day: string;
+  revenue: number;
+  cash: number;
+  momo: number;
+  tx: number;
+}
 
 export function ReportsModule() {
   const { supabase, plan } = useSupabase();
@@ -29,7 +34,8 @@ export function ReportsModule() {
   // même si le sélecteur le propose. La limite est déjà appliquée côté
   // SalesHistory ; elle doit l'être partout.
   const maxDays = PLAN_LIMITS[plan as Plan].salesHistoryDays;
-  const [sales, setSales] = useState<SaleWithItems[]>([]);
+  const [summary, setSummary] = useState<SummaryDay[]>([]);
+  const [topProducts, setTopProducts] = useState<{ name: string; qty: number }[]>([]);
   const [loading, setLoading] = useState(false);
   const [period, setPeriod] = useState<DateRange>(() => rangeFromDays(7));
   const [error, setError] = useState('');
@@ -39,25 +45,33 @@ export function ReportsModule() {
     setError('');
 
     try {
-      // Bornes locales converties en UTC : la période estinclusive des deux
-      // journées, sinon la dernière est amputée du jour courant.
-      const from = new Date(`${period.from}T00:00:00`);
-      const to = new Date(`${period.to}T23:59:59.999`);
-
-      const { data, error: queryErr } = await supabase
-        .from('sales')
-        .select('*, sale_items(*)')
-        .gte('created_at', from.toISOString())
-        .lte('created_at', to.toISOString())
-        .order('created_at');
+      // Plus une seule ligne de vente téléchargée : la synthèse se calcule en
+      // base, sur des colonnes déjà agrégées, et non dans le navigateur.
+      // Deux appels en parallèle — totaux journaliers d'un côté, top de l'autre.
+      //
+      // Le fuseau du navigateur part avec la requête : c'est lui qui découpe
+      // les journées, et le graphique doit garder exactement les mêmes barres
+      // qu'avant la bascule.
+      const tz = localTimeZone();
+      const [syn, topRes] = await Promise.all([
+        supabase.rpc('get_sales_summary', { p_from: period.from, p_to: period.to, p_tz: tz }),
+        supabase.rpc('get_top_products', { p_from: period.from, p_to: period.to, p_tz: tz, p_limit: 6 }),
+      ]);
 
       // L'error était ignorée : un échec de réseau affichait des rapports vides
       // sans aucun message.
-      if (queryErr) throw new Error(queryErr.message);
-      setSales((data as SaleWithItems[]) ?? []);
+      if (syn.error) throw new Error(syn.error.message);
+      if (topRes.error) throw new Error(topRes.error.message);
+
+      setSummary((syn.data as SummaryDay[]) ?? []);
+      setTopProducts(
+        ((topRes.data ?? []) as { product_name: string; qty: number }[])
+          .map((r) => ({ name: r.product_name, qty: Number(r.qty) }))
+      );
     } catch (e) {
       setError((e as Error).message);
-      setSales([]);
+      setSummary([]);
+      setTopProducts([]);
     } finally {
       setLoading(false);
     }
@@ -70,52 +84,44 @@ export function ReportsModule() {
   // sur tout le tableau des ventes et des lignes de vente.
   //
   // Regroupement par jour, semaine ou mois selon l'amplitude : 365 barres
-  // journalières sont illisibles sur un téléphone, et la requête elle-même
-  // commence à coûter cher sur un an d'historique.
+  // journalières sont illisibles sur un téléphone.
+  //
+  // La base a déjà réduit les ventes à une ligne par jour — il ne reste qu'à
+  // les replacer dans le bon seau, avec la même bucketKey() qu'avant. Les jours
+  // sans vente ne reviennent pas de la base, mais buildBuckets() les complète.
   const salesByDay = useMemo(() => {
     const span = daysBetween(period.from, period.to);
     const bucket = bucketFor(span);
     const totals = new Map<string, number>();
-    for (const s of sales) {
-      const key = bucketKey(toISODate(new Date(s.created_at)), bucket);
-      totals.set(key, (totals.get(key) ?? 0) + s.total_amount);
+    for (const d of summary) {
+      const key = bucketKey(d.day, bucket);
+      totals.set(key, (totals.get(key) ?? 0) + Number(d.revenue));
     }
     return buildBuckets(period, bucket, (key) => totals.get(key) ?? 0)
       .map((p) => ({ date: p.label, total: p.value }));
-  }, [sales, period]);
-
-  const topProducts = useMemo(() => {
-    const map: Record<string, number> = {};
-    for (const s of sales) {
-      for (const i of s.sale_items) {
-        map[i.product_name] = (map[i.product_name] ?? 0) + i.quantity;
-      }
-    }
-    return Object.entries(map)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 6)
-      .map(([name, qty]) => ({ name, qty }));
-  }, [sales]);
+  }, [summary, period]);
 
   const { totalRevenu, cashTotal, momoTotal } = useMemo(() => {
     let revenue = 0;
     let cash = 0;
     let momo = 0;
-    for (const s of sales) {
-      revenue += s.total_amount;
-      // Trois cases et non deux : avec un simple `else`, les crédits
-      // (payment_method = 'credit') atterrissaient dans « Mobile Money » — un
-      // client qui doit 50 000 F gonflait la part Mobile Money d'autant.
-      if (s.payment_method === 'cash') cash += s.total_amount;
-      else if (s.payment_method === 'momo') momo += s.total_amount;
-      // 'credit' : ni encaissé en espèces ni en Mobile Money. Il n'apparaît
-      // que dans totalRevenu, et le camembert affiche des parts qui, elles,
-      // s'additionnent bien au total encaissé.
+    for (const d of summary) {
+      revenue += Number(d.revenue);
+      // Les deux parts sortent déjà séparées de la base, et non d'un `if`
+      // reconstitué ici : les crédits (payment_method = 'credit') entrent dans
+      // le chiffre d'affaires sans entrer ni dans cash ni dans momo. Un client
+      // qui doit 50 000 F ne gonfle donc plus la part Mobile Money d'autant —
+      // c'était le sens du correctif précédent, conservé tel quel en SQL.
+      cash += Number(d.cash);
+      momo += Number(d.momo);
     }
     return { totalRevenu: revenue, cashTotal: cash, momoTotal: momo };
-  }, [sales]);
+  }, [summary]);
 
-  const totalTransactions = sales.length;
+  const totalTransactions = useMemo(
+    () => summary.reduce((n, d) => n + Number(d.tx), 0),
+    [summary]
+  );
   const moyenneParVente = totalTransactions > 0 ? totalRevenu / totalTransactions : 0;
 
   const paymentData = useMemo(

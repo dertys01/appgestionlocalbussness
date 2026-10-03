@@ -62,6 +62,7 @@ point à vérifier après un `git pull`.
 | 16 | `migration_profitability_fix.sql` | Remplit les `unit_cost` manquants, recrée le trigger |
 | 17 | `migration_suppliers.sql` | `suppliers`, `products.supplier_id`, `products_with_supplier` |
 | 18 | `migration_credit_fns.sql` | `record_credit_sale()`, `pay_customer_debt()`, `get_customer_debts()` |
+| 18b | `migration_sales_summary.sql` | `get_sales_summary()`, `get_top_products()` — totaux et top produits d'une période sans télécharger les ventes |
 | 19 | `migration_security.sql` | RLS sur `rate_limits`, verrou de `organizations.plan`, index unique de `subscriptions`, policies de `business_members`, réparation de la suppression de compte (jetons `auth.users`, FK différées) |
 
 `migration_security.sql` **doit fermer la série** : elle réécrit ce que les
@@ -69,7 +70,7 @@ migrations précédentes ont posé (policies de `business_members`, garde de
 `redeem_invitation` par déclencheur). La placer avant laisserait les failles
 revenir à la migration suivante.
 
-`APPLY_MIGRATIONS.sql` concatène les 22 migrations pour partir d'une base
+`APPLY_MIGRATIONS.sql` concatène les 23 migrations pour partir d'une base
 vide. Sur une base existante, appliquer la seule migration concernée.
 
 `migration_partial_payment.sql` crée `sales.amount_received`, donc elle doit
@@ -99,7 +100,7 @@ fonction après avoir tout rejoué, et vérifie que `create_sale()` est bien rev
 `migration_profitability.sql` (colonne `list_price`) et suivre
 `migration_price_override.sql` (dont elle reprend le prix négocié).
 
-**Les 22 migrations sont rejouables** : `IF NOT EXISTS` sur les tables et les
+**Les 23 migrations sont rejouables** : `IF NOT EXISTS` sur les tables et les
 index, `DROP … IF EXISTS` avant chaque policy, chaque trigger et chaque fonction
 dont la signature a changé.
 

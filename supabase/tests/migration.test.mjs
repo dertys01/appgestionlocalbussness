@@ -48,6 +48,7 @@ const ORDER = [
   // rate_limits, verrou de organizations.plan, index unique sur subscriptions,
   // policies de business_members et la garde de redeem_invitation(). La placer
   // avant redeviendrait ces failles a la seconde migration suivante.
+  'migration_sales_summary.sql',
   'migration_security.sql',
 ];
 
@@ -117,6 +118,15 @@ async function bootstrap() {
   `);
   // Rôles fournis par Supabase, absents de PGlite.
   await e(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role;`);
+  // Et leurs privilèges par défaut, eux aussi. Supabase accorde EXECUTE sur
+  // les fonctions à anon, authenticated et service_role au moment de la
+  // création (ALTER DEFAULT PRIVILEGES) : le grant ne vient PAS de PUBLIC.
+  // Sans cette ligne, le harnais diffère de la base réelle — un
+  // `REVOKE ... FROM PUBLIC` y passe alors qu'en production il laisse la clé
+  // anon parfaitement capable d'appeler la fonction. Un test vert qui ne
+  // prouve rien, c'est pire qu'absent.
+  await e(`ALTER DEFAULT PRIVILEGES IN SCHEMA public
+             GRANT EXECUTE ON FUNCTIONS TO anon, authenticated, service_role;`);
 }
 
 // ─── 1. Application des migrations ──────────────────────────
@@ -2500,6 +2510,95 @@ const reste = (await q(`
        + (SELECT count(*) FROM sale_items WHERE product_id = '${SUP_P}')::int
        + (SELECT count(*) FROM stock_logs WHERE product_id = '${SUP_P}')::int AS c`)).rows[0].c;
 check('20f. la cascade a tout emporté', reste === 0, `${reste} ligne(s) restante(s)`);
+
+// ─── 21. Synthèse des ventes ─────────────────────────────────
+// Rapports et Historique additionnaient les ventes côté JavaScript : ils
+// téléchargeaient sales + sale_items(*) sur toute la période. La fonction
+// remplace ce calcul — elle doit rendre EXACTEMENT le même chiffre, sinon les
+// totaux affichés bougent au déploiement sans que personne l'ait demandé.
+console.log('\n▸ Synthèse des ventes');
+
+// PGlite rend les colonnes `date` en objets Date JavaScript : interpolés dans
+// une requête, ils deviennent « Mon Jun 15 2026 … » et PostgreSQL refuse.
+// On force du texte, comme le fait déjà le reste du harnais (::date::text).
+const SYN = (await q(`
+  SELECT (min(created_at) AT TIME ZONE 'UTC')::date::text AS a,
+         (max(created_at) AT TIME ZONE 'UTC')::date::text AS b
+    FROM sales`)).rows[0];
+
+const synthese = (await q(
+  `SELECT day::text AS day, revenue, cash, momo, tx
+     FROM get_sales_summary('${SYN.a}', '${SYN.b}', 'UTC')`)).rows;
+
+// La référence est calculée en SQL de la façon dont le client le faisait en
+// JavaScript : SUM(total_amount), puis espèces et Mobile Money à part — les
+// crédits (payment_method = 'credit') n'entrent dans aucune des deux.
+const refSyn = (await q(`
+  SELECT COALESCE(SUM(total_amount), 0) AS revenue,
+         COALESCE(SUM(CASE WHEN payment_method = 'cash'
+                           THEN total_amount ELSE 0 END), 0) AS cash,
+         COALESCE(SUM(CASE WHEN payment_method = 'momo'
+                           THEN total_amount ELSE 0 END), 0) AS momo,
+         COUNT(*) AS tx
+    FROM sales
+   WHERE created_at >= ('${SYN.a}'::timestamp AT TIME ZONE 'UTC')
+     AND created_at <  (('${SYN.b}'::date + 1)::timestamp AT TIME ZONE 'UTC')`)).rows[0];
+
+const somme = (col) => synthese.reduce((t, r) => t + Number(r[col]), 0);
+
+check('21a. total de période identique à l’ancien calcul client',
+  somme('revenue') === Number(refSyn.revenue),
+  `fonction ${somme('revenue')} / SQL ${refSyn.revenue}`);
+check('21b. part espèces identique',
+  somme('cash') === Number(refSyn.cash),
+  `fonction ${somme('cash')} / SQL ${refSyn.cash}`);
+check('21c. part Mobile Money identique',
+  somme('momo') === Number(refSyn.momo),
+  `fonction ${somme('momo')} / SQL ${refSyn.momo}`);
+check('21d. nombre de transactions identique',
+  somme('tx') === Number(refSyn.tx),
+  `fonction ${somme('tx')} / SQL ${refSyn.tx}`);
+
+// Le découpage par jour est le nerf du graphique : c'est lui qui place les
+// barres. Il doit suivre le fuseau passé en paramètre, et lui seul.
+const joursRef = (await q(`
+  SELECT (created_at AT TIME ZONE 'UTC')::date::text AS d, COUNT(*) AS n
+    FROM sales GROUP BY 1 ORDER BY 1`)).rows;
+check('21e. une ligne par jour de vente, même découpage',
+  JSON.stringify(synthese.map((r) => `${r.day}:${Number(r.tx)}`)) ===
+  JSON.stringify(joursRef.map((r) => `${r.d}:${Number(r.n)}`)),
+  `${synthese.length} jour(s)`);
+
+// Top produits : même classement que l'ancien sort().slice(0, 6) du client.
+const top = (await q(
+  `SELECT * FROM get_top_products('${SYN.a}', '${SYN.b}', 'UTC', 6)`)).rows;
+const topRef = (await q(`
+  SELECT si.product_name, COALESCE(SUM(si.quantity), 0) AS qty
+    FROM sale_items si
+    JOIN sales s ON s.id = si.sale_id
+   WHERE s.created_at >= ('${SYN.a}'::timestamp AT TIME ZONE 'UTC')
+     AND s.created_at <  (('${SYN.b}'::date + 1)::timestamp AT TIME ZONE 'UTC')
+   GROUP BY si.product_name
+   ORDER BY COALESCE(SUM(si.quantity), 0) DESC, si.product_name
+   LIMIT 6`)).rows;
+check('21f. top produits identique',
+  JSON.stringify(top.map((r) => `${r.product_name}:${Number(r.qty)}`)) ===
+  JSON.stringify(topRef.map((r) => `${r.product_name}:${Number(r.qty)}`)),
+  `${top.length} ligne(s)`);
+
+// Bornes de la limite : sans plafond, un appelant repartirait avec la table
+// entière — on aurait déplasé le problème au lieu de le régler.
+const borne = (await q(`SELECT count(*)::int c FROM get_top_products(
+  '${SYN.a}', '${SYN.b}', 'UTC', 999999)`)).rows[0].c;
+check('21g. la limite est plafonnée à 100', borne <= 100, `${borne} ligne(s)`);
+
+// Ces fonctions n'additionnent que des lignes que l'appelant peut déjà
+// SELECTer sous RLS, mais rien ne sert de les exposer à la clé anon.
+const anon = (await q(`
+  SELECT has_function_privilege('anon', 'get_sales_summary(date,date,text)', 'EXECUTE')       AS a,
+         has_function_privilege('anon', 'get_top_products(date,date,text,int)', 'EXECUTE')    AS b`)).rows[0];
+check('21h. la clé anon ne peut pas appeler ces fonctions',
+  anon.a === false && anon.b === false, `anon=${anon.a}/${anon.b}`);
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
 process.exit(failures ? 1 : 0);

@@ -19,6 +19,7 @@ const ORDER = [
   'migration_profitability.sql',
   'migration_expenses.sql', 'migration_invitations.sql', 'migration_profitability_fix.sql',
   'migration_suppliers.sql', 'migration_credit_fns.sql', 'migration_beta_program.sql',
+  'migration_sales_summary.sql',
   'migration_security.sql',
 ];
 
@@ -48,6 +49,10 @@ await db.exec(`
   CREATE OR REPLACE FUNCTION uuid_generate_v4() RETURNS uuid LANGUAGE sql VOLATILE AS
     $$ SELECT gen_random_uuid() $$;
   CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role;
+  -- Comme en production : Supabase accorde EXECUTE par défaut à ces trois
+  -- rôles, donc un REVOKE ... FROM PUBLIC seul n'ôte rien à anon.
+  ALTER DEFAULT PRIVILEGES IN SCHEMA public
+    GRANT EXECUTE ON FUNCTIONS TO anon, authenticated, service_role;
 `);
 
 console.log('▸ Première application (base neuve)');
