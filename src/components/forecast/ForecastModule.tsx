@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { AlertTriangle, TrendingDown, CheckCircle, PackagePlus, RefreshCw, Truck, MessageCircle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Badge } from '@/components/ui/badge';
 import { RestockModal } from '@/components/products/RestockModal';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
@@ -191,7 +192,11 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
       {loading ? (
         <div className="text-center text-slate-500 py-10 text-sm">Analyse en cours...</div>
       ) : forecasts.length === 0 ? (
-        <div className="text-center text-slate-500 py-10 text-sm">Aucun produit</div>
+        <EmptyState
+          icon={PackagePlus}
+          title="Aucun produit à prévoir"
+          hint="Les prévisions apparaissent dès que vos produits ont un stock et des ventes."
+        />
       ) : (
         <div className="space-y-2">
           {forecasts.map((f) => {

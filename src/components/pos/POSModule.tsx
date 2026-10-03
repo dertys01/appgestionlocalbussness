@@ -12,11 +12,13 @@ import {
   X,
   Printer,
   FileText,
+  PackageX,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { formatCFA } from '@/lib/utils/currency';
 import { generateWhatsAppReceiptLink } from '@/lib/utils/whatsapp';
@@ -464,8 +466,18 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           })}
 
           {filtered.length === 0 && (
-            <div className="col-span-full text-center text-slate-500 py-12">
-              {search.trim() ? 'Aucun produit ne correspond à cette recherche' : 'Aucun produit disponible'}
+            <div className="col-span-full">
+              {search.trim() ? (
+                <div className="py-12 text-center text-sm text-slate-500">
+                  Aucun produit ne correspond à « {search.trim()} »
+                </div>
+              ) : (
+                <EmptyState
+                  icon={PackageX}
+                  title="Aucun produit disponible"
+                  hint="Ajoutez d’abord vos produits depuis l’onglet Stock : ils apparaîtront ici pour la caisse."
+                />
+              )}
             </div>
           )}
         </div>

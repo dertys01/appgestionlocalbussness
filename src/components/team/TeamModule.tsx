@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { UserPlus, Trash2, RefreshCw, Users, ClipboardList, Loader2, Link2, Copy, Check, MessageCircle, XCircle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
+import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -28,7 +29,7 @@ const ACTION_LABELS: Record<string, { label: string; color: string }> = {
   product_delete:         { label: 'Produit supprimé',color: 'bg-red-100 text-red-700' },
   product_archive:        { label: 'Produit archivé', color: 'bg-slate-200 text-slate-600' },
   expense:                { label: 'Dépense',        color: 'bg-orange-100 text-orange-700' },
-  restock:                { label: 'Réappro.',        color: 'bg-blue-100 text-blue-700' },
+  restock:                { label: 'Réappro.',        color: 'bg-teal-100 text-teal-700' },
   inventory_adjustment:   { label: 'Inventaire',      color: 'bg-purple-100 text-purple-700' },
 };
 
@@ -400,9 +401,12 @@ export function TeamModule() {
             )}
 
             {members.length === 0 && !fetchError ? (
-              <div className="text-center text-slate-500 py-8 text-sm">
-                Aucun employé pour l&apos;instant
-              </div>
+              <EmptyState
+                icon={Users}
+                title="Aucun employé"
+                hint="Invitez un caissier : chacun encaisse avec son propre compte, et chaque geste reste traçable."
+                className="py-6"
+              />
             ) : (
               members.map((m) => (
                 <div key={m.id}>
@@ -495,7 +499,11 @@ function LogsPanel({ logs, loading, onRefresh, hasMore, onLoadMore }: {
       {loading ? (
         <div className="text-center text-slate-500 py-10 text-sm">Chargement...</div>
       ) : logs.length === 0 ? (
-        <div className="text-center text-slate-500 py-10 text-sm">Aucune activité</div>
+        <EmptyState
+          icon={ClipboardList}
+          title="Aucune activité"
+          hint="Ventes, connexions et modifications apparaîtront ici au fur et à mesure."
+        />
       ) : (
         <div className="space-y-2">
           {logs.map((log) => {

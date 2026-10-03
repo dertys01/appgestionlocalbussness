@@ -5,6 +5,7 @@ import { AlertTriangle, Search, ArrowUpDown, Pencil, Trash2, Plus, PackagePlus, 
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
+import { EmptyState } from '@/components/ui/empty-state';
 import {
   Table,
   TableBody,
@@ -222,12 +223,13 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
               <TableRow>
                 <TableCell colSpan={5} className="text-center text-slate-500 py-10">
                   {products.length === 0 ? (
-                    <div className="space-y-2">
-                      <p>Aucun produit. Commencez par en ajouter un.</p>
-                      <Button onClick={onAdd} variant="outline" size="sm" className="gap-1">
-                        <Plus className="h-3 w-3" /> Ajouter un produit
-                      </Button>
-                    </div>
+                    <EmptyState
+                      icon={PackagePlus}
+                      title="Aucun produit"
+                      hint="Ajoutez votre premier produit : nom, prix de vente et stock de départ."
+                      action={{ label: 'Ajouter un produit', onClick: onAdd }}
+                      className="py-2"
+                    />
                   ) : 'Aucun produit trouvé'}
                 </TableCell>
               </TableRow>
