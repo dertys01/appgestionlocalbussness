@@ -33,6 +33,7 @@ chaque item a un critère de fin vérifiable.
 | 7 | **Résultat net corrigé** : le coût des marchandises vendues est déduit. L'écran affichait **1 161 200 F (86,1 %)** pour un bénéfice réel de **207 444 F (15,4 %)** — **section 8** de `migration_security.sql` · tests **19 → 23** | `693947b` |
 | 8 | **Import CSV de produits** : l'application n'avait qu'un export. Analyseur tolérant (`520.000`, `110k`, Excel FR), refus explicite de la vente à perte, produits existants jamais écrasés · **dépôt public protégé** (`import-local/`) · tests **23 → 65** | `40082cb` `e451839` `953c7f9` |
 | 9 | **Caisse atteignable au POS** : sur mobile le panier était sous la grille de produits — il fallait défiler tout le catalogue pour encaisser. Barre fixe + panier plein écran, total toujours visible | `811e7eb` |
+| 10 | **Rail latéral devenu tiroir sur mobile** : il passait au-dessus de la barre du bas (z-40 contre z-30) et mangeait 64 px de largeur. **64 px rendus au catalogue** · tests **71 → 80** | `0bd81ea` |
 
 **Reste dans le Sprint 4 :** 4.3 (25 `eslint-disable` dans 17 fichiers, au fil de l'eau).
 
@@ -811,6 +812,82 @@ npm test          → 0  (55 vérifications SQL, 71 tests de composant)
 
 ---
 
+## Sprint 10 — Le rail latéral, obstacle au POS sur mobile
+
+Signalé par le mainteneur le 03/10/2026, sur une capture de son téléphone :
+la barre fixe du Sprint 9 fonctionnait, mais son texte était **tronqué**
+(« …rticles · Total », « 03 000 F »).
+
+### 10.1 — Les deux défauts
+
+| | |
+|---|---|
+| **z-index** | Rail en `z-40`, barre du bas en `z-30` : **le rail passait au-dessus** et recouvrait le total et le bouton « Encaisser » |
+| **largeur** | 64 px de rail fixe, soit un quart d'un écran de téléphone, pour une grille déjà réduite à 2 colonnes |
+
+### 10.2 — La correction
+
+Rail d'icônes fixe → **tiroir déployé**, fermé par défaut, ouvert par un
+bouton en haut à gauche. Les 64 px reviennent au catalogue : une colonne de
+plus sur un téléphone.
+
+Trois sorties, sans lesquelles un tiroir ouvert par erreur n'en ressortait
+pas sur un écran qui le remplit à moitié : **navigation**, **voile**,
+**Échap**.
+
+### 10.3 — Sémantique, et le défaut que les tests ont attrapé
+
+Le tiroir fermé reste dans le DOM : il est **hors écran, pas absent**. Sans
+`inert`, la tabulation et les lecteurs d'écran parcouraient un menu invisible.
+
+Et le bouton « Fermer le menu » **existait tiroir fermé** — masqué par le
+décalage, donc encore atteignable au clavier. C'est le premier test écrit qui
+l'a trouvé ; le bouton n'est désormais rendu que tiroir ouvert.
+
+La détection du grand écran passe par `matchMedia`, avec un **premier rendu
+« grand écran »** pour que le rendu serveur reste correct. À partir de `lg`
+le rail est permanent et l'état n'a plus d'effet : c'est ce qui empêche
+d'appliquer `inert` au rail par erreur.
+
+### 10.4 — jsdom n'a pas `matchMedia`
+
+Vérifié : `typeof window.matchMedia === 'undefined'`. Le composant ne se
+retrouvait donc **jamais** dans sa branche mobile — ses tests ne validaient
+rien de ce chemin, et auraient validé le rail de grand écran en croyant
+tester le tiroir.
+
+Le stub est ajouté dans `tests/ui/setup.ts` avec une bascule de largeur
+explicite. Le test mobile déclare désormais le mobile au lieu de le supposer.
+
+### 10.5 — Propositions non exécutées
+
+Le maintien a validé **uniquement** cette phase. Restent sur la table, non
+écrites :
+
+- **Proposition 1** — recherche intelligente : tolérance aux fautes de frappe
+  (« samsng » → Samsung), recherche par nombre (« 128/6 ») et par prix,
+  raccourci clavier. Aujourd'hui la recherche est un `includes()` exact.
+- **Proposition 2** — barre de catégories collante + **les + vendus en tête de
+  grille sur 30 jours** (période déjà validée par le mainteneur). La fonction
+  `get_units_sold_since()` existe déjà en base.
+- **Proposition 3** — reprendre la dernière vente, favoris épinglés, ajout
+  par lot.
+- **Proposition 4** — recherche en langage naturel : **déconseillée**, le POS
+  n'a pas de clé LLM côté client.
+
+### Définition de fini — Sprint 10
+
+```
+npx tsc --noEmit  → 0
+npm run lint      → 0 problems
+npm run build     → 0
+npm test          → 0  (55 vérifications SQL, 80 tests de composant)
++ prod : « Ouvrir le menu » présent, tiroir fermé absent de l'arbre
+  d'accessibilité (inert), main en `lg:ml-56 pt-14 lg:pt-0`
+```
+
+---
+
 ## Hors périmètre (volontairement)
 
 | Sujet | Pourquoi |
@@ -856,6 +933,8 @@ npm test          → 0  (55 vérifications SQL, 71 tests de composant)
 
 | Date | Commit | Objet |
 |---|---|---|
+| 03/10/2026 | — | Recette **prod** du Sprint 10 — tiroir absent de l'arbre d'accessibilité quand il est fermé, `ml-16` supprimé, 64 px rendus au catalogue |
+| 03/10/2026 | `0bd81ea` | Sprint 10 — le rail latéral passe en tiroir sur mobile (il recouvrait la barre du bas du POS) |
 | 03/10/2026 | — | **Décision d'infrastructure** — serveur OpenCode exposé sur le réseau local (`0.0.0.0:49374`) pour piloter depuis l'app Android. Risque tracé dans les garde-fous permanents |
 | 03/10/2026 | `811e7eb` | Sprint 9 — **caisse atteignable au POS** : barre fixe et panier plein écran sur mobile, la caisse n'est plus sous 43 produits de catalogue |
 | 03/10/2026 | — | Recette **prod** du Sprint 9 — barre fixe servie, `pb-24` sur la grille, aucun changement en grand écran |
