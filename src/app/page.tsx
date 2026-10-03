@@ -21,6 +21,7 @@ import { ForecastModule } from '@/components/forecast/ForecastModule';
 import { TeamModule } from '@/components/team/TeamModule';
 import { ProductForm } from '@/components/products/ProductForm';
 import { RestockModal } from '@/components/products/RestockModal';
+import { ProductImportModal } from '@/components/inventory/ProductImportModal';
 import { BarcodeScanner } from '@/components/scanner/BarcodeScanner';
 import { SettingsModule } from '@/components/settings/SettingsModule';
 import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
@@ -53,6 +54,7 @@ export default function HomePage() {
 
   // Modals produits
   const [showProductForm, setShowProductForm] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [restockProduct, setRestockProduct] = useState<Product | null>(null);
   // Même règle que canManageProducts : un prédicat nommé rend les sites
@@ -191,6 +193,7 @@ export default function HomePage() {
               onEdit={openEdit}
               onRestock={openRestock}
               onAdd={openAdd}
+              onImport={() => setShowImport(true)}
               onRefresh={fetchProducts}
             />
           )}
@@ -244,6 +247,13 @@ export default function HomePage() {
           onClose={() => setShowProductForm(false)}
           onSaved={fetchProducts}
           currentProductCount={products.length}
+        />
+      )}
+      {showImport && canManageProducts && (
+        <ProductImportModal
+          products={products}
+          onClose={() => setShowImport(false)}
+          onDone={fetchProducts}
         />
       )}
       {restockProduct && canManageProducts && (

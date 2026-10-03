@@ -13,12 +13,13 @@ interface InventoryTabProps {
   onEdit: (product: Product) => void;
   onRestock: (product: Product) => void;
   onAdd: () => void;
+  onImport: () => void;
   onRefresh: () => void;
 }
 
 export function InventoryTab({
   products, canManageProducts, showCount, onToggleCount, onCountComplete,
-  onEdit, onRestock, onAdd, onRefresh,
+  onEdit, onRestock, onAdd, onImport, onRefresh,
 }: InventoryTabProps) {
   return (
     <div className="space-y-4">
@@ -44,7 +45,7 @@ export function InventoryTab({
       {showCount ? (
         <InventoryCount products={products} onComplete={onCountComplete} />
       ) : (
-        <InventoryTable products={products} onEdit={onEdit} onRestock={onRestock} onAdd={onAdd} onRefresh={onRefresh} />
+        <InventoryTable products={products} onEdit={onEdit} onRestock={onRestock} onAdd={onAdd} onImport={onImport} onRefresh={onRefresh} />
       )}
     </div>
   );
