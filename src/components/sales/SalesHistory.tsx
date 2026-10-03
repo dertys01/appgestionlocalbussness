@@ -10,7 +10,7 @@ import { PeriodPicker } from '@/components/ui/PeriodPicker';
 import { formatCFA } from '@/lib/utils/currency';
 import { toCSV, downloadCSV } from '@/lib/utils/export';
 import { isFeatureAllowed, PLAN_LIMITS, PLAN_LABELS } from '@/lib/utils/plans';
-import { addDays, rangeFromDays, todayISO, type DateRange } from '@/lib/utils/period';
+import { addDays, localTimeZone, rangeFromDays, todayISO, toISODate, type DateRange } from '@/lib/utils/period';
 import type { Sale, SaleItem } from '@/types';
 
 interface SaleWithItems extends Sale {
@@ -22,46 +22,75 @@ const PAGE_SIZE = 20;
 export function SalesHistory() {
   const { supabase, plan } = useSupabase();
   const [sales, setSales] = useState<SaleWithItems[]>([]);
+  // Compte de la période, demandé au serveur en même temps que la page. Il ne
+  // se déduit plus de sales.length, qui ne vaut désormais que le lot courant.
+  const [totalRows, setTotalRows] = useState(0);
+  // Total de la période, agrégé en base puisqu'aucun agrégat PostgREST n'est
+  // autorisé (PGRST123) : additionné ici, il exigerait toutes les ventes.
+  const [totalPeriode, setTotalPeriode] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [filter, setFilter] = useState<DateRange>(() => rangeFromDays(7));
   const [currentPage, setCurrentPage] = useState(1);
   const [error, setError] = useState('');
 
-  const fetchSales = async (f: DateRange) => {
+  // Bornes appliquées à la fois au filtre choisi et au plafond du plan : une
+  // période demandée au-delà de salesHistoryDays est ramenée dans les limites.
+  const bornes = (f: DateRange) => {
+    // Bornes incluses des deux côtés : sans le .lte, la journée du jour même
+    // disparaissait et l'écran affichait « aucune vente » après un encaissement.
+    const from = new Date(`${f.from}T00:00:00`);
+    const to = new Date(`${f.to}T23:59:59.999`);
+
+    const planDays = PLAN_LIMITS[plan].salesHistoryDays;
+    const floor = planDays === Infinity
+      ? null
+      : new Date(`${addDays(todayISO(), -(planDays - 1))}T00:00:00`);
+
+    return { from: floor && floor > from ? floor : from, to };
+  };
+
+  const fetchSales = async (f: DateRange, page: number) => {
     setLoading(true);
     setError('');
     try {
-      // Bornes incluses des deux côtés : sans le .lte, la journée du jour même
-      // disparaissait et l'écran affichait « aucune vente » après un encaissement.
-      const from = new Date(`${f.from}T00:00:00`);
-      const to = new Date(`${f.to}T23:59:59.999`);
+      const { from, to } = bornes(f);
 
-      // Plafond du plan appliqué en plus du filtre choisi : une période
-      // demandée au-delà de salesHistoryDays est ramenée dans les limites.
-      const planDays = PLAN_LIMITS[plan].salesHistoryDays;
-      const floor = planDays === Infinity
-        ? null
-        : new Date(`${addDays(todayISO(), -(planDays - 1))}T00:00:00`);
-
-      const effectiveFrom = floor && floor > from ? floor : from;
-
-      const { data, error: queryErr } = await supabase
-        .from('sales')
-        .select('*, sale_items(*)')
-        .gte('created_at', effectiveFrom.toISOString())
-        .lte('created_at', to.toISOString())
-        .order('created_at', { ascending: false });
+      // Deux requêtes en parallèle, et surtout aucune qui grandit avec la
+      // période : la première ne renvoie que le lot de 20 (plus son compte
+      // total, fourni par PostgREST), la seconde un total de période agrégé
+      // en base. Avant, les deux additionnaient dans le navigateur toutes les
+      // ventes de la période — 30 jours en free, illimités en pro.
+      const [pageRes, sumRes] = await Promise.all([
+        supabase
+          .from('sales')
+          .select('*, sale_items(*)', { count: 'exact' })
+          .gte('created_at', from.toISOString())
+          .lte('created_at', to.toISOString())
+          .order('created_at', { ascending: false })
+          .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1),
+        supabase.rpc('get_sales_summary', {
+          p_from: toISODate(from),
+          p_to: toISODate(to),
+          p_tz: localTimeZone(),
+        }),
+      ]);
 
       // L'error était ignorée : un échec de réseau s'affichait comme
       // « Aucune vente sur cette période ».
-      if (queryErr) throw new Error(queryErr.message);
+      if (pageRes.error) throw new Error(pageRes.error.message);
+      if (sumRes.error) throw new Error(sumRes.error.message);
 
-      setSales((data as SaleWithItems[]) ?? []);
-      setCurrentPage(1);
+      const jours = (sumRes.data ?? []) as { revenue: number }[];
+      setTotalPeriode(jours.reduce((n, d) => n + Number(d.revenue), 0));
+      setTotalRows(pageRes.count ?? 0);
+      setSales((pageRes.data as SaleWithItems[]) ?? []);
     } catch (e) {
       setError((e as Error).message);
       setSales([]);
+      setTotalRows(0);
+      setTotalPeriode(0);
     } finally {
       setLoading(false);
     }
@@ -69,7 +98,19 @@ export function SalesHistory() {
 
   // La requête dépend du filtre ET du plan : l'ancien `[]` ne refetchait pas
   // si le plan changeait (upgrade/downgrade en cours de session).
-  useEffect(() => { fetchSales(filter); }, [filter, plan]); // eslint-disable-line react-hooks/exhaustive-deps
+  //
+  // Deux effets plutôt qu'un seul, pour ne jamais fetcher deux fois : le
+  // premier couvre tout ce qui doit revenir à la page 1 (filtre ou plan
+  // changé), le second ne se déclenche que sur un vrai changement de page.
+  useEffect(() => {
+    setCurrentPage(1);
+    fetchSales(filter, 1);
+  }, [filter, plan]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (currentPage === 1) return; // déjà couvert par l'effet ci-dessus
+    fetchSales(filter, currentPage);
+  }, [currentPage]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleFilterChange = (f: DateRange) => setFilter(f);
 
@@ -78,9 +119,47 @@ export function SalesHistory() {
   const planDays = PLAN_LIMITS[plan].salesHistoryDays;
   const isTruncatedByPlan = planDays !== Infinity;
 
-  const totalPeriode = sales.reduce((sum, s) => sum + s.total_amount, 0);
-  const totalPages = Math.max(1, Math.ceil(sales.length / PAGE_SIZE));
-  const paginated = sales.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE));
+
+  // L'export part de TOUTE la période, pas de la page affichée. La liste est
+  // désormais paginée en base : exporter les seules 20 lignes visibles au nom
+  // de la période entière serait un export tronqué en silence, pire que pas
+  // d'export du tout. Un export complet demande par définition toutes les
+  // lignes — c'est l'utilisateur qui le déclenche, une fois.
+  const handleExportCsv = async () => {
+    setExporting(true);
+    try {
+      const { from, to } = bornes(filter);
+      const { data, error: exportErr } = await supabase
+        .from('sales')
+        .select('*, sale_items(*)')
+        .gte('created_at', from.toISOString())
+        .lte('created_at', to.toISOString())
+        .order('created_at', { ascending: false });
+
+      if (exportErr) throw new Error(exportErr.message);
+
+      const rows = ((data as SaleWithItems[]) ?? []).map((s) => ({
+        date: new Date(s.created_at).toLocaleString('fr-FR'),
+        montant: s.total_amount,
+        paiement: s.payment_method === 'momo' ? 'MoMo'
+          : s.payment_method === 'credit' ? (s.settled ? 'Crédit soldé' : 'Crédit')
+          : 'Espèces',
+        articles: s.sale_items.map((i) => `${i.quantity}x ${i.product_name}`).join(' | '),
+      }));
+      const csv = toCSV(rows, [
+        { key: 'date',     label: 'Date' },
+        { key: 'montant',  label: 'Montant (F)' },
+        { key: 'paiement', label: 'Paiement' },
+        { key: 'articles', label: 'Articles' },
+      ]);
+      downloadCSV(csv, `ventes-${new Date().toISOString().slice(0, 10)}.csv`);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const formatDate = (iso: string) =>
     new Date(iso).toLocaleDateString('fr-FR', {
@@ -122,7 +201,7 @@ export function SalesHistory() {
         <Card className="border-slate-200">
           <CardContent className="p-4">
             <div className="text-xs text-slate-500 font-medium mb-1">Transactions</div>
-            <div className="text-xl font-bold text-slate-800">{sales.length}</div>
+            <div className="text-xl font-bold text-slate-800">{totalRows}</div>
           </CardContent>
         </Card>
       </div>
@@ -130,50 +209,35 @@ export function SalesHistory() {
       {/* Actions */}
       <div className="flex items-center gap-3">
         <button
-          onClick={() => fetchSales(filter)}
+          onClick={() => fetchSales(filter, currentPage)}
           disabled={loading}
           className="flex items-center gap-2 text-sm text-slate-500 hover:text-indigo-600 disabled:opacity-40"
         >
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           Actualiser
         </button>
-        {isFeatureAllowed(plan, 'exportCsv') && sales.length > 0 && (
+        {isFeatureAllowed(plan, 'exportCsv') && totalRows > 0 && (
           <Button
             variant="outline"
             size="sm"
-            onClick={() => {
-              const rows = sales.map((s) => ({
-                date: new Date(s.created_at).toLocaleString('fr-FR'),
-                montant: s.total_amount,
-                paiement: s.payment_method === 'momo' ? 'MoMo'
-                  : s.payment_method === 'credit' ? (s.settled ? 'Crédit soldé' : 'Crédit')
-                  : 'Espèces',
-                articles: s.sale_items.map((i) => `${i.quantity}x ${i.product_name}`).join(' | '),
-              }));
-              const csv = toCSV(rows, [
-                { key: 'date',     label: 'Date' },
-                { key: 'montant',  label: 'Montant (F)' },
-                { key: 'paiement', label: 'Paiement' },
-                { key: 'articles', label: 'Articles' },
-              ]);
-              downloadCSV(csv, `ventes-${new Date().toISOString().slice(0, 10)}.csv`);
-            }}
+            onClick={handleExportCsv}
+            disabled={exporting}
             className="gap-2 border-slate-200"
           >
             <Download className="h-4 w-4" />
-            CSV
+            {exporting ? 'Export…' : 'CSV'}
           </Button>
         )}
       </div>
 
       {/* Liste des ventes */}
-      {sales.length === 0 && !loading && !error ? (
+      {totalRows === 0 && !loading && !error ? (
         <div className="text-center text-slate-400 py-12 text-sm">
           Aucune vente sur cette période
         </div>
       ) : sales.length > 0 ? (
         <div className="space-y-2">
-          {paginated.map((sale) => {
+          {sales.map((sale) => {
             const isOpen = expanded === sale.id;
             return (
               <Card key={sale.id} className="border-slate-200 overflow-hidden">

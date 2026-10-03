@@ -43,6 +43,23 @@ export function todayISO(): string {
   return toISODate(new Date());
 }
 
+/**
+ * Fuseau horaire du navigateur, au format IANA (`Africa/Porto-Novo`, `Europe/Paris`).
+ *
+ * C'est celui avec lequel `toISODate()` découpe les journées. Les fonctions
+ * SQL de synthèse prennent ce même fuseau en paramètre : sans cela, elles
+ * calculeraient les jours dans le fuseau de la session Postgres, et chaque
+ * barre du graphique se décalerait d'une case par rapport à ce que le client
+ * affichait avant.
+ */
+export function localTimeZone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  } catch {
+    return 'UTC';
+  }
+}
+
 export function addDays(iso: string, days: number): string {
   const d = parseISODate(iso);
   d.setDate(d.getDate() + days);
