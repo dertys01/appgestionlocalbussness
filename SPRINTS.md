@@ -1,4 +1,4 @@
-# Plan de développement — Sprints 1 à 4
+# Plan de développement — Sprints 1 à 7
 
 ## Provenance de ce document
 
@@ -30,6 +30,7 @@ chaque item a un critère de fin vérifiable.
 | 4.2 | Titres de onglet côté serveur : **3 layouts `metadata`**, `page.tsx` intacts (4/4 toujours client) | `c4ba478` |
 | 5 | Accessibilité et contraste : **Lighthouse a11y 0.83/0.95/0.96 → 1.00** sur 5 écrans · **10 premiers tests de composant React** | `6abaa4c` |
 | 6 | États vides et premier écran : composant `ui/empty-state` appliqué à **9 écrans**, accueil à zéro produit · **10 champs sans étiquette reliée** corrigés (Lighthouse Paramètres **0.94 → 1.00**) · tests **10 → 19** | `68860f0` `d168d56` |
+| 7 | **Résultat net corrigé** : le coût des marchandises vendues est déduit. L'écran affichait **1 161 200 F (86,1 %)** pour un bénéfice réel de **207 444 F (15,4 %)** — **section 8** de `migration_security.sql` · tests **19 → 23** | `693947b` |
 
 **Reste dans le Sprint 4 :** 4.3 (25 `eslint-disable` dans 17 fichiers, au fil de l'eau).
 
@@ -39,10 +40,10 @@ chaque item a un critère de fin vérifiable.
 **Recette manuelle des 9 onglets : faite** le 03/10/2026, navigateur, deux profils,
 **en local puis en prod**, 0 erreur JavaScript — détail en fin de section 4.1.
 
-`supabase/migration_security.sql` porte les **7 sections** (1 `rate_limits` hors portée client ·
+`supabase/migration_security.sql` porte les **8 sections** (1 `rate_limits` hors portée client ·
 2 `organizations.plan` verrouillé · 3 `subscriptions` une ligne par org · 4 `business_members`
 lecture seule · 5 `sales`/`sale_items`/`stock_logs` lecture seule · 6 suppression de compte ·
-7 clé `anon` révoquée).
+7 clé `anon` révoquée · 8 `get_cash_flow()` déduit le coût des marchandises vendues).
 
 Vérifications de référence, à maintenir à chaque étape :
 `npx tsc --noEmit` · `npm run lint` · `npm run build` · `npm test` — tous en **code de sortie 0**.
@@ -542,6 +543,103 @@ npm test          → 0  (+ 19 tests de composant)
 
 ---
 
+## Sprint 7 — L'argent affiché : ce que la marchandise a coûté
+
+Ce sprint n'était pas planifié. Il est né d'une question du mainteneur sur l'écran
+**Charges** : « chiffre d'affaires moins charge, ce n'est pas égal bénéfice, n'est-ce pas ? »
+La réponse était **non**, et l'écran mentait.
+
+### 7.1 — L'audit, avant / après
+
+Le calcul affiché était exact *entre les chiffres montrés* :
+`1 349 400 − 188 200 = 1 161 200`, et `1 161 200 / 1 349 400 = 86,1 %`. Il n'était
+malheureusement pas faux **par rapport à la réalité** : le coût d'achat des
+marchandises vendues n'était déduit nulle part.
+
+`get_cash_flow()` faisait, en toutes lettres, `net = revenue − expenses`, et
+`ExpensesModule.tsx` faisait `net = totalRevenue − totalExpenses`. Le CMV n'existait
+que dans l'onglet **Rentabilité** (`revenue − cogs`), sans période et sans charges —
+donc **aucun écran de l'application n'affichait le vrai résultat**.
+
+Relevé en production, 30 jours, sur les bases de la fonction :
+
+| | Avant (affiché) | Après (calculé) |
+|---|---|---|
+| Chiffre d'affaires (encaissé) | 1 349 400 F | 1 349 400 F |
+| Coût des marchandises vendues | *absent* | 953 756 F |
+| Charges de structure | 188 200 F | 188 200 F |
+| **Résultat net** | **1 161 200 F** | **207 444 F** |
+| **Marge nette** | **86,1 %** | **15,4 %** |
+
+L'écart vaut **exactement** le CMV : le commerçant paraissait **5,6 fois** plus riche
+qu'il n'était. Le symptôme le plus parlant était le 86 % — aucun commerce de détail
+n'a cette marge ; 15 % est la marque d'une boutique saine.
+
+### 7.2 — La section 8
+
+Colonne `cogs` ajoutée entre `revenue` et `expenses`, `net = revenue − cogs − expenses`.
+Rien n'est supprimé : le client lit les champs par leur nom, un champ de plus est sans
+effet sur le code antérieur — c'est ce qui rend l'ordre de déploiement indifférent.
+
+Le coût vient de `sale_items.unit_cost`, figé à la vente par `freeze_sale_item_cost()` :
+l'historique ne bouge pas quand le prix d'achat est corrigé aujourd'hui. Il est proraté
+sur `amount_received / total_amount`, **exactement comme le CA** — une vente à crédit ne
+débite que la part encaissée. C'est la condition pour qu'une soustraction ait un sens :
+ventes et coûts doivent sortir sur la même base.
+
+Le garde de plan (`require_feature('reports')`) est conservé, et le verrou de la clé
+`anon` vérifié après application : `anon_peut_appeler = false`, les deux helpers des
+policies RLS restent les seules fonctions ouvertes au public.
+
+### 7.3 — L'écran
+
+Cinquième carte **« Marchandises — ce que vous avez payé »**. Sans elle, la chute du
+résultat était inexplicable : 1,16 M disparaisaient sans qu'on dise pourquoi. Les trois
+autres cartes sont désormais préfixées du signe moins, pour que la chaîne se lise dans
+l'ordre. Deux textes qui promettaient le chiffre d'affaires sans charge — ou qui
+n'expliquaient pas le calcul — sont corrigés.
+
+### 7.4 — Tests
+
+- `supabase/tests/migration.test.mjs` **7o / 7p / 7q** — CA, CMV, et l'invariant
+  `net = CA − CMV − charges` sur une vente à coût connu. C'est le garde-fou qui empêche
+  l'oubli de revenir.
+- `tests/ui/expenses.test.tsx` (4) — verrouille le 207 444 F à l'écran et **interdit le
+  retour du 1 161 200 F**.
+
+**19 → 23 tests de composant.**
+
+> Piège rencontré en écrivant ce test : Testing Library normalise le texte du DOM
+> (`/\s+/g` → espace) mais compare la requête **brute**. `formatCFA` écrit les milliers
+> avec une espace fine insécable (U+202F) : `getByText(formatCFA(207444))` ne trouve donc
+> **jamais** l'élément, alors qu'il est bien là. Il faut appliquer la même normalisation
+> à la requête.
+
+### 7.5 — Observation laissée ouverte
+
+Les onglets **Ventes** et **Charges** n'affichent pas le même « chiffre d'affaires » sur
+la même période : **1 373 400 F** contre **1 349 400 F**. Ce n'est pas un bug —
+`get_sales_summary()` raisonne en *prix de vente* (`total_amount`), `get_cash_flow()` en
+*encaissé* (`amount_received`). L'écart de 24 000 F est exactement 2 ventes à crédit non
+soldées. Les deux bases sont justifiées, mais deux chiffres différents pour la même période
+sans explication dans l'interface est une source de confusion. **Non traité** : c'est un
+choix de présentation, pas une correction.
+
+### Définition de fini — Sprint 7
+
+```
+npx tsc --noEmit  → 0
+npm run lint      → 0 problems
+npm run build     → 0
+npm test          → 0  (+ 23 tests de composant, 432 vérifications)
++ section 8 appliquée en prod : signature TABLE(day, revenue, cogs, expenses, net, transactions)
++ SECURITY INVOKER préservé, anon_peut_appeler = false
++ prod vérifiée : 207 444 F / 15,4 % affichés, 0 erreur JavaScript
++ dette eslint-disable → 25 (inchangée)
+```
+
+---
+
 ## Hors périmètre (volontairement)
 
 | Sujet | Pourquoi |
@@ -559,6 +657,11 @@ npm test          → 0  (+ 19 tests de composant)
   qui ne doit pas être exposée sans session doit en être consciente dès sa création, et
   l'assertion **22a** du harnais échoue si elle l'est.
 - Toute modification SQL passe par `npm run test:db` **et** `npm run test:db:existing`.
+- **PostgreSQL refuse de changer le type de retour** d'une fonction existante
+  (`cannot change return type of existing function`) : toute evolution de signature passe par
+  `DROP FUNCTION IF EXISTS` puis `CREATE`, **jamais** par `CREATE OR REPLACE`. Et toute migration
+  qui définit une fonction déjà redéfinie plus loin doit porter ce `DROP` : le harnais rejoue
+  chaque fichier sur une base déjà corrigée.
 - La recherche `GET /admin/users?email=` de ce GoTrue **ignore** le paramètre : ne pas
   « simplifier » la pagination de `invitations/accept`.
 - Aucune suppression de données sans afficher la liste et obtenir le feu vert.
@@ -567,6 +670,8 @@ npm test          → 0  (+ 19 tests de composant)
 
 | Date | Commit | Objet |
 |---|---|---|
+| 03/10/2026 | — | Recette **prod** du Sprint 7 — écran Charges : **207 444 F / 15,4 %** (contre 1 161 200 F / 86,1 %), 0 erreur JS, verrou `anon` intact |
+| 03/10/2026 | `693947b` | Sprint 7 — **résultat net corrigé** : section 8 de `migration_security.sql`, CMV déduit, 5ᵉ carte, tests 19 → 23 |
 | 03/10/2026 | `d168d56` | Accessibilité — **10 champs sans étiquette reliée** sur 4 onglets, balayage des 9 onglets |
 | 03/10/2026 | `68860f0` | Sprint 6 — états vides homogènes sur 9 écrans + premier écran d'une boutique neuve, tests 10 → 19 |
 | 03/10/2026 | — | Recette **prod** du Sprint 6 — 9/9 onglets, 0 erreur JS, 0 champ sans étiquette, Lighthouse 1.00 sur Accueil et Paramètres |
