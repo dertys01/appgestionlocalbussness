@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Wallet, TrendingUp, TrendingDown, Loader2, Plus, Trash2,
-  AlertTriangle, X, CalendarDays,
+  AlertTriangle, X, CalendarDays, PackageX,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -21,6 +21,8 @@ import { logActivity } from '@/lib/utils/activity';
 interface CashFlowDay {
   day: string;
   revenue: number;
+  /** Coût des marchandises vendues, déduit pour obtenir le vrai résultat. */
+  cogs: number;
   expenses: number;
   net: number;
   transactions: number;
@@ -169,8 +171,12 @@ export function ExpensesModule() {
   }, [user, supabase, load]);
 
   const totalRevenue = flow.reduce((s, d) => s + Number(d.revenue), 0);
+  const totalCogs = flow.reduce((s, d) => s + Number(d.cogs ?? 0), 0);
   const totalExpenses = flow.reduce((s, d) => s + Number(d.expenses), 0);
-  const net = totalRevenue - totalExpenses;
+  // CA − coût des marchandises vendues − charges. Retirer le CMV, c'était
+  // afficher comme bénéfice la somme que la marchandise a coûtée : sur 30 jours
+  // relevés en prod, 1 161 200 F affichés pour 207 444 F réels.
+  const net = totalRevenue - totalCogs - totalExpenses;
   const marginPct = totalRevenue > 0 ? (net / totalRevenue) * 100 : 0;
   const bestDay = flow.reduce<CashFlowDay | null>(
     (best, d) => (d.net > (best?.net ?? -Infinity) ? d : best), null
@@ -291,7 +297,7 @@ export function ExpensesModule() {
 
       {/* Synthèse */}
       {!flowError && (
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         <Card className="border-slate-200">
           <CardContent className="p-4">
             <div className="flex items-center gap-2 text-slate-500 text-xs mb-1">
@@ -300,12 +306,23 @@ export function ExpensesModule() {
             <div className="text-lg font-bold text-slate-800">{formatCFA(totalRevenue)}</div>
           </CardContent>
         </Card>
+        {/* Sans cette carte, la chute du résultat était inexplicable : le
+            commerçant voyait 1,16 M disparaître sans savoir pourquoi. */}
+        <Card className="border-slate-200">
+          <CardContent className="p-4">
+            <div className="flex items-center gap-2 text-slate-500 text-xs mb-1">
+              <PackageX className="h-3.5 w-3.5" /> Marchandises
+            </div>
+            <div className="text-lg font-bold text-slate-800">−{formatCFA(totalCogs)}</div>
+            <div className="text-xs text-slate-500 mt-0.5">ce que vous avez payé</div>
+          </CardContent>
+        </Card>
         <Card className="border-slate-200">
           <CardContent className="p-4">
             <div className="flex items-center gap-2 text-slate-500 text-xs mb-1">
               <TrendingDown className="h-3.5 w-3.5" /> Charges
             </div>
-            <div className="text-lg font-bold text-slate-800">{formatCFA(totalExpenses)}</div>
+            <div className="text-lg font-bold text-slate-800">−{formatCFA(totalExpenses)}</div>
           </CardContent>
         </Card>
         {/* Voir ProfitabilityModule : classes interpolées = non compilées par Tailwind. */}
@@ -341,8 +358,8 @@ export function ExpensesModule() {
             Aucune charge enregistrée sur la période
           </div>
           <p className="text-xs mt-1">
-            Sans loyer, salaires ni électricité, le résultat net affiché vaut le chiffre
-            d&apos;affaires — il ne vous dit pas si la boutique est rentable.
+            Sans loyer, salaires ni électricité, le résultat affiché vaut la marge brute :
+            il ne vous dit toujours pas si la boutique est rentable.
           </p>
         </div>
       )}
@@ -530,8 +547,9 @@ export function ExpensesModule() {
       </Card>
 
       <p className="text-xs text-slate-500">
-        Le résultat net croise le chiffre d&apos;affaires des ventes et vos charges sur la
-        période choisie. Il ne comprend ni les salaires implicites ni l&apos;amortissement du stock.
+        Le résultat net déduit du chiffre d&apos;affaires le coût des marchandises vendues,
+        puis vos charges sur la période choisie. Il ne comprend ni les salaires implicites
+        ni l&apos;amortissement du stock resté en rayon.
       </p>
     </div>
   );
