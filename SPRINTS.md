@@ -32,6 +32,7 @@ chaque item a un critère de fin vérifiable.
 | 6 | États vides et premier écran : composant `ui/empty-state` appliqué à **9 écrans**, accueil à zéro produit · **10 champs sans étiquette reliée** corrigés (Lighthouse Paramètres **0.94 → 1.00**) · tests **10 → 19** | `68860f0` `d168d56` |
 | 7 | **Résultat net corrigé** : le coût des marchandises vendues est déduit. L'écran affichait **1 161 200 F (86,1 %)** pour un bénéfice réel de **207 444 F (15,4 %)** — **section 8** de `migration_security.sql` · tests **19 → 23** | `693947b` |
 | 8 | **Import CSV de produits** : l'application n'avait qu'un export. Analyseur tolérant (`520.000`, `110k`, Excel FR), refus explicite de la vente à perte, produits existants jamais écrasés · **dépôt public protégé** (`import-local/`) · tests **23 → 65** | `40082cb` `e451839` `953c7f9` |
+| 9 | **Caisse atteignable au POS** : sur mobile le panier était sous la grille de produits — il fallait défiler tout le catalogue pour encaisser. Barre fixe + panier plein écran, total toujours visible | `811e7eb` |
 
 **Reste dans le Sprint 4 :** 4.3 (25 `eslint-disable` dans 17 fichiers, au fil de l'eau).
 
@@ -743,6 +744,73 @@ npm test          → 0  (55 vérifications SQL, 65 tests de composant)
 
 ---
 
+## Sprint 9 — La caisse était hors d'atteinte au point de vente
+
+Signalé par le mainteneur le 03/10/2026, sur la capture d'écran du POS avec
+43 références. Ce n'est pas un défaut d'apparence : **c'est l'écran de vente
+qui devient inutilisable au moment où il sert.**
+
+### 9.1 — Le défaut
+
+Ligne 416 de `POSModule.tsx` : `flex flex-col lg:flex-row`. Sur mobile, le
+panier (`lg:w-80`) passait **après** la grille de produits. Avec 40 références,
+le caissier devait faire défiler plusieurs écrans pour atteindre le total et le
+bouton « Encaisser » — l'action principale de l'écran, **à chaque vente**.
+
+### 9.2 — La correction
+
+- **Barre fixe en bas** (mobile seulement) : icône, nombre d'articles, **total
+  en permanence**, et « Encaisser › » qui ouvre le panier. Une seule cible,
+  une seule action.
+- **Panier en plein écran.** La zone des articles devient la seule zone
+  défilante (`flex-1`), donc total, mode de paiement, montant donné et
+  « Encaisser » restent **toujours en bas**, atteignables. La borne
+  `max-h-[45vh]` qui était propre au grand écran est passée en
+  `lg:` seulement.
+- **Le panier se referme avec la vente** : le caissier voit la grille vide
+  pour la suivante. Fermer **sans** encaisser conserve les articles — il a
+  saisi des quantités, il ne les saisira pas deux fois.
+- **`pb-24`** sous la grille : sans cette réserve, la barre fixe passerait sur
+  la dernière rangée et la rendrait incliquable.
+
+Sur grand écran : rien ne change, la colonne reste à droite.
+
+### 9.3 — Sémantique de modale
+
+Le panneau ouvert recouvre la grille, qui reste dans le DOM et focusable : la
+tabulation et les lecteurs d'écran parcouraient un contenu invisible. La grille
+passe **`inert`** (React 19) tant que le panneau est ouvert.
+
+Corollaire non évident : le bouton de fermeture **n'est pas** masqué en
+`lg:`. Sur mobile `panierOuvert` ne peut être vrai que depuis la barre, donc
+il n'apparaît pas en usage normal — mais après une rotation vers un grand
+écran, c'est la seule issue pour lever `inert` sur la grille. Le masquer
+aurait piégé le caissier dans un écran figé.
+
+### 9.4 — Tests
+
+6 tests (`tests/ui/pos-cart-access.test.tsx`) : la barre existe, le total se
+met à jour à l'ajout, elle ouvre le panier qui contient « Encaisser », fermer
+sans encaisser conserve les articles, la grille sort du parcours de
+tabulation.
+
+Ils reprennent le piège du Sprint 7 : `formatCFA` écrit l'espace des milliers
+en **U+202F**, et une regex contenant une espace ordinaire ne correspond
+jamais. Les motifs ne contiennent donc que des intitulés, aucun montant.
+
+### Définition de fini — Sprint 9
+
+```
+npx tsc --noEmit  → 0
+npm run lint      → 0 problems
+npm run build     → 0
+npm test          → 0  (55 vérifications SQL, 71 tests de composant)
++ prod vérifiée : barre `fixed bottom-0`, grille `pb-24 lg:pb-0`,
+  colonne panier `hidden lg:flex` — le bundle est bien servi
+```
+
+---
+
 ## Hors périmètre (volontairement)
 
 | Sujet | Pourquoi |
@@ -779,6 +847,8 @@ npm test          → 0  (55 vérifications SQL, 65 tests de composant)
 
 | Date | Commit | Objet |
 |---|---|---|
+| 03/10/2026 | `811e7eb` | Sprint 9 — **caisse atteignable au POS** : barre fixe et panier plein écran sur mobile, la caisse n'est plus sous 43 produits de catalogue |
+| 03/10/2026 | — | Recette **prod** du Sprint 9 — barre fixe servie, `pb-24` sur la grille, aucun changement en grand écran |
 | 03/10/2026 | `e451839` | Sprint 8 (suite) — le fichier **livré** est vérifié par la suite de tests, plus seulement un CSV écrit en dur |
 | 03/10/2026 | `40082cb` | Sprint 8 — import CSV de produits : analyseur, modale, câblage, tests 23 → 55 |
 | 03/10/2026 | `953c7f9` | Dépôt public : `import-local/` gitignoré, les prix d'achat n'y entrent pas |
