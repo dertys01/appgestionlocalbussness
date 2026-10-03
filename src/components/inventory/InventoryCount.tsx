@@ -94,19 +94,38 @@ export function InventoryCount({ products, onComplete }: InventoryCountProps) {
         differences.map(async (entry) => {
           const newQty = Number(entry.counted);
 
-          const { error: updateErr } = await supabase
+          // Relire le stock réel avant d'écrire : `entry.product.stock_qty`
+          // vient du fetch initial, une vente ou un réappro entre-temps serait
+          // écrasé silencieusement (et stock_logs décrirait un faux écart).
+          const { data: fresh, error: readErr } = await supabase
+            .from('products')
+            .select('stock_qty')
+            .eq('id', entry.product.id)
+            .single();
+          if (readErr || !fresh) return { entry, error: readErr?.message ?? 'Produit introuvable.' };
+
+          const stockBefore = fresh.stock_qty;
+
+          const { data: updated, error: updateErr } = await supabase
             .from('products')
             .update({ stock_qty: newQty })
-            .eq('id', entry.product.id);
+            .eq('id', entry.product.id)
+            .eq('stock_qty', stockBefore) // verrou optimiste : 0 ligne si concurrence
+            .select('id');
           if (updateErr) return { entry, error: updateErr.message };
+
+          // 0 ligne : le stock a changé entre la lecture et l'écriture.
+          if (!updated || updated.length === 0) {
+            return { entry, error: 'Le stock a changé pendant la saisie — réessayez.' };
+          }
 
           const { error: logErr } = await supabase.from('stock_logs').insert({
             user_id: ownerId,
             product_id: entry.product.id,
             product_name: entry.product.name,
             movement_type: 'adjustment',
-            quantity_change: newQty - entry.product.stock_qty,
-            stock_before: entry.product.stock_qty,
+            quantity_change: newQty - stockBefore,
+            stock_before: stockBefore,
             stock_after: newQty,
           });
           if (logErr) return { entry, error: logErr.message };

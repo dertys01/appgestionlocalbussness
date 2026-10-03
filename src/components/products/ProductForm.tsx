@@ -8,6 +8,7 @@ import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { SupplierSelect } from '@/components/products/SupplierSelect';
 import { logActivity } from '@/lib/utils/activity';
 import { canAddProduct, PLAN_LIMITS, PLAN_LABELS } from '@/lib/utils/plans';
+import { lireMontant } from '@/lib/utils/nombres';
 import type { Product } from '@/types';
 
 interface ProductFormProps {
@@ -102,15 +103,31 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
       return;
     }
 
+    const priceBuy = lireMontant(form.price_buy);
+    const priceSell = lireMontant(form.price_sell);
+    const stockQty = lireMontant(form.stock_qty);
+    const minStock = lireMontant(form.min_stock_level);
+    // 1,5 kg de riz est une quantité valide : lireMontant accepte la virgule.
+
+    if (priceBuy === null || priceSell === null || stockQty === null || minStock === null) {
+      setError('Montant ou quantité invalide.');
+      setLoading(false);
+      return;
+    }
+    if (priceBuy < 0 || priceSell < 0 || stockQty < 0 || minStock < 0) {
+      setError('Les prix et quantités doivent être positifs.');
+      setLoading(false);
+      return;
+    }
+
     const payload = {
       name: form.name.trim(),
       sku: form.sku.trim() || null,
       category: form.category || null,
-      price_buy: parseFloat(form.price_buy) || 0,
-      price_sell: parseFloat(form.price_sell) || 0,
-      // parseFloat et non parseInt : 1,5 kg de riz est une quantité valide.
-      stock_qty: parseFloat(form.stock_qty) || 0,
-      min_stock_level: parseFloat(form.min_stock_level) || 5,
+      price_buy: priceBuy,
+      price_sell: priceSell,
+      stock_qty: stockQty,
+      min_stock_level: minStock,
       // null explicite : sans cela, retirer le fournisseur d'un article ne
       // detachait rien, la colonne gardait l'ancienne valeur.
       supplier_id: form.supplier_id,

@@ -440,7 +440,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
       if (i.product.id !== productId) return i;
       // Vide = retour au prix catalogue, pas un prix à zéro.
       if (raw.trim() === '') return { ...i, unitPrice: null };
-      const n = Number(raw);
+      const n = Number(raw.replace(',', '.'));
       if (!Number.isFinite(n) || n <= 0) return i;
       return { ...i, unitPrice: n };
     }));
@@ -592,7 +592,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         clientPhone.trim() || undefined
       );
 
-      const given = parseFloat(amountGiven) || 0;
+      const given = parseFloat(String(amountGiven).replace(',', '.')) || 0;
       setReceipt({
         saleId,
         invoiceNumber,
@@ -1040,19 +1040,19 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                   className="text-sm"
                 />
               </div>
-              {parseFloat(amountGiven) >= total && (
+              {parseFloat(String(amountGiven).replace(',', '.')) >= total && (
                 <div className="flex justify-between rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2">
                   <span className="text-sm font-medium text-emerald-700">Monnaie à rendre</span>
                   <span className="text-sm font-bold text-emerald-700">
-                    {formatCFA(parseFloat(amountGiven) - total)}
+                    {formatCFA(parseFloat(String(amountGiven).replace(',', '.')) - total)}
                   </span>
                 </div>
               )}
-              {parseFloat(amountGiven) > 0 && parseFloat(amountGiven) < total && (
+              {parseFloat(String(amountGiven).replace(',', '.')) > 0 && parseFloat(String(amountGiven).replace(',', '.')) < total && (
                 <div className="flex justify-between rounded-lg bg-red-50 border border-red-200 px-3 py-2">
                   <span className="text-sm font-medium text-red-600">Reste à payer</span>
                   <span className="text-sm font-bold text-red-600">
-                    {formatCFA(total - parseFloat(amountGiven))}
+                    {formatCFA(total - parseFloat(String(amountGiven).replace(',', '.')))}
                   </span>
                 </div>
               )}

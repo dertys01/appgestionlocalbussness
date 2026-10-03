@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import * as Sentry from '@sentry/nextjs';
 import { isOverLimit, ruleFor, type RateLimitRule } from './lib/rate-limit';
 
 /**
@@ -66,6 +67,7 @@ async function rpc(fn: string, args: Record<string, unknown>): Promise<unknown> 
     if (!warnedMissingEnv) {
       warnedMissingEnv = true;
       console.warn('[proxy] rate limit désactivé : URL ou clé service absente');
+      Sentry.captureMessage('[proxy] rate limit désactivé : variables manquantes', 'warning');
     }
     return undefined;
   }
@@ -101,7 +103,10 @@ async function isAllowed(key: string, rule: RateLimitRule): Promise<boolean> {
   } catch (err) {
     // Fail-open, à l'identique de /api/register : on journalise et on laisse
     // passer. Un compteur qui bloque l'inscription vaut pire qu'absent.
-    console.error('[proxy] rate limit indisponible', err);
+    // Sentry remonte l'incident : le rate limit peut ainsi être désactivé
+    // pendant des heures sans que personne ne s'en aperçoive autrement.
+    console.error('[proxy] rate limit indisponible', err instanceof Error ? err.message : err);
+    Sentry.captureException(err);
     return true;
   }
 }
@@ -123,7 +128,11 @@ export async function proxy(req: NextRequest) {
   if (!rule) return NextResponse.next();
 
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-  const allowed = await isAllowed(`proxy:${ip}:${pathname}`, rule);
+  // La clé était le pathname brut : `/api/register`, `/api/register/`,
+  // `/API/register` créaient trois compteurs distincts et multipliaient le
+  // budget. On normalise : slash final retiré, casse unifiée.
+  const normalizedPath = pathname.replace(/\/+$/, '').toLowerCase();
+  const allowed = await isAllowed(`proxy:${ip}:${normalizedPath}`, rule);
 
   if (!allowed) {
     return NextResponse.json(

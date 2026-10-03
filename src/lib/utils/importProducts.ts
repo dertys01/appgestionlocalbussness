@@ -206,8 +206,8 @@ export function parseProductsCsv(texte: string, nomsExistants: string[] = []): I
       category: categorie,
       price_buy: prixAchat ?? 0,
       price_sell: prixVente ?? 0,
-      stock_qty: Math.round(stock ?? 0),
-      min_stock_level: Math.round(stockMin ?? 0),
+      stock_qty: stock ?? 0,
+      min_stock_level: stockMin ?? 0,
       status,
       problem,
     });

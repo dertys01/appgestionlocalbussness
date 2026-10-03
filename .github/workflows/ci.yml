@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx tsc --noEmit
+
+      - run: npm run lint
+
+      - run: npm test
+
+      # Les routes évaluent requireEnv() au chargement du module et le client
+      # refuse de démarrer sans URL/clé : le build a besoin de leurres.
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: https://example.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-anon-key
+          SUPABASE_SERVICE_ROLE_KEY: ci-service-key
+          STRIPE_SECRET_KEY: sk_test_ci
+          NEXT_PUBLIC_APP_URL: http://localhost:3000
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # l'historique suffit : une clé committée reste un secret
+
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
