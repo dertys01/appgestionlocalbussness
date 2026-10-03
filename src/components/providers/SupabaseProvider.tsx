@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
 import type { Organization, Plan } from '@/types';
@@ -45,7 +45,10 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
   const [plan, setPlan] = useState<Plan>('free');
   const [orgError, setOrgError] = useState<string | null>(null);
 
-  const loadOrg = async (ownerIdVal: string) => {
+  // useCallback : sans lui, loadOrg et refreshOrg changent de référence à chaque
+  // render — et comme refreshOrg entre dans la valeur du contexte, la valeur
+  // changeait aussi, re-rendant les 20 consommateurs (dont le POS) pour rien.
+  const loadOrg = useCallback(async (ownerIdVal: string) => {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error } = await (supabase as any)
@@ -69,11 +72,11 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
     } catch (e) {
       setOrgError(e instanceof Error ? e.message : 'Lecture de la boutique impossible.');
     }
-  };
+  }, [supabase]);
 
-  const refreshOrg = async () => {
+  const refreshOrg = useCallback(async () => {
     if (ownerId) await loadOrg(ownerId);
-  };
+  }, [ownerId, loadOrg]);
 
   const resolveMembership = async (u: User) => {
     try {
@@ -202,8 +205,19 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
     };
   }, [supabase]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // useMemo : l'objet littéral inline qui était là était recréé à chaque render
+  // du Provider. Comme le contexte, ça re-rendrait tout le monde pour rien.
+  const value = useMemo(
+    () => ({
+      supabase, user, loading, ownerId, isEmployee, canManageProducts,
+      actorName, org, plan, orgError, refreshOrg,
+    }),
+    [supabase, user, loading, ownerId, isEmployee, canManageProducts,
+     actorName, org, plan, orgError, refreshOrg]
+  );
+
   return (
-    <SupabaseContext.Provider value={{ supabase, user, loading, ownerId, isEmployee, canManageProducts, actorName, org, plan, orgError, refreshOrg }}>
+    <SupabaseContext.Provider value={value}>
       {children}
     </SupabaseContext.Provider>
   );
