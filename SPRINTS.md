@@ -27,9 +27,9 @@ chaque item a un critère de fin vérifiable.
 | 3 | 3.1 recharts chargé à la demande · 3.2 totaux de période en base + pagination · 3.3 contexte Supabase mémorisé · 3.4 code mort, lint à 0 warning | `9532ba8` `6cc277e` `980c6c9` `6efd2d3` |
 | 4.1 | `page.tsx` découpé : **861 → 261 lignes**, 8 fichiers, aucun changement de comportement | `8a125ee` |
 | — | Recette manuelle des 9 onglets : navigateur, 2 profils (propriétaire + caissier), **0 erreur JS** | `7e7627a` |
+| 4.2 | Titres de onglet côté serveur : **3 layouts `metadata`**, `page.tsx` intacts (4/4 toujours client) | `c4ba478` |
 
-**Reste dans le Sprint 4 :** 4.2 (titres de onglet côté serveur, 4 pages sur 4 en
-`'use client'`) et 4.3 (24 `eslint-disable` dans 17 fichiers, au fil de l'eau).
+**Reste dans le Sprint 4 :** 4.3 (24 `eslint-disable` dans 17 fichiers, au fil de l'eau).
 
 **Recette manuelle des 9 onglets : faite** le 03/10/2026, navigateur, deux profils,
 0 erreur JavaScript — détail en fin de section 4.1.
@@ -262,23 +262,39 @@ passée de `as {...}[]` à `: NavItem[]`, et 3 `function X()` devenues `export f
 > et le verrou de la sidebar dépend du **plan** et non du rôle — deux organisations en `pro`
 > donnent les mêmes 9 entrées déverrouillées.
 >
-> **Reste dans le Sprint 4 :** 4.2 (titres de onglet côté serveur) et 4.3 (dette TypeScript).
+> **Reste dans le Sprint 4 :** 4.3 (dette TypeScript, au fil de l'eau).
 
 ### 4.2 Remettre du server-side là où ça a un sens
 
-**État :** 4 pages, **4 sur 4 en `'use client'`** (`/`, `/reset-password`, `/register`,
+**État (avant) :** 4 pages, **4 sur 4 en `'use client'`** (`/`, `/reset-password`, `/register`,
 `/invitation/[token]`). Seul `src/app/layout.tsx` est un server component (il porte déjà
 `metadata`).
 
 Conséquence : un composant client ne peut pas exporter `metadata`, donc **aucune de ces pages
 ne peut porter de titre ou de description propres**.
 
-**À faire :** envelopper chaque page d'un layout serveur mince qui porte `metadata`, en
-laissant le composant client en enfant. Ne pas chercher à « serverizer » le POS : la caisse,
-le scanner code-barres et les listes en temps réel sont légitimement côté client.
+**Livré le 03/10/2026 :** trois layouts serveur minces (une file `children`, rien d'autre),
+chaun portant son `metadata`. Les `page.tsx` **n'ont pas été touchés** — la caisse, le scanner
+et les listes en temps réel restent légitimement côté client.
+
+| Route | Fichier ajouté | Titre rendu |
+|---|---|---|
+| `/register` | `src/app/register/layout.tsx` | `Créer un compte — GestionLocal` |
+| `/reset-password` | `src/app/reset-password/layout.tsx` | `Choisir un nouveau mot de passe — GestionLocal` |
+| `/invitation/[token]` | `src/app/invitation/[token]/layout.tsx` | `Accepter l'invitation — GestionLocal` |
+| `/` | *aucun* | `GestionLocal — ERP/POS` — déjà porté par le layout racine, et une route racine ne peut pas recevoir de second layout |
+
+**Preuve que le titre vient bien du serveur** (HTML brut, sans JavaScript) :
+
+```
+/                   <title>GestionLocal — ERP/POS</title>
+/register           <title>Créer un compte — GestionLocal</title>
+/reset-password     <title>Choisir un nouveau mot de passe — GestionLocal</title>
+/invitation/abc     <title>Accepter l&#x27;invitation — GestionLocal</title>
+```
 
 **Fini quand :** `/register` et `/reset-password` affichent un titre de onglet propre, sans
-toucher au reste.
+toucher au reste. → **✓ fait le 03/10/2026**
 
 ### 4.3 Dette TypeScript, au fil de l'eau
 
@@ -306,6 +322,7 @@ npm run lint      → 0 problems
 npm run build     → 0
 npm test          → 0
 + recette manuelle des 9 onglets  → ✓ faite le 03/10/2026
++ titres de onglet (4 routes)     → ✓ servis, vérifiés dans le HTML brut
 ```
 
 ---
@@ -335,6 +352,7 @@ npm test          → 0
 
 | Date | Commit | Objet |
 |---|---|---|
+| 03/10/2026 | `c4ba478` | Sprint 4.2 — 3 layouts serveur portant `metadata` (titres de onglet) |
 | 03/10/2026 | `7e7627a` | Recette manuelle des 9 onglets — navigateur, 2 profils, 0 erreur JS |
 | 03/10/2026 | `8a125ee` | Sprint 4.1 — `page.tsx` découpé : 861 → 261 lignes, 8 fichiers créés |
 | 03/10/2026 | `3e8dbba` | Faille `anon` close — section 7 de `migration_security.sql`, section 22 du harnais |
