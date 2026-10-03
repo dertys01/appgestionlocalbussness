@@ -842,11 +842,21 @@ npm test          → 0  (55 vérifications SQL, 71 tests de composant)
 - La recherche `GET /admin/users?email=` de ce GoTrue **ignore** le paramètre : ne pas
   « simplifier » la pagination de `invitations/accept`.
 - Aucune suppression de données sans afficher la liste et obtenir le feu vert.
+- **Le serveur OpenCode de cette machine est exposé sur le réseau local**
+  (`hostname 0.0.0.0`, port `49374`, IP `192.168.8.110`) depuis le 03/10/2026, pour
+  piloter les tâches depuis l'application Android. Décision du mainteneur, prise en
+  connaissance du risque : cet agent peut exécuter des commandes, écrire des fichiers
+  et appeler le MCP Supabase en **`service_role`** — donc écrire dans la base de
+  production. Ce qui borne l'exposition n'est pas le mot de passe, c'est le pare-feu
+  macOS et le fait que le réseau soit celui du Maintainer. **À ne pas exposer hors du
+  Wi-Fi du Maintainer.** Pour annuler : `opencode service set hostname 127.0.0.1`
+  puis `opencode service start`.
 
 ## Journal
 
 | Date | Commit | Objet |
 |---|---|---|
+| 03/10/2026 | — | **Décision d'infrastructure** — serveur OpenCode exposé sur le réseau local (`0.0.0.0:49374`) pour piloter depuis l'app Android. Risque tracé dans les garde-fous permanents |
 | 03/10/2026 | `811e7eb` | Sprint 9 — **caisse atteignable au POS** : barre fixe et panier plein écran sur mobile, la caisse n'est plus sous 43 produits de catalogue |
 | 03/10/2026 | — | Recette **prod** du Sprint 9 — barre fixe servie, `pb-24` sur la grille, aucun changement en grand écran |
 | 03/10/2026 | `e451839` | Sprint 8 (suite) — le fichier **livré** est vérifié par la suite de tests, plus seulement un CSV écrit en dur |
