@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
-import { randomBytes } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 import { PLAN_LIMITS } from '@/lib/utils/plans';
 import { serverError, requireEnv } from '@/lib/utils/server';
+import { z } from 'zod';
 import type { Plan } from '@/types';
 
 const SUPABASE_URL = requireEnv('NEXT_PUBLIC_SUPABASE_URL');
@@ -53,6 +54,11 @@ export async function GET(req: NextRequest) {
 
     if (error) throw error;
 
+    // Purge opportuniste : les invitations consommées ne doivent pas vivre
+    // indéfiniment (emails, jetons). Fire-and-forget : un échec ne bloque
+    // pas l'écran de l'équipe.
+    auth.adminClient.rpc('purge_accepted_invitations', {}).then(() => {}, () => {});
+
     return NextResponse.json({
       invitations: data ?? [],
       appUrl: APP_URL ?? null,
@@ -68,12 +74,14 @@ export async function POST(req: NextRequest) {
     const auth = await requirePatron(req);
     if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
-    const { email } = await req.json();
-    if (typeof email !== 'string' || !email.includes('@')) {
+    const parsedBody = z
+      .object({ email: z.string().email('Adresse email invalide') })
+      .safeParse(await req.json().catch(() => null));
+    if (!parsedBody.success) {
       return NextResponse.json({ error: 'Adresse email invalide' }, { status: 400 });
     }
 
-    const clean = email.trim().toLowerCase();
+    const clean = parsedBody.data.email.trim().toLowerCase();
 
     // Un lien en attente pour la même adresse : on le renvoie plutôt que d'en
     // créer un second. Deux liens actifs pour un employé, c'est deux occasions
@@ -87,11 +95,22 @@ export async function POST(req: NextRequest) {
       .maybeSingle();
 
     if (existing && new Date(existing.expires_at) > new Date()) {
+      // La table ne contient plus le jeton en clair (hash sha256) : on ne peut
+      // pas reconstruire l'ancien lien, on en régénère un — un seul lien actif
+      // pour la même adresse, comme avant.
+      const newToken = randomBytes(32).toString('base64url');
+      const newHash = createHash('sha256').update(newToken).digest('hex');
+      const newExpiry = new Date(Date.now() + INVITATION_DAYS * 86400_000).toISOString();
+      const { error: updErr } = await auth.adminClient
+        .from('employee_invitations')
+        .update({ token: newHash, expires_at: newExpiry })
+        .eq('id', existing.id);
+      if (updErr) throw updErr;
       return NextResponse.json({
         success: true,
         reused: true,
-        url: invitationUrl(existing.token),
-        expiresAt: existing.expires_at,
+        url: invitationUrl(newToken),
+        expiresAt: newExpiry,
       });
     }
 
@@ -133,12 +152,17 @@ export async function POST(req: NextRequest) {
     // pouvoir être deviné. Base64url évite les caractères à échapper dans une URL.
     const token = randomBytes(32).toString('base64url');
 
+    // On ne stocke que le hash : une fuite de la table ou d'une sauvegarde
+    // n'expose alors aucun lien utilisable. Le RPC et la route d'acceptation
+    // comparent la même empreinte.
+    const tokenHash = createHash('sha256').update(token).digest('hex');
+
     const { data: inv, error: insertError } = await auth.adminClient
       .from('employee_invitations')
       .insert({
         owner_id: auth.user.id,
         email: clean,
-        token,
+        token: tokenHash,
         expires_at: new Date(Date.now() + INVITATION_DAYS * 86400_000).toISOString(),
       })
       .select('id, email, expires_at')

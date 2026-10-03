@@ -50,6 +50,8 @@ const ORDER = [
   // avant redeviendrait ces failles a la seconde migration suivante.
   'migration_sales_summary.sql',
   'migration_security.sql',
+  // claim_webhook_event() : idempotence atomique du webhook Stripe.
+  'migration_webhook_claim.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une

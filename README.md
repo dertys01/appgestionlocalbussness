@@ -28,10 +28,9 @@ npm run dev
 | `STRIPE_WEBHOOK_SECRET` | Signature du webhook Stripe |
 | `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_ORG`, `SENTRY_PROJECT`, `SENTRY_AUTH_TOKEN` | Sentry |
 
-> `src/lib/supabase/client.ts` lit l'URL et la clé anon depuis des constantes
-> en dur plutôt que `process.env`. C'est une clé publique par nature, mais la
-> remplacer suppose une modification de code : à basculer sur `NEXT_PUBLIC_*`
-> pour pouvoir faire tourner le projet sur un autre Supabase.
+> `src/lib/supabase/client.ts` lit l'URL et la clé anon depuis
+> `NEXT_PUBLIC_SUPABASE_URL` et `NEXT_PUBLIC_SUPABASE_ANON_KEY`. (Auparavant
+> codées en dur — révoquer et régénérer les anciennes clés, voir SECURITY.md.)
 
 ## Base de données
 
@@ -183,7 +182,7 @@ le premier cas avant de le subir.
 npm run test:db
 ```
 
-Le harnais applique les 9 migrations sur un Postgres réel (PGlite, WASM) puis
+Le harnais applique les 24 migrations sur un Postgres réel (PGlite, WASM) puis
 vérifie le comportement : atomicité de `create_sale`, cas de stock insuffisant,
 isolation entre organisations, droits employé/patron, rate limiting. C'est le
 seul moyen fiable de valider du SQL avant de le pousser en production — un
@@ -739,5 +738,6 @@ npm run start        # démarre le build
 npm run lint         # ESLint
 npm run test:db      # tests des migrations (Postgres embarqué)
 npm run test:period  # tests de l'arithmétique des périodes
-npm test             # les deux suites
+npm run test:ui      # tests des composants React (Vitest + jsdom)
+npm test             # les 7 suites (db, db:existing, period, plan, rl, wa, ui)
 ```

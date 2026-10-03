@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { serverError, requireEnv } from '@/lib/utils/server';
 import { createClient } from '@supabase/supabase-js';
+import { z } from 'zod';
 
 export async function POST(req: NextRequest) {
   try {
@@ -32,10 +33,11 @@ export async function POST(req: NextRequest) {
     const { data: { user }, error: authError } = await adminClient.auth.getUser(jwt);
     if (authError || !user) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 });
 
-    const { plan } = await req.json();
-    if (plan !== 'starter' && plan !== 'pro') {
+    const parsedCheckout = z.object({ plan: z.enum(['starter', 'pro']) }).safeParse(await req.json().catch(() => null));
+    if (!parsedCheckout.success) {
       return NextResponse.json({ error: 'Plan invalide.' }, { status: 400 });
     }
+    const { plan } = parsedCheckout.data;
     const priceId = PRICE_IDS[plan];
     if (!priceId) return NextResponse.json({ error: 'Plan non configuré' }, { status: 400 });
 

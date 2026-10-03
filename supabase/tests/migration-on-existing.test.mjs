@@ -21,6 +21,7 @@ const ORDER = [
   'migration_suppliers.sql', 'migration_credit_fns.sql', 'migration_beta_program.sql',
   'migration_sales_summary.sql',
   'migration_security.sql',
+  'migration_webhook_claim.sql',
 ];
 
 let failed = 0;
