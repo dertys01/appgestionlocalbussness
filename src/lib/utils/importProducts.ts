@@ -34,6 +34,8 @@ export interface ImportResult {
   colonnes: string[];
 }
 
+import { lireMontant } from '@/lib/utils/nombres';
+
 const CLE = (name: string) =>
   name
     .toLowerCase()
@@ -56,60 +58,8 @@ const COLONNES: Record<string, keyof Omit<ImportRow, 'ligne' | 'status' | 'probl
   stockmin: 'min_stock_level', minstocklevel: 'min_stock_level',
 };
 
-/**
- * Un montant lu comme un humain l'écrit.
- *
- * `520.000` est cinq cent vingt mille, pas cinq cent vingt : c'est le piège de
- * ce genre de fichier, et l'inverser revient à diviser un prix par mille.
- * On tranche sur la longueur du groupe après le séparateur — trois chiffres
- * et moins de quatre avant, c'est un milliers ; sinon c'est une décimale.
- * `1200.5` reste donc 1200,5.
- */
-export function parseMontant(brut: string): number | null {
-  let s = brut.trim().toLowerCase().replace(/[\s\u00a0\u202f]/g, '');
-  if (!s) return 0;
-
-  let multiplicateur = 1;
-  if (s.endsWith('k')) { multiplicateur = 1e3; s = s.slice(0, -1); }
-  else if (s.endsWith('m')) { multiplicateur = 1e6; s = s.slice(0, -1); }
-
-  s = s.replace(/[^\d.,-]/g, '');
-  if (!s || s === '-') return null;
-
-  const point = s.lastIndexOf('.');
-  const virgule = s.lastIndexOf(',');
-  let normalise: string;
-
-  if (point >= 0 && virgule >= 0) {
-    // Les deux présents : le plus à droite des deux est le séparateur décimal,
-    // l'autre est un milliers. « 1.200,50 » et « 1,200.50 » doivent donner
-    // 1200,5 — inverser les deux branches donnait 1,2005.
-    normalise = point > virgule
-      ? s.replace(/,/g, '')
-      : s.replace(/\./g, '').replace(',', '.');
-  } else if (virgule >= 0) {
-    normalise = s.replace(',', '.');
-  } else if (point >= 0) {
-    // « 520.000 » et « 1.349.400 » sont des milliers ; « 1200.5 » ne l'est pas.
-    // On tranche sur la longueur de chaque groupe : trois chiffres partout
-    // après le premier, c'est un séparateur de milliers.
-    const parts = s.split('.');
-    const groupes = parts.slice(1);
-    const tousMilliers =
-      groupes.length > 0 &&
-      groupes.every((g) => g.length === 3) &&
-      parts[0].length <= 3;
-    normalise = tousMilliers ? parts.join('') : s;
-  } else {
-    normalise = s;
-  }
-
-  const n = Number(normalise);
-  if (!Number.isFinite(n)) return null;
-  // Deux décimales, comme le NUMERIC(12,2) de la colonne — et pas plus, pour
-  // ne pas laisser de bruit de virgule flottante derrière une soustraction.
-  return Math.round(n * multiplicateur * 100) / 100;
-}
+/** Réexporté : la lecture d'un montant est celle de nombres.ts. */
+export { lireMontant as parseMontant } from '@/lib/utils/nombres';
 
 /** `Oui,Non,` ou `Oui;Non;` : le séparateur se devine sur la seule en-tête. */
 function detecterSeparateur(entete: string): string {
@@ -219,10 +169,10 @@ export function parseProductsCsv(texte: string, nomsExistants: string[] = []): I
     const name = lire('name').replace(/\s+/g, ' ').trim();
     const sku = lire('sku') || null;
 
-    const prixAchat = parseMontant(lire('price_buy'));
-    const prixVente = parseMontant(lire('price_sell'));
-    const stock = parseMontant(lire('stock_qty'));
-    const stockMin = parseMontant(lire('min_stock_level'));
+    const prixAchat = lireMontant(lire('price_buy'));
+    const prixVente = lireMontant(lire('price_sell'));
+    const stock = lireMontant(lire('stock_qty'));
+    const stockMin = lireMontant(lire('min_stock_level'));
 
     let status: ImportRow['status'] = 'ok';
     let problem: string | null = null;

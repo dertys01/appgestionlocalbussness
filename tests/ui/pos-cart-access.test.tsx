@@ -118,7 +118,10 @@ describe('POS — la caisse est atteignable sans défiler le catalogue', () => {
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /1 article, total/ })).toBeInTheDocument()
     );
-    expect(saleRpc).not.toHaveBeenCalled();
+    // On filtre le chargement des + vendus : il passe par le même rpc() et
+    // n'a rien à voir avec une vente.
+    const ventes = saleRpc.mock.calls.filter((c) => c[0] !== 'get_units_sold_since');
+    expect(ventes).toHaveLength(0);
   });
 
   it('sort la grille du parcours de tabulation quand le panneau la recouvre', async () => {
