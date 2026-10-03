@@ -126,6 +126,14 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
   const [loading, setLoading] = useState(false);
   const [checkoutError, setCheckoutError] = useState('');
   const [receipt, setReceipt] = useState<ReceiptState | null>(null);
+  /**
+   * Sur mobile, le panier est un panneau plein écran plutôt qu'une colonne
+   * sous la grille. En colonne il arrivait après les produits : avec 40
+   * références, le caissier devait faire défiler tout le catalogue pour
+   * atteindre le total et le bouton « Encaisser » — c'est-à-dire l'action
+   * principale de l'écran, à chaque vente.
+   */
+  const [panierOuvert, setPanierOuvert] = useState(false);
 
   // Recherche produits avec debounce minimal (useMemo suffit pour ce cas)
   const filtered = useMemo(() => {
@@ -403,6 +411,9 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
       setClientPhone('');
       setAmountGiven('');
       setAdvance('');
+      // Le panneau se referme avec la vente : le caisser doit voir la grille
+      // vide pour la vente suivante, pas un panier vide à faire fermer.
+      setPanierOuvert(false);
       if (paymentMethod === 'credit') setPaymentMethod('cash');
       onSaleComplete?.();
     } catch (err) {
@@ -415,7 +426,12 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
   return (
     <div className="flex flex-col lg:flex-row gap-4 h-full">
       {/* ── Grille produits ── */}
-      <div className="flex-1 space-y-4">
+      {/* pb-24 : la barre du bas est fixe, sans cette réserve la dernière
+          rangée de produits passe dessous et devient incliquable.
+          inert : quand le panneau est ouvert il recouvre la grille, qui doit
+          alors sortir du parcours de tabulation et des lecteurs d'écran —
+          sinon le clavier saute dans un contenu que l'utilisateur ne voit pas. */}
+      <div className="flex-1 space-y-4 pb-24 lg:pb-0" inert={panierOuvert}>
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
           <Input
@@ -500,18 +516,44 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         )}
       </div>
 
-      {/* ── Panier ── */}
-      <div className="lg:w-80 flex flex-col gap-3">
+      {/* ── Panier ──
+          Sur grand écran : une colonne à droite, toujours visible.
+          Sur mobile : absent du flux, et la barre fixe du bas l'ouvre en
+          plein écran. Sans cette bifurcation, il se retrouvait sous les
+          produits — il fallait défiler tout le catalogue pour encaisser. */}
+      <div
+        className={
+          panierOuvert
+            ? 'fixed inset-0 z-40 bg-white flex flex-col gap-3 p-4 overflow-hidden'
+            : 'hidden lg:flex lg:w-80 flex-col gap-3'
+        }
+      >
         <div className="flex items-center gap-2 font-semibold text-slate-700">
           <ShoppingCart className="h-5 w-5 text-indigo-600" />
           Panier
           {cart.length > 0 && (
             <Badge className="ml-auto bg-indigo-600">{cart.length}</Badge>
           )}
+          {/* Présent seulement quand le panneau a été ouvert, c'est-à-dire
+              depuis la barre du bas. Sans le `lg:hidden`, un passage en
+              grand écran après ouverture (rotation du téléphone) laisserait
+              la grille inerte sans issue visible pour la réactiver. */}
+          {panierOuvert && (
+            <button
+              onClick={() => setPanierOuvert(false)}
+              className="ml-auto p-1 text-slate-500 hover:text-slate-700"
+              aria-label="Fermer le panier et revenir aux produits"
+            >
+              <X className="h-5 w-5" />
+            </button>
+          )}
         </div>
 
-        {/* Articles */}
-        <div className="flex-1 space-y-2 max-h-[45vh] overflow-y-auto pr-1">
+        {/* Articles — la zone défilante. En panneau mobile elle remplit la hauteur
+            disponible et laisse le total puis « Encaisser » toujours
+            atteignables en bas ; sur grand écran elle reste bornée pour ne
+            pas pousser le total hors de l'écran. */}
+        <div className="flex-1 space-y-2 overflow-y-auto pr-1 lg:max-h-[45vh]">
           {cart.length === 0 ? (
             <div className="text-center text-slate-500 py-10 text-sm">
               Cliquez sur un produit pour l&apos;ajouter
@@ -912,6 +954,42 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* ── Barre fixe, mobile seulement ──
+          Le total et l'accès à la caisse restent sous le pouce. Sans elle, le
+          panier était une colonne sous la grille : le caissier défilait tout
+          le catalogue pour vendre. Une seule cible, une seule action — ouvrir
+          le panier, où le total et « Encaisser » sont déjà affichés. */}
+      <button
+        onClick={() => setPanierOuvert(true)}
+        disabled={cart.length === 0}
+        className="lg:hidden fixed bottom-0 inset-x-0 z-30 flex items-center gap-3 border-t border-slate-200 bg-white px-4 py-3 text-left shadow-lg disabled:bg-white"
+        aria-label={
+          cart.length === 0
+            ? 'Panier vide'
+            : `Ouvrir le panier : ${cart.length} article${cart.length > 1 ? 's' : ''}, total ${formatCFA(total)}`
+        }
+      >
+        <span className="relative shrink-0">
+          <ShoppingCart className="h-5 w-5 text-indigo-600" />
+          {cart.length > 0 && (
+            <span className="absolute -top-1.5 -right-1.5 min-w-4 h-4 px-1 rounded-full bg-indigo-600 text-white text-[10px] leading-4 text-center font-bold">
+              {cart.length}
+            </span>
+          )}
+        </span>
+        <span className="min-w-0">
+          <span className="block text-xs text-slate-500">
+            {cart.length === 0
+              ? 'Panier vide'
+              : `${cart.length} article${cart.length > 1 ? 's' : ''} · Total`}
+          </span>
+          <span className="block text-base font-bold text-slate-800">{formatCFA(total)}</span>
+        </span>
+        {cart.length > 0 && (
+          <span className="ml-auto shrink-0 text-indigo-600 font-medium text-sm">Encaisser ›</span>
+        )}
+      </button>
     </div>
   );
 }
