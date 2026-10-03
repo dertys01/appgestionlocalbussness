@@ -154,23 +154,29 @@ export function SettingsModule() {
 
               <form onSubmit={saveOrg} className="space-y-3">
                 <div className="space-y-1">
-                  <label className="text-sm font-medium text-slate-700">Nom de la boutique</label>
-                  <Input value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="Nom affiché" />
+                  <label htmlFor="org-name" className="text-sm font-medium text-slate-700">Nom de la boutique</label>
+                  <Input id="org-name" value={orgName} onChange={(e) => setOrgName(e.target.value)} placeholder="Nom affiché" />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-sm font-medium text-slate-700">Adresse</label>
-                  <Input value={orgAddress} onChange={(e) => setOrgAddress(e.target.value)} placeholder="Ex: Cotonou, Bénin" />
+                  <label htmlFor="org-address" className="text-sm font-medium text-slate-700">Adresse</label>
+                  <Input id="org-address" value={orgAddress} onChange={(e) => setOrgAddress(e.target.value)} placeholder="Ex: Cotonou, Bénin" />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-sm font-medium text-slate-700">
-                    IFU
-                    <span className="ml-1 text-xs text-slate-500 font-normal">(pour factures normalisées — Plan Pro)</span>
-                  </label>
-                  <Input value={orgIfu} onChange={(e) => setOrgIfu(e.target.value)} placeholder="Ex: 1234567890123" />
+                  <div className="flex items-baseline gap-1">
+                    <label htmlFor="org-ifu" className="text-sm font-medium text-slate-700">IFU</label>
+                    <span id="org-ifu-hint" className="text-xs text-slate-500 font-normal">(pour factures normalisées — Plan Pro)</span>
+                  </div>
+                  <Input
+                    id="org-ifu"
+                    aria-describedby="org-ifu-hint"
+                    value={orgIfu}
+                    onChange={(e) => setOrgIfu(e.target.value)}
+                    placeholder="Ex: 1234567890123"
+                  />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-sm font-medium text-slate-700">Email du compte</label>
-                  <Input value={user?.email ?? ''} disabled className="bg-slate-50 text-slate-500" />
+                  <label htmlFor="org-email" className="text-sm font-medium text-slate-700">Email du compte</label>
+                  <Input id="org-email" value={user?.email ?? ''} disabled className="bg-slate-50 text-slate-500" />
                 </div>
                 {orgError && <p className="text-red-600 text-sm">{orgError}</p>}
                 {orgSuccess && <p className="text-emerald-700 text-sm">{orgSuccess}</p>}

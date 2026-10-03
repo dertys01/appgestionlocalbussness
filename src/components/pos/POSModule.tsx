@@ -420,6 +420,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
           <Input
             placeholder="Rechercher un produit..."
+            aria-label="Rechercher un produit"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-9"
@@ -616,6 +617,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
             en crédit : sans numéro, la dette n'est rattachable à personne. */}
         <div className="border-t border-slate-200 pt-3 space-y-2">
           <Input
+            aria-label="Nom du client"
             placeholder={creditNeedsPhone ? 'Nom du client *' : 'Nom du client (optionnel)'}
             value={clientName}
             onChange={(e) => setClientName(e.target.value)}
@@ -624,6 +626,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           <Input
             type="tel"
             inputMode="tel"
+            aria-label="Téléphone du client"
             placeholder={creditNeedsPhone ? 'Téléphone du client *' : 'Téléphone WhatsApp (optionnel)'}
             value={clientPhone}
             onChange={(e) => setClientPhone(e.target.value)}
@@ -714,8 +717,9 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           {paymentMethod === 'cash' && (
             <div className="space-y-2">
               <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-500">Montant donné (FCFA)</label>
+                <label htmlFor="pos-amount-given" className="text-xs font-medium text-slate-500">Montant donné (FCFA)</label>
                 <Input
+                  id="pos-amount-given"
                   type="number"
                   placeholder={String(total)}
                   value={amountGiven}
