@@ -177,6 +177,7 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
           <Input
             placeholder="Rechercher..."
+            aria-label="Rechercher un produit"
             value={search}
             onChange={(e) => handleSearch(e.target.value)}
             className="pl-9"

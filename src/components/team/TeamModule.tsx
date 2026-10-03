@@ -302,6 +302,7 @@ export function TeamModule() {
               <form onSubmit={handleInvite} className="space-y-3">
                 <Input
                   type="email"
+                  aria-label="Adresse email de l'employé"
                   placeholder="Adresse email de l'employé"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
