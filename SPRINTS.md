@@ -298,13 +298,17 @@ toucher au reste. → **✓ fait le 03/10/2026**
 
 ### 4.3 Dette TypeScript, au fil de l'eau
 
-**État :** 24 `eslint-disable` dans 17 fichiers, répartis ainsi :
+**État :** **25** `eslint-disable` dans 17 fichiers (recompté le 03/10/2026 ; le chiffre de 24
+étaient celui d'avant le Sprint 3.2, qui a fait passer `SalesHistory.tsx` d'un effet à deux) :
 
-- **16** `@typescript-eslint/no-explicit-any` — dont `SupabaseProvider.tsx:50,80,102,118`,
+- **16** `@typescript-eslint/no-explicit-any` — dont `SupabaseProvider.tsx:53,83,105,121`,
   `BarcodeScanner.tsx:17,37`, `ExpensesModule.tsx:83,160`, `InventoryTable.tsx:115`,
   et 5 dans les routes API (`accept:163`, `portal:38`, `checkout:55`, `webhook:94`).
-- **8** `react-hooks/exhaustive-deps` — dont `SupabaseProvider.tsx:203`, `SalesHistory.tsx:72`,
-  `TeamModule.tsx:151`.
+- **9** `react-hooks/exhaustive-deps` — dont `SupabaseProvider.tsx:206`,
+  `SalesHistory.tsx:108,113`, `TeamModule.tsx:151`.
+
+Le Sprint 4.1, lui, **n'en a ajouté aucune** : vérifié commit par commit entre `980c6c9`
+et `8a125ee`.
 
 **Règle :** retirer ces directives **fichier par fichier, quand on touche au fichier** —
 jamais en une passe globale. Supprimer un `exhaustive-deps` d'un coup modifie le moment où un
