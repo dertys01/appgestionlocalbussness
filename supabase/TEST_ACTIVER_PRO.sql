@@ -19,7 +19,7 @@ ORDER BY created_at DESC;
 -- Remplacer l'email entre les guillemets, puis exécuter SEULEMENT ce bloc.
 UPDATE organizations
 SET plan = 'pro'
-WHERE id IN (SELECT id FROM auth.users WHERE email = 'dertys01@gmail.com');
+WHERE id IN (SELECT id FROM auth.users WHERE email = 'votre-email@exemple.com');
 
 
 -- ─── 3. Passer PLUSIEURS boutiques en Pro d'un coup ───────────
@@ -36,7 +36,7 @@ UPDATE organizations
 SET plan = 'pro'
 WHERE id IN (
   SELECT id FROM auth.users WHERE email IN (
-    VALUES ('dertys01@gmail.com')
+    VALUES ('votre-email@exemple.com')
   )
 );
 

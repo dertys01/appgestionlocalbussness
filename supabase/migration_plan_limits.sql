@@ -5,7 +5,7 @@
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION check_product_limit()
-RETURNS TRIGGER LANGUAGE plpgsql AS $$
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path = public AS $$
 DECLARE
   org_plan text;
   product_count int;

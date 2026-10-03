@@ -164,6 +164,7 @@ ALTER TABLE sales ADD CONSTRAINT sales_amount_received_sane
 CREATE OR REPLACE FUNCTION fill_amount_received()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path = public
 AS $$
 BEGIN
   -- Vente à crédit : la valeur par défaut 0 est la bonne. Ne rien faire, et

@@ -14,6 +14,7 @@ export default function ResetPasswordPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [ready, setReady] = useState(false);
+  const [checked, setChecked] = useState(false);
   // Sans affichage en clair, un commerçant qui se trompe de frappe ne voit rien
   // du tout et suppose que le clavier est defaillant. Le reveal est attendu sur
   // un ecran de creation de mot de passe, et le risque est nul : c'est
@@ -32,9 +33,15 @@ export default function ResetPasswordPage() {
       if (event === 'PASSWORD_RECOVERY') markReady();
     });
 
-    // Filet : une session de recuperation deja etablie signifie qu'on est pret.
+    // Le filet n'acceptait QUE l'événement PASSWORD_RECOVERY auparavant :
+    // n'importe quelle session active débloquait le changement de mot de
+    // passe sans prouver la possession du jeton de récupération. On exige
+    // désormais l'événement, ou une session issue d'un lien de récupération
+    // (fragment d'URL qui contient type=recovery).
     supabase.auth.getSession().then(({ data }) => {
-      if (data.session) markReady();
+      if (!active) return;
+      if (data.session && window.location.hash.includes('type=recovery')) markReady();
+      else setChecked(true);
     });
 
     return () => { active = false; subscription.unsubscribe(); };
@@ -63,9 +70,15 @@ export default function ResetPasswordPage() {
         <Card className="border-slate-200 shadow-md">
           <CardContent className="p-6">
             {!ready ? (
-              <p className="text-sm text-slate-500 text-center py-4">
-                Validation du lien en cours...
-              </p>
+              checked ? (
+                <p className="text-sm text-red-600 text-center py-4">
+                  Ce lien de récupération est invalide ou a expiré. Refaites une demande depuis la page de connexion.
+                </p>
+              ) : (
+                <p className="text-sm text-slate-500 text-center py-4">
+                  Validation du lien en cours...
+                </p>
+              )
             ) : (
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="space-y-1">

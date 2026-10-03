@@ -87,7 +87,7 @@ UPDATE sale_items si
 
 -- Empêche de modifier un coût après coup (traçabilité comptable).
 CREATE OR REPLACE FUNCTION freeze_sale_item_cost()
-RETURNS TRIGGER LANGUAGE plpgsql AS $$
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path = public AS $$
 BEGIN
   IF OLD.unit_cost IS DISTINCT FROM NEW.unit_cost
      AND OLD.sale_id IS NOT NULL THEN

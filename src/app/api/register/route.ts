@@ -78,10 +78,16 @@ export async function POST(req: NextRequest) {
       // renvoie un JSON tronqué paierait une heure entière pour rien.
       return NextResponse.json({ error: 'Requête invalide.' }, { status: 400 });
     }
-    const { email, password, businessName } = body ?? {};
-    if (!email || !password || !businessName) {
+    const { email: rawEmail, password, businessName } = body ?? {};
+    if (!rawEmail || !password || !businessName) {
       return NextResponse.json({ error: 'Tous les champs sont requis.' }, { status: 400 });
     }
+    if (typeof rawEmail !== 'string' || typeof password !== 'string' || typeof businessName !== 'string') {
+      return NextResponse.json({ error: 'Requête invalide.' }, { status: 400 });
+    }
+    // Sans normalisation, `Register@Exemple.com ` et `register@exemple.com`
+    // créent deux comptes pour la même personne — ou une session introuvable.
+    const email = rawEmail.trim().toLowerCase();
     if (password.length < 6) {
       return NextResponse.json({ error: 'Mot de passe : 6 caractères minimum.' }, { status: 400 });
     }
