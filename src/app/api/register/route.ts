@@ -17,6 +17,11 @@ const MAX_ATTEMPTS_PER_HOUR = 3;
  * instances serverless. Un limiteur en mémoire (Map) serait recréé vide à
  * chaque invocation et ne limiterait rien en production.
  *
+ * Appelé APRÈS la validation du corps (voir POST) : seules les tentatives
+ * assez bien formées pour atteindre GoTrue sont comptées. Une faute de
+ * frappe ne coûte donc plus une heure — mais le comptage reste placé avant
+ * createUser(), sinon sonder des adresses une à une serait gratuit.
+ *
  * Si la fonction SQL est absente (migration pas encore appliquée), on laisse
  * passer plutôt que de rendre l'inscription indisponible.
  */
@@ -59,14 +64,21 @@ export async function POST(req: NextRequest) {
       auth: { autoRefreshToken: false, persistSession: false },
     });
 
-    if (await isRateLimited(adminClient, ip)) {
-      return NextResponse.json(
-        { error: 'Trop de tentatives. Réessayez dans une heure.' },
-        { status: 429, headers: { 'Retry-After': '3600' } }
-      );
+    // Validation AVANT le compteur : une faute de frappe, un champ oublié ou
+    // un e-mail déjà utilisé ne doit pas griller une heure d'essai au patron.
+    // Le volume brut, lui, reste borné par le proxy — 10 écritures/min par
+    // couple (IP, chemin), valides ou non — donc une boucle de requêtes
+    // invalides ne devient pas gratuite pour autant.
+    let body: { email?: string; password?: string; businessName?: string };
+    try {
+      body = await req.json();
+    } catch {
+      // Corps illisible : 400 SANS compter. C'est exactement le cas que le
+      // compteur ne doit plus griller — un client sur réseau capricieux qui
+      // renvoie un JSON tronqué paierait une heure entière pour rien.
+      return NextResponse.json({ error: 'Requête invalide.' }, { status: 400 });
     }
-
-    const { email, password, businessName } = await req.json();
+    const { email, password, businessName } = body ?? {};
     if (!email || !password || !businessName) {
       return NextResponse.json({ error: 'Tous les champs sont requis.' }, { status: 400 });
     }
@@ -75,6 +87,13 @@ export async function POST(req: NextRequest) {
     }
     if (businessName.trim().length < 2) {
       return NextResponse.json({ error: 'Nom de boutique trop court.' }, { status: 400 });
+    }
+
+    if (await isRateLimited(adminClient, ip)) {
+      return NextResponse.json(
+        { error: 'Trop de tentatives. Réessayez dans une heure.' },
+        { status: 429, headers: { 'Retry-After': '3600' } }
+      );
     }
 
     // Créer le compte sans confirmation email
