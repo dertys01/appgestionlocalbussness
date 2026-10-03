@@ -13,6 +13,7 @@ import {
   Printer,
   FileText,
   PackageX,
+  RotateCcw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -149,6 +150,26 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
   const [panierOuvert, setPanierOuvert] = useState(false);
 
   /**
+   * Dernière vente, pour la reprendre d'un clic.
+   *
+   * « Deux GSM pareils » est une vente fréquente en boutique de téléphone : le
+   * client revient, et le caissier resélectionne tout. C'est la fonction
+   * « repeat last transaction » que tous les POS du commerce ont en standard.
+   *
+   * La reprise AJOUTE au panier, elle ne le remplace jamais : un clic ne peut
+   * donc rien détruire, et aucune confirmation n'est demandée. Un raccourci
+   * qui puisse vider une vente en cours serait plus dangereux que le temps
+   * qu'il fait gagner.
+   */
+  const [ventePrecedente, setVentePrecedente] = useState<{
+    id: string;
+    lignes: { product_id: string; quantity: number; unit_price: number }[];
+    total: number;
+    nbLignes: number;
+    nbIgnorees: number;
+  } | null>(null);
+
+  /**
    * Catalogue de la caisse : en stock, non archivé, puis filtré et classé.
    *
    * Le classement vient de `rechercher()`, qui tolère les fautes de frappe,
@@ -225,6 +246,84 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
   }, [chargerPlusVendus]);
 
   /**
+   * Charge la dernière vente pour la proposer en un clic.
+   *
+   * Silencieux comme le classement : pas de dernière vente, pas de bouton. Une
+   * ligne dont le produit a quitté le catalogue est comptée à part plutôt que
+   * d'être remontée en erreur — le caissier n'a rien à faire pour la retirer.
+   */
+  const chargerDerniereVente = useCallback(async () => {
+    if (!ownerId) return;
+    try {
+      const { data: ventes, error } = await supabase
+        .from('sales')
+        .select('id, total_amount')
+        .order('created_at', { ascending: false })
+        .limit(1);
+      if (error || !ventes?.length) {
+        setVentePrecedente(null);
+        return;
+      }
+      const vente = ventes[0] as { id: string; total_amount: number };
+      const { data: lignes, error: errLignes } = await supabase
+        .from('sale_items')
+        .select('product_id, quantity, unit_price')
+        .eq('sale_id', vente.id);
+      if (errLignes || !lignes) {
+        setVentePrecedente(null);
+        return;
+      }
+      const presents = new Set(products.map((p) => p.id));
+      const retenues = (lignes as { product_id: string; quantity: number; unit_price: number }[])
+        .filter((l) => presents.has(l.product_id));
+      setVentePrecedente({
+        id: vente.id,
+        lignes: retenues,
+        total: Number(vente.total_amount ?? 0),
+        nbLignes: retenues.length,
+        nbIgnorees: lignes.length - retenues.length,
+      });
+    } catch {
+      setVentePrecedente(null);
+    }
+  }, [supabase, ownerId, products]);
+
+  useEffect(() => {
+    void chargerDerniereVente();
+  }, [chargerDerniereVente]);
+
+  /** Recopie les lignes de la dernière vente dans le panier, sans rien écraser. */
+  const reprendreDerniereVente = useCallback(() => {
+    if (!ventePrecedente || ventePrecedente.lignes.length === 0) return;
+    const parId = new Map(products.map((p) => [p.id, p]));
+
+    setCart((prev) => {
+      const suivant = prev.map((l) => ({ ...l }));
+      for (const l of ventePrecedente.lignes) {
+        const produit = parId.get(l.product_id);
+        if (!produit) continue;
+        const qte = Number(l.quantity ?? 0);
+        if (qte <= 0) continue;
+        const ligne = suivant.find((i) => i.product.id === produit.id);
+        if (ligne) {
+          // Jamais au-delà du stock : c'est la caisse qui refuse au dernier
+          // moment, et le caissier perd alors la vente entière.
+          ligne.quantity = Math.min(ligne.quantity + qte, produit.stock_qty);
+        } else {
+          suivant.push({
+            product: produit,
+            quantity: Math.min(qte, produit.stock_qty),
+            unitPrice: null,
+          });
+        }
+      }
+      return suivant;
+    });
+
+    setPanierOuvert(true);
+  }, [ventePrecedente, products]);
+
+  /**
    * Une frappe sur une lettre met le curseur dans la recherche.
    *
    * C'est le geste de toutes les caisses à clavier : on commence à taper sans
@@ -256,6 +355,17 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
 
   // Prix effectif de la ligne : prix convenu s'il y en a un, sinon catalogue.
   const linePrice = (item: CartItem) => item.unitPrice ?? item.product.price_sell;
+
+  /**
+   * Unités, pas lignes de panier. Deux fois le même téléphone est « 2 articles »
+   * et non « 1 » : dire « 1 article » pour deux GSM donne au
+   * caissier l'impression d'une erreur — et la pastille du produit
+   * ne comptait que la ligne.
+   */
+  const unites = useMemo(
+    () => cart.reduce((n, l) => n + l.quantity, 0),
+    [cart],
+  );
 
   const total = useMemo(
     () => cart.reduce((sum, item) => sum + linePrice(item) * item.quantity, 0),
@@ -542,6 +652,29 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
             className="pl-9"
           />
         </div>
+
+        {/* Reprendre la dernière vente. Au-dessus de la grille : l'action vaut un
+            clic si elle est visible sans défiler. */}
+        {ventePrecedente && ventePrecedente.nbLignes > 0 && (
+          <button
+            onClick={reprendreDerniereVente}
+            className="flex w-full items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-left text-indigo-800 hover:bg-indigo-100 transition-colors"
+            aria-label={`Ajouter au panier les ${ventePrecedente.nbLignes} articles de la dernière vente`}
+          >
+            <RotateCcw className="h-4 w-4 shrink-0" />
+            <span className="text-sm font-medium">Reprendre la dernière vente</span>
+            <span className="text-xs text-indigo-600">
+              {ventePrecedente.nbLignes} article{ventePrecedente.nbLignes > 1 ? 's' : ''} ·{' '}
+              {formatCFA(ventePrecedente.total)}
+            </span>
+            {ventePrecedente.nbIgnorees > 0 && (
+              <span className="ml-auto text-xs text-amber-700">
+                {ventePrecedente.nbIgnorees} retiré{ventePrecedente.nbIgnorees > 1 ? 's' : ''} du
+                catalogue
+              </span>
+            )}
+          </button>
+        )}
 
         {/* Barre de catégories, collante sous la recherche.
             C'est ce qui remplace le défilement quand le catalogue est grand :
@@ -1104,7 +1237,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         aria-label={
           cart.length === 0
             ? 'Panier vide'
-            : `Ouvrir le panier : ${cart.length} article${cart.length > 1 ? 's' : ''}, total ${formatCFA(total)}`
+            : `Ouvrir le panier : ${unites} article${unites > 1 ? 's' : ''}, total ${formatCFA(total)}`
         }
       >
         <span className="relative shrink-0">
