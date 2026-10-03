@@ -40,3 +40,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# données commerciales locales (prix d'achat, marges) — jamais dans un dépôt public
+/import-local/
