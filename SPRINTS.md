@@ -23,6 +23,7 @@ chaque item a un critère de fin vérifiable.
 | — | Réparation de l'API Auth (jetons `auth.users` à `''`, FK `DEFERRABLE INITIALLY DEFERRED`) | `ab2aef0` |
 | — | Rate limit de `src/proxy.ts` basculé sur `rate_limits` + `bump_rate_limit()` | `3a179dc` |
 | — | Compteur d'inscription déplacé **après** la validation du corps | `8013458` |
+| — | Faille `anon` close : **33 → 2** fonctions appelables par la clé publique | `3e8dbba` |
 
 `supabase/migration_security.sql` porte les **7 sections** (1 `rate_limits` hors portée client ·
 2 `organizations.plan` verrouillé · 3 `subscriptions` une ligne par org · 4 `business_members`
@@ -286,6 +287,7 @@ npm test          → 0
 
 | Date | Commit | Objet |
 |---|---|---|
+| 03/10/2026 | `3e8dbba` | Faille `anon` close — section 7 de `migration_security.sql`, section 22 du harnais |
 | 03/10/2026 | `6cc277e` | Sprint 3.2 — totaux de période en base, liste paginée |
 | 03/10/2026 | `980c6c9` | Sprint 3.3 — valeur du contexte Supabase mémorisée |
 | 03/10/2026 | `9532ba8` | Sprint 3.1 — recharts chargé à la demande |
