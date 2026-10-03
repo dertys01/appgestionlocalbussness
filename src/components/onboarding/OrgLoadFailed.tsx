@@ -21,7 +21,7 @@ export function OrgLoadFailed({ error }: { error: string }) {
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 to-slate-100">
       <div className="w-full max-w-sm text-center space-y-4">
-        <AlertTriangle className="mx-auto h-10 w-10 text-amber-500" aria-hidden="true" />
+        <AlertTriangle className="mx-auto h-10 w-10 text-amber-600" aria-hidden="true" />
         <h1 className="text-xl font-bold text-slate-800">Lecture de la boutique impossible</h1>
         <p className="text-slate-600 text-sm">
           Votre boutique existe, mais elle n&apos;a pas pu être chargée.
@@ -38,7 +38,7 @@ export function OrgLoadFailed({ error }: { error: string }) {
           </Button>
           <button
             onClick={() => supabase.auth.signOut()}
-            className="w-full text-sm text-slate-400 hover:text-slate-600 underline"
+            className="w-full text-sm text-slate-500 hover:text-slate-600 underline"
           >
             Se déconnecter
           </button>

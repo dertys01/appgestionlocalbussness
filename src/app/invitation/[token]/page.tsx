@@ -81,14 +81,14 @@ export default function InvitationPage({
 
   if (!ready) {
     return (
-      <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 to-slate-100">
+      <main className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 to-slate-100">
         <p className="text-sm text-slate-500">Chargement du lien…</p>
-      </div>
+      </main>
     );
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 to-slate-100">
+    <main className="min-h-screen flex items-center justify-center p-4 bg-gradient-to-br from-indigo-50 to-slate-100">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
           <h1 className="text-3xl font-bold text-indigo-600">GestionLocal</h1>
@@ -124,7 +124,7 @@ export default function InvitationPage({
                     type="button"
                     onClick={() => setShow((v) => !v)}
                     aria-label={show ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
-                    className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-400 hover:text-slate-600 focus:outline-none"
+                    className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-500 hover:text-slate-600 focus:outline-none"
                   >
                     {show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
                   </button>
@@ -143,7 +143,7 @@ export default function InvitationPage({
                 />
               </div>
 
-              {error && <p className="text-red-500 text-sm">{error}</p>}
+              {error && <p className="text-red-600 text-sm">{error}</p>}
 
               <Button
                 type="button"
@@ -161,12 +161,12 @@ export default function InvitationPage({
           </CardContent>
         </Card>
 
-        <p className="text-center text-xs text-slate-400 mt-6">
+        <p className="text-center text-xs text-slate-500 mt-6">
           <Link href="/" className="hover:text-indigo-600 underline">
             J&apos;ai déjà un compte
           </Link>
         </p>
       </div>
-    </div>
+    </main>
   );
 }

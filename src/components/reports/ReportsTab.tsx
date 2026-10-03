@@ -35,7 +35,7 @@ export function ReportsTab({ view, onView }: ReportsTabProps) {
           <button
             onClick={() => onView('sales')}
             className={`px-3 py-1 rounded-md font-medium transition-colors ${
-              view === 'sales' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'
+              view === 'sales' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'
             }`}
           >
             Ventes
@@ -43,7 +43,7 @@ export function ReportsTab({ view, onView }: ReportsTabProps) {
           <button
             onClick={() => onView('profit')}
             className={`px-3 py-1 rounded-md font-medium transition-colors ${
-              view === 'profit' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'
+              view === 'profit' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'
             }`}
           >
             Rentabilité
@@ -51,7 +51,7 @@ export function ReportsTab({ view, onView }: ReportsTabProps) {
           <button
             onClick={() => onView('expenses')}
             className={`px-3 py-1 rounded-md font-medium transition-colors ${
-              view === 'expenses' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'
+              view === 'expenses' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'
             }`}
           >
             Charges

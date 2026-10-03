@@ -145,9 +145,10 @@ export function ReportsModule() {
       <div className="flex items-start justify-between gap-3">
         <PeriodPicker value={period} onChange={setPeriod} maxDays={maxDays} />
         <button
+          aria-label="Actualiser"
           onClick={fetchSales}
           disabled={loading}
-          className="p-2 text-slate-400 hover:text-indigo-600 disabled:opacity-40 shrink-0"
+          className="p-2 text-slate-500 hover:text-indigo-600 disabled:opacity-40 shrink-0"
         >
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
         </button>
@@ -184,7 +185,7 @@ export function ReportsModule() {
             <div className="flex items-center gap-2 text-slate-500 text-xs mb-1">
               <Smartphone className="h-3.5 w-3.5" /> MoMo
             </div>
-            <div className="text-lg font-bold text-emerald-600">{formatCFA(momoTotal)}</div>
+            <div className="text-lg font-bold text-emerald-700">{formatCFA(momoTotal)}</div>
           </CardContent>
         </Card>
       </div>
@@ -194,7 +195,7 @@ export function ReportsModule() {
         <CardContent className="p-4">
           <h3 className="font-semibold text-slate-700 mb-4">Ventes par jour</h3>
           {salesByDay.every((d) => d.total === 0) ? (
-            <div className="text-center text-slate-400 py-8 text-sm">Aucune vente sur cette période</div>
+            <div className="text-center text-slate-500 py-8 text-sm">Aucune vente sur cette période</div>
           ) : (
             <ResponsiveContainer width="100%" height={200}>
               <BarChart data={salesByDay} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
@@ -217,7 +218,7 @@ export function ReportsModule() {
           <CardContent className="p-4">
             <h3 className="font-semibold text-slate-700 mb-4">Top produits vendus</h3>
             {topProducts.length === 0 ? (
-              <div className="text-center text-slate-400 py-6 text-sm">Aucune donnée</div>
+              <div className="text-center text-slate-500 py-6 text-sm">Aucune donnée</div>
             ) : (
               <div className="space-y-2">
                 {topProducts.map((p, i) => (
@@ -253,7 +254,7 @@ export function ReportsModule() {
           <CardContent className="p-4">
             <h3 className="font-semibold text-slate-700 mb-2">Modes de paiement</h3>
             {paymentData.length === 0 ? (
-              <div className="text-center text-slate-400 py-6 text-sm">Aucune donnée</div>
+              <div className="text-center text-slate-500 py-6 text-sm">Aucune donnée</div>
             ) : (
               <>
                 <ResponsiveContainer width="100%" height={150}>
@@ -274,7 +275,7 @@ export function ReportsModule() {
                     <Tooltip formatter={(v) => formatCFA(Number(v))} />
                   </PieChart>
                 </ResponsiveContainer>
-                <div className="text-center text-xs text-slate-400 mt-1">
+                <div className="text-center text-xs text-slate-500 mt-1">
                   Panier moyen : <strong>{formatCFA(moyenneParVente)}</strong>
                 </div>
               </>

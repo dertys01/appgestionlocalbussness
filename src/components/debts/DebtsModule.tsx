@@ -112,7 +112,7 @@ export function DebtsModule() {
           <p className="text-sm text-slate-600">
             Le carnet de dette est disponible à partir du plan {PLAN_LABELS.starter}.
           </p>
-          <p className="text-xs text-slate-400">
+          <p className="text-xs text-slate-500">
             Il fait partie des rapports, comme la rentabilité et le résultat net.
           </p>
         </CardContent>
@@ -130,9 +130,10 @@ export function DebtsModule() {
           </p>
         </div>
         <button
+          aria-label="Actualiser"
           onClick={load}
           disabled={loading}
-          className="p-2 text-slate-400 hover:text-indigo-600 disabled:opacity-40"
+          className="p-2 text-slate-500 hover:text-indigo-600 disabled:opacity-40"
         >
           <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
         </button>
@@ -141,7 +142,7 @@ export function DebtsModule() {
       {debts.length > 0 && (
         <Card className="border-amber-200 bg-amber-50">
           <CardContent className="p-3 flex items-center gap-3">
-            <TrendingUp className="w-4 h-4 text-amber-600 shrink-0" />
+            <TrendingUp className="w-4 h-4 text-amber-700 shrink-0" />
             <span className="text-sm text-amber-900">Total à recouvrer</span>
             <span className="ml-auto text-lg font-bold text-amber-700 tabular-nums">
               {formatCFA(total)}
@@ -151,15 +152,15 @@ export function DebtsModule() {
       )}
 
       {error && (
-        <p className="text-red-500 text-xs rounded-lg bg-red-50 border border-red-200 px-3 py-2">
+        <p className="text-red-600 text-xs rounded-lg bg-red-50 border border-red-200 px-3 py-2">
           {error}
         </p>
       )}
 
       {loading && debts.length === 0 ? (
-        <div className="text-center text-slate-400 py-8 text-sm">Chargement...</div>
+        <div className="text-center text-slate-500 py-8 text-sm">Chargement...</div>
       ) : debts.length === 0 ? (
-        <div className="text-center text-slate-400 py-10 text-sm">
+        <div className="text-center text-slate-500 py-10 text-sm">
           Aucune dette en cours. Tout ce que vous avez vendu a été encaissé.
         </div>
       ) : (
@@ -175,12 +176,12 @@ export function DebtsModule() {
                       <div className="font-medium text-slate-800 text-sm truncate">
                         {d.name ?? 'Client sans nom'}
                       </div>
-                      <div className="text-xs text-slate-400">
+                      <div className="text-xs text-slate-500">
                         {prettyPhone(d.phone)}
                         {age !== null && ` · depuis ${age} jour${age > 1 ? 's' : ''}`}
                       </div>
                       {d.sales_count > 1 && (
-                        <div className="text-[10px] text-slate-400 mt-0.5">
+                        <div className="text-[11px] text-slate-500 mt-0.5">
                           {d.sales_count} ventes, {d.payments_count} versement(s)
                         </div>
                       )}
@@ -190,7 +191,7 @@ export function DebtsModule() {
                         {formatCFA(d.total_due)}
                       </div>
                       {urgent && (
-                        <div className="text-[10px] text-red-600">plus de 30 jours</div>
+                        <div className="text-[11px] text-red-600">plus de 30 jours</div>
                       )}
                     </div>
                   </div>
@@ -249,14 +250,14 @@ export function DebtsModule() {
           })}
 
           {debts.length > PAGE && (
-            <p className="text-center text-xs text-slate-400 pt-1">
+            <p className="text-center text-xs text-slate-500 pt-1">
               {debts.length} débiteurs — {PAGE} premiers
             </p>
           )}
         </div>
       )}
 
-      <p className="text-xs text-slate-400">
+      <p className="text-xs text-slate-500">
         Une vente à crédit n&apos;entre pas dans le chiffre d&apos;affaires : elle y
         entre quand vous encaissez. Le stock, lui, est sorti dès la vente.
         {' '}Les versements soldent les ventes les plus anciennes d&apos;abord.

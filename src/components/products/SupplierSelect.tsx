@@ -93,7 +93,7 @@ export function SupplierSelect({ value, onChange, disabled }: SupplierSelectProp
             value={value ?? ''}
             disabled={disabled || loading}
             onChange={(e) => onChange(e.target.value || null)}
-            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-slate-50 disabled:text-slate-400"
+            className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-slate-50 disabled:text-slate-500"
           >
             <option value="">
               {loading ? 'Chargement...' : 'Aucun fournisseur'}
@@ -134,7 +134,7 @@ export function SupplierSelect({ value, onChange, disabled }: SupplierSelectProp
             disabled={saving}
             className="bg-white"
           />
-          {error && <p className="text-red-500 text-xs">{error}</p>}
+          {error && <p className="text-red-600 text-xs">{error}</p>}
           <div className="flex gap-2">
             <Button
               type="button"
@@ -161,7 +161,7 @@ export function SupplierSelect({ value, onChange, disabled }: SupplierSelectProp
       )}
 
       {suppliers.length === 0 && !loading && !creating && (
-        <p className="text-xs text-slate-400 flex items-center gap-1.5">
+        <p className="text-xs text-slate-500 flex items-center gap-1.5">
           <Truck className="h-3.5 w-3.5" />
           Aucun fournisseur enregistré. Utilisez + pour en créer un.
         </p>

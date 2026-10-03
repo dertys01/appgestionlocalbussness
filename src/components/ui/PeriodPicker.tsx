@@ -77,7 +77,7 @@ export function PeriodPicker({
             className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors ${
               matched?.value === p.value && !custom
                 ? 'bg-white text-indigo-600 shadow-sm'
-                : 'text-slate-500 hover:bg-slate-100'
+                : 'text-slate-600 hover:bg-slate-100'
             }`}
           >
             {p.label}
@@ -90,7 +90,7 @@ export function PeriodPicker({
           className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors inline-flex items-center gap-1 ${
             custom
               ? 'bg-white text-indigo-600 shadow-sm'
-              : 'text-slate-500 hover:bg-slate-100'
+              : 'text-slate-600 hover:bg-slate-100'
           }`}
         >
           <Calendar className="w-3 h-3" /> Dates
@@ -108,7 +108,7 @@ export function PeriodPicker({
             aria-label="Date de début"
             className="rounded-lg border border-slate-200 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
-          <span className="text-xs text-slate-400" aria-hidden="true">&rarr;</span>
+          <span className="text-xs text-slate-500" aria-hidden="true">&rarr;</span>
           <input
             type="date"
             value={value.to}
@@ -118,7 +118,7 @@ export function PeriodPicker({
             aria-label="Date de fin"
             className="rounded-lg border border-slate-200 px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
           />
-          <span className="text-xs text-slate-400">
+          <span className="text-xs text-slate-500">
             {daysBetween(value.from, value.to)} jours
             {tooLong ? ` — ramené à ${ceiling}` : ''}
           </span>
