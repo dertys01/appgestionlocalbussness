@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useMemo } from 'react';
-import { AlertTriangle, Search, ArrowUpDown, Pencil, Trash2, Plus, PackagePlus, Download } from 'lucide-react';
+import { AlertTriangle, Search, ArrowUpDown, Pencil, Trash2, Plus, PackagePlus, Download, Upload } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -26,13 +26,14 @@ interface InventoryTableProps {
   onEdit: (product: Product) => void;
   onRestock: (product: Product) => void;
   onAdd: () => void;
+  onImport: () => void;
   onRefresh: () => void;
 }
 
 type SortKey = 'name' | 'stock_qty' | 'price_sell' | 'category';
 type SortDir = 'asc' | 'desc';
 
-export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }: InventoryTableProps) {
+export function InventoryTable({ products, onEdit, onRestock, onAdd, onImport, onRefresh }: InventoryTableProps) {
   const { supabase, plan, canManageProducts, ownerId, actorName } = useSupabase();
 
   const handleExport = () => {
@@ -184,15 +185,37 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onRefresh }
           />
         </div>
         {isFeatureAllowed(plan, 'exportCsv') && (
-          <Button onClick={handleExport} variant="outline" className="gap-2 shrink-0 border-slate-200">
+          <Button
+            onClick={handleExport}
+            variant="outline"
+            className="gap-2 shrink-0 border-slate-200"
+            aria-label="Exporter l'inventaire en CSV"
+          >
             <Download className="h-4 w-4" />
             <span className="hidden sm:inline">CSV</span>
           </Button>
         )}
         {/* Un caissier n'a pas les droits d'écriture sur le catalogue (RLS
-            products_insert/update/delete) : on ne propose pas le bouton. */}
+            products_insert/update/delete) : on ne propose pas le bouton.
+            aria-label sur les trois : le libellé est masqué sous sm, et une
+            icône seule n'a pas de nom accessible. */}
         {canManageProducts && (
-          <Button onClick={onAdd} className="bg-indigo-600 hover:bg-indigo-700 gap-2 shrink-0">
+          <Button
+            onClick={onImport}
+            variant="outline"
+            className="gap-2 shrink-0 border-slate-200"
+            aria-label="Importer des produits depuis un fichier CSV"
+          >
+            <Upload className="h-4 w-4" />
+            <span className="hidden sm:inline">Importer</span>
+          </Button>
+        )}
+        {canManageProducts && (
+          <Button
+            onClick={onAdd}
+            className="bg-indigo-600 hover:bg-indigo-700 gap-2 shrink-0"
+            aria-label="Ajouter un produit"
+          >
             <Plus className="h-4 w-4" />
             <span className="hidden sm:inline">Ajouter</span>
           </Button>
