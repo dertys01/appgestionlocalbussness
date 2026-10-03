@@ -28,8 +28,12 @@ chaque item a un critère de fin vérifiable.
 | 4.1 | `page.tsx` découpé : **861 → 261 lignes**, 8 fichiers, aucun changement de comportement | `8a125ee` |
 | — | Recette manuelle des 9 onglets : navigateur, 2 profils (propriétaire + caissier), **0 erreur JS** — **locale ET prod** | `7e7627a` |
 | 4.2 | Titres de onglet côté serveur : **3 layouts `metadata`**, `page.tsx` intacts (4/4 toujours client) | `c4ba478` |
+| 5 | Accessibilité et contraste : **Lighthouse a11y 0.83/0.95/0.96 → 1.00** sur 5 écrans · **10 premiers tests de composant React** | `6abaa4c` |
 
-**Reste dans le Sprint 4 :** 4.3 (24 `eslint-disable` dans 17 fichiers, au fil de l'eau).
+**Reste dans le Sprint 4 :** 4.3 (25 `eslint-disable` dans 17 fichiers, au fil de l'eau).
+
+**Reste dans le Sprint 5 :** validation visuelle mobile à 375 px sur appareil réel
+(aucun émulateur de viewport n'est disponible ici — voir 5.4).
 
 **Recette manuelle des 9 onglets : faite** le 03/10/2026, navigateur, deux profils,
 **en local puis en prod**, 0 erreur JavaScript — détail en fin de section 4.1.
@@ -344,6 +348,111 @@ npm test          → 0
 
 ---
 
+## Sprint 5 — Ce qui se voit : accessibilité, contraste, premiers tests
+
+Les quatre sprints précédents étaient mesurés par ce qui ne se voit pas
+(`tsc`, `lint`, `build`, `test`). Celui-ci mesure ce qui se voit : un audit, puis
+les défauts qu'il relève, fichier par fichier. Aucune règle de lint n'a été
+assouplie — la dette reste à **25 `eslint-disable`**, comme avant.
+
+### 5.1 — L'audit, avant / après
+
+Même outil, mêmes réglages, **cinq écrans** :
+
+| Écran | A11y avant | A11y après | Échecs avant → après |
+|---|---|---|---|
+| `/` (connexion) | **0.83** | **1.00** | 4 → 0 |
+| `/register` | non mesuré | **1.00** | 4 → 0 |
+| Tableau de bord | 0.95 | **1.00** | 2 → 0 |
+| Point de vente | non mesuré | **1.00** | — → 0 |
+| Rapports | 0.96 | **1.00** | 3 → 0 |
+
+`Best Practices` et `SEO` étaient déjà à 1.00 partout et y restent.
+
+Défauts de départ, tous localisés avant correction : `button-name` et
+`target-size` (le bouton « œil » du mot de passe, 16 px, sans nom accessible),
+`landmark-one-main` (les 4 écrans d'auth sans `<main>`), `color-contrast`
+(la sidebar et les onglets inactifs).
+
+### 5.2 — Accessibilité
+
+- **`<main>`** posé sur les 4 écrans d'auth : `LoginPage`, `register`,
+  `reset-password`, et les **deux** branches de `invitation/[token]`.
+- **Bouton « œil »** : aligné sur le motif que `/invitation` avait déjà —
+  `aria-label` binaire (« Afficher/Masquer le mot de passe »), cible tactile
+  `inset-y-0 w-11` (44 px) au lieu d'une icône de 16 px à `right-3`, et
+  `pr-11` sur l'input pour que le texte ne passe pas dessous.
+- **14 boutons à icône seule** reçoivent un `aria-label` : *Actualiser* (×5),
+  *Fermer* (×3), *Page précédente* / *Page suivante* (×4), *Retirer du panier*,
+  *Scanner un code-barres*. Détectés par balayage du `src/` puis repris un par un
+  — les trois faux positifs (puces qui rendent `{category}` / `{unit}` /
+  `{label}`) ont été écartés à la main.
+- **Sidebar** : `aria-label` sur les 12 entrées de nav et les 4 actions du pied.
+  C'est ce que reçoit réellement un utilisateur du rail d'icônes, puisque les
+  libellés sont en `hidden lg:`.
+
+### 5.3 — Contraste : trois corrections systémiques
+
+Rien n'a été corrigé au cas par cas là où le problème venait d'une couleur.
+
+1. **La couleur muette.** `text-slate-400` (2,6:1) était le gris « secondaire »
+   de toute l'application : **101 occurrences dans 24 fichiers**, toutes passées
+   en `text-slate-500` (4,8:1 — la `muted-foreground` standard de shadcn).
+2. **Le rouge.** Messages d'erreur `text-red-500` (3,8:1) → `text-red-600`
+   (4,8:1). Les icônes restent en `500` : le non-texte n'exige que 3:1.
+   « Déconnexion », partait de `text-red-400` (2,6:1) → `text-red-600`.
+3. **Les accents.** `emerald-600` (3,65:1) et `amber-600` (3,19:1) → `700`.
+   Les fonds portant du blanc (`bg-emerald-600 text-white`) → `700` ; les
+   pastilles d'étape `bg-emerald-500 text-white` (2,56:1) → `700`.
+
+Et deux cas qu'aucun outil n'aurait signalés avant affichage : les onglets
+inactifs sur `bg-slate-100` étaient à **4,34:1** (seuil : 4,5) → `slate-600`
+(6,85) — `LoginPage` et `ReportsTab` —, et les valeurs `text-slate-300`
+(« — », pourcentages sans coût) sont de la donnée, pas de la déco → `slate-500`.
+
+### 5.4 — Rail d'icônes et typographie
+
+- **Connecté où ?** Sous `lg`, la sidebar ne montrait ni libellé ni e-mail :
+  12 icônes muettes et aucun repère de compte. Ajout d'une pastille
+  `role="img" aria-label={email}` sous `lg`, l'e-mail complet restant affiché
+  à partir de `lg`. `title` seul ne servait à rien au tactile.
+- **Dix pixels.** Les 11 `text-[10px]` (panier, rentabilité, dettes) sont
+  passés en `text-[11px]`, l'autre taille déjà utilisée dans le code.
+
+**Limite assumée.** Aucun émulateur de viewport n'est disponible ici : le
+mobile est traité **par analyse CSS** — rail de 64 px, tableaux déjà enveloppés
+dans `overflow-x-auto`, libellés `hidden lg:` doublés d'un `aria-label`. La
+vérification visuelle à 375 px sur appareil réel reste à faire.
+
+### 5.5 — Premiers tests de composant React
+
+- **Vitest 3 + jsdom + Testing Library** : `vitest.config.ts` et `tests/ui/`.
+  `include` restreint à `tests/ui` pour ne pas happer les suites
+  `node --test` existantes.
+- `test:ui` **ajouté à la chaîne `npm test`** — il n'y a donc pas de voie
+  contournable pour l'oublier.
+- **10 tests / 2 fichiers** : `Sidebar` (nom accessible de chaque entrée,
+  cadenas présent seulement sur une entrée verrouillée, redirection du verrou,
+  pastille du compte, pied de page) et `PeriodPicker` (raccourci cliqué calé sur
+  aujourd'hui, raccourcis filtrés au-delà du plafond du plan, ramenage dans le
+  plafond, ouverture du choix libre).
+- **1 boîtier cassé en route** : un `aria-label` inséré après une balise qui
+  fermait sur la même ligne était tombé en contenu JSX (10 erreurs `lint`) ;
+  repéré par la porte `npm run lint`, corrigé, jamais contourné.
+
+### Définition de fini — Sprint 5
+
+```
+npx tsc --noEmit  → 0
+npm run lint      → 0 problems
+npm run build     → 0
+npm test          → 0  (+ 10 tests de composant)
++ Lighthouse a11y → 1.00 sur les 5 écrans mesurés
++ dette eslint-disable → 25 (inchangée)
+```
+
+---
+
 ## Hors périmètre (volontairement)
 
 | Sujet | Pourquoi |
@@ -369,6 +478,10 @@ npm test          → 0
 
 | Date | Commit | Objet |
 |---|---|---|
+| 03/10/2026 | `6abaa4c` | Sprint 5 — accessibilité et contraste (Lighthouse a11y → 1.00 sur 5 écrans) + 10 tests de composant |
+| 03/10/2026 | `3657542` | Recette des 9 onglets **en prod** — 2 profils, 0 erreur JavaScript |
+| 03/10/2026 | `ae012a6` | Recomptage de la dette `eslint-disable` (24 → 25) et origine du 25ᵉ |
+| 03/10/2026 | `262e8c9` | Consignation du Sprint 4.2 (titres de onglet servis) |
 | 03/10/2026 | `c4ba478` | Sprint 4.2 — 3 layouts serveur portant `metadata` (titres de onglet) |
 | 03/10/2026 | `7e7627a` | Recette manuelle des 9 onglets — navigateur, 2 profils, 0 erreur JS (local + prod) |
 | 03/10/2026 | `8a125ee` | Sprint 4.1 — `page.tsx` découpé : 861 → 261 lignes, 8 fichiers créés |
