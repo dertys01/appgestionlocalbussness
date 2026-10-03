@@ -27,6 +27,8 @@ export function useProducts() {
       const { data, error } = await supabase.from('products').select('*').order('name');
       if (error) throw new Error(error.message);
       setProducts((data as Product[]) ?? []);
+      // Sinon une erreur passée restait affichée après un rechargement réussi.
+      setProductsError('');
     } catch (e) {
       setProductsError((e as Error).message);
     } finally {
@@ -44,7 +46,10 @@ export function useProducts() {
       const { data, error } = await supabase.from('products').select('*').order('name');
       if (cancelled) return;
       if (error) setProductsError(error.message);
-      else setProducts((data as Product[]) ?? []);
+      else {
+        setProducts((data as Product[]) ?? []);
+        setProductsError('');
+      }
       setLoadingProducts(false);
     })();
     return () => { cancelled = true; };

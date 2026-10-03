@@ -1,6 +1,9 @@
 -- ============================================================
 -- MIGRATION : Équipe & Journal d'activité
 -- ============================================================
+-- ⚠️ HISTORIQUE — ses policies FOR ALL ont été remplacées par migration_roles.sql
+-- puis migration_security.sql. Ne plus exécuter seul.
+-- ============================================================
 
 -- Table membres de l'équipe
 CREATE TABLE IF NOT EXISTS business_members (

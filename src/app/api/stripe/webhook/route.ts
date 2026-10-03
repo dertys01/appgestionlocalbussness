@@ -123,7 +123,14 @@ export async function POST(req: NextRequest) {
         const sub = await stripe.subscriptions.retrieve(subId);
 
         const priceId = sub.items?.data?.[0]?.price?.id as string | undefined;
-        const plan = planFromPrice(priceId) ?? normalizePlan(eventData.metadata?.plan);
+        const fromPrice = planFromPrice(priceId);
+        // Retomber sur les metadata n'est licite qu'en dernier recours : elles
+        // disent ce que la session demandait, pas ce qui a été vendu. On trace
+        // pour voir quand ça arrive en prod (STRIPE_PRICE_* non configurées ?).
+        if (!fromPrice && eventData.metadata?.plan) {
+          console.warn('[Webhook] plan déduit des metadata (price_id inconnu)', priceId);
+        }
+        const plan = fromPrice ?? normalizePlan(eventData.metadata?.plan);
 
         await must('subscriptions', adminClient.from('subscriptions').upsert({
           org_id: orgId,
@@ -151,7 +158,11 @@ export async function POST(req: NextRequest) {
         if (!orgId) break;
         const status = eventData.status as string;
         const priceId = eventData.items?.data?.[0]?.price?.id as string | undefined;
-        const plan = planFromPrice(priceId) ?? normalizePlan(eventData.metadata?.plan);
+        const fromPrice2 = planFromPrice(priceId);
+        if (!fromPrice2 && eventData.metadata?.plan) {
+          console.warn('[Webhook] plan déduit des metadata (price_id inconnu)', priceId);
+        }
+        const plan = fromPrice2 ?? normalizePlan(eventData.metadata?.plan);
 
         await must('subscriptions', adminClient.from('subscriptions').upsert({
           org_id: orgId,

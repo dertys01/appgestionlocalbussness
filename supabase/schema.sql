@@ -1,6 +1,10 @@
 -- ============================================================
 -- SCHEMA MVP AppGestionLocalBusiness
 -- ============================================================
+-- ⚠️ HISTORIQUE — ne plus exécuter seul. L'état courant du schéma est défini
+-- par l'ordre complet : schema.sql → … → migration_roles.sql →
+-- migration_security.sql (c'est migration_security.sql qui fait foi).
+-- ============================================================
 
 -- Extension UUID
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -106,7 +110,7 @@ BEGIN
   NEW.updated_at = NOW();
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SET search_path = public;
 
 -- DROP préalable : sans lui, la seconde exécution échoue en 42710
 -- « trigger already exists » et interrompt le script en cours de route.

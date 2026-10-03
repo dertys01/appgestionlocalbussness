@@ -20,7 +20,7 @@ CREATE TABLE IF NOT EXISTS organizations (
 
 -- Trigger updated_at
 CREATE OR REPLACE FUNCTION update_org_timestamp()
-RETURNS TRIGGER LANGUAGE plpgsql AS $$
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path = public AS $$
 BEGIN NEW.updated_at = now(); RETURN NEW; END; $$;
 
 DROP TRIGGER IF EXISTS organizations_updated_at ON organizations;

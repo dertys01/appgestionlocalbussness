@@ -33,6 +33,27 @@ export async function POST(req: NextRequest) {
 
     const adminClient = getAdminClient();
 
+    // Compteur dédié : sans lui, un botnet pouvait sonder les jetons à la
+    // vitesse du rate limit général d'écriture. 10/h par IP, fail-open pour
+    // ne pas bloquer l'employé un soir d'inventaire.
+    const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
+    try {
+      const { data: over, error: rlError } = await adminClient.rpc('bump_rate_limit', {
+        p_key: `invitations-accept:${ip}`,
+        p_max: 10,
+        p_window_seconds: 3600,
+      });
+      if (rlError) console.error('[invitations/accept] rate limit', rlError.message);
+      else if (over === true) {
+        return NextResponse.json(
+          { error: 'Trop de tentatives. Réessayez dans une heure.' },
+          { status: 429, headers: { 'Retry-After': '3600' } }
+        );
+      }
+    } catch (e) {
+      console.error('[invitations/accept] rate limit', e instanceof Error ? e.message : e);
+    }
+
     // 1. L'invitation doit exister et être utilisable. On interroge la table
     //    pour connaître l'email invité : c'est lui qui détermine le compte à
     //    créer, et il ne vient pas du client (qui pourrait en envoyer un autre).
