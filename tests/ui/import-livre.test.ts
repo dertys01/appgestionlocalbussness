@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { parseProductsCsv, lignesImportables } from '@/lib/utils/importProducts';
@@ -13,7 +13,10 @@ import { parseProductsCsv, lignesImportables } from '@/lib/utils/importProducts'
  * séparateur, une colonne renommée ou une catégorie mal orthographiée, la
  * suite tombe ici.
  */
-const CSV = readFileSync(resolve(process.cwd(), 'import-local/produits-import.csv'), 'utf8');
+// Le fichier est gitignoré : présent en local, absent en CI. skipIf le rend
+// facultatif au lieu de faire tomber la suite hors de la machine du mainteneur.
+const CSV_PATH = resolve(process.cwd(), 'import-local/produits-import.csv');
+const CSV = existsSync(CSV_PATH) ? readFileSync(CSV_PATH, 'utf8') : '';
 
 /** Les 9 produits déjà en boutique dans Test1, qui ne doivent pas être réimportés. */
 const EXISTANTS = [
@@ -22,7 +25,7 @@ const EXISTANTS = [
   'hp 15 core i7 8/256', 'redmi 15c 8/256',
 ];
 
-describe('le fichier livré passe bien par l\'analyseur', () => {
+describe.skipIf(!existsSync(CSV_PATH))('le fichier livré passe bien par l\'analyseur', () => {
   const r = parseProductsCsv(CSV, EXISTANTS);
   const ok = lignesImportables(r);
 
