@@ -59,6 +59,8 @@ const ORDER = [
   'migration_restaurant_tables.sql',
   // Clôture d'addition : la commande entre dans les ventes.
   'migration_table_checkout.sql',
+  // Recettes et coût de matière : le KPI d'un restaurant.
+  'migration_recipes.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -3163,6 +3165,137 @@ await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, uni
     await q(`SELECT send_order_items('${ON2}')`);
   } catch { refuse = true; }
   check('24o. une commande soldée ne peut plus partir en cuisine', refuse);
+}
+
+// ─── 25. Restaurant : recettes et coût de matière ───────────
+// Sans recette, la marge d'un plat est une fiction : le patron n'achète pas
+// du « poulet braisé », il achète du poulet. Ces contrôles vérifient que le
+// coût remonte l'arbre des recettes, que les ingrédients partent, et qu'une
+// recette circulaire est refusée.
+console.log('\n▸ Restaurant — recettes');
+
+const RJ = 'dddddddd-0000-0000-0000-000000000001'; // poulet braisé
+const RR = 'dddddddd-0000-0000-0000-000000000002'; // riz blanc
+const RH = 'dddddddd-0000-0000-0000-000000000003'; // huile
+const RJ2 = 'dddddddd-0000-0000-0000-000000000004'; // poulet sauté (contient RJ)
+
+await q(`INSERT INTO auth.users (id, email) VALUES ('${PATRON}', 'patron3@test.ci') ON CONFLICT DO NOTHING`);
+await q(`INSERT INTO products (id, user_id, name, price_buy, price_sell, stock_qty, min_stock_level) VALUES
+  ('${RJ}', '${RESTO}', 'Poulet braisé', 2000, 4500, 100, 5),
+  ('${RR}', '${RESTO}', 'Riz blanc',    400, 1200,  50, 5),
+  ('${RH}', '${RESTO}', 'Huile 1L',     900, 1000,  20, 5),
+  ('${RJ2}', '${RESTO}', 'Poulet sauté', 3000, 6000,  80, 5)`);
+
+await q(`SELECT set_config('request.jwt.claim.sub', '${RESTO}', false)`);
+
+// 25a. Sans recette, le coût est le prix d'achat.
+check('25a. un produit sans recette coûte son prix d\'achat',
+  Number((await q(`SELECT product_cost('${RR}')`)).rows[0].product_cost) === 400);
+
+// 25b. Avec recette, le coût est la somme des ingrédients.
+await q(`SELECT add_recipe_ingredient('${RJ}', '${RR}', 0.3)`);
+await q(`SELECT add_recipe_ingredient('${RJ}', '${RH}', 0.05)`);
+{
+  // 300 g × 400 + 0,05 L × 900 = 120 + 45 = 165
+  const c = Number((await q(`SELECT product_cost('${RJ}')`)).rows[0].product_cost);
+  check('25b. le coût d\'une recette est la somme de ses ingrédients', c === 165, `coût ${c}`);
+}
+
+// 25c. La récursion : un plat peut contenir un autre plat. « Poulet sauté »
+// vaut son ingrédient — donc le coût du « poulet braisé », lui-même valued
+// 165 F. Le prix d'achat du plat (3 000) n'intervient plus : dès qu'une recette
+// existe, c'est elle qui fait le coût.
+await q(`SELECT add_recipe_ingredient('${RJ2}', '${RJ}', 1)`);
+{
+  const c = Number((await q(`SELECT product_cost('${RJ2}')`)).rows[0].product_cost);
+  check('25c. un plat peut contenir un autre plat (récursif)', c === 165, `coût ${c}`);
+}
+
+// 25d. Le cycle indirect est refusé : RJ2 contient RJ, donc RJ ne peut pas
+// contenir RJ2.
+let cycle = false;
+try {
+  await q(`SELECT add_recipe_ingredient('${RJ}', '${RJ2}', 1)`);
+} catch { cycle = true; }
+check('25d. une recette ne peut pas se contenir elle-même', cycle);
+
+// 25e. Le cycle direct aussi.
+let direct = false;
+try {
+  await q(`SELECT add_recipe_ingredient('${RR}', '${RR}', 1)`);
+} catch { direct = true; }
+check('25e. le cycle direct est refusé', direct);
+
+// 25f. La vente d'un plat consomme ses ingrédients. Le riz part de 50 à 47
+// pour 3 plats × 300 g. Le stock du PLAT ne bouge pas : un plat se cuisine.
+{
+  await q(`INSERT INTO sales (id, user_id, total_amount, payment_method, amount_received)
+    VALUES ('eeeeeeee-0000-0000-0000-000000000001', '${RESTO}', 13500, 'cash', 13500)`);
+  await q(`INSERT INTO sale_items (sale_id, product_id, product_name, quantity, unit_price, subtotal, unit_cost, list_price)
+    VALUES ('eeeeeeee-0000-0000-0000-000000000001', '${RJ}', 'Poulet braisé', 3, 4500, 13500, 2000, 4500)`);
+
+  const riz = await stock(RR);
+  const huile = await stock(RH);
+  check('25f. la vente d\'un plat décrémente son ingrédient',
+    riz === 49.1, `riz ${riz}, attendu 49,1`);
+  check('25g. et le deuxième ingrédient aussi', huile === 19.85, `huile ${huile}, attendu 19,85`);
+}
+
+// 25h. Le coût figé est celui de la RECETTE (165), pas le prix d'achat (2 000) :
+// c'est ce qui rend la marge du plat réelle.
+{
+  const cout = (await q(`SELECT unit_cost FROM sale_items
+    WHERE sale_id = 'eeeeeeee-0000-0000-0000-000000000001'`)).rows[0].unit_cost;
+  check('25h. le coût figé de la vente est celui de la recette', Number(cout) === 165,
+    `coût ${cout}, attendu 165`);
+}
+
+// 25i. Manque d'ingrédient : la vente entière est annulée, ligne d'en-tête
+// comprise. Commander 200 plats alors qu'il n'y a que 50 kg de riz ne peut pas
+// créer une vente sans riz.
+let pasStock = true;
+try {
+  await q(`INSERT INTO sale_items (sale_id, product_id, product_name, quantity, unit_price, subtotal, unit_cost, list_price)
+    VALUES ('eeeeeeee-0000-0000-0000-000000000001', '${RJ}', 'Poulet braisé', 200, 4500, 900000, 2000, 4500)`);
+  pasStock = false;
+} catch { /* refus attendu : c'est le comportement voulu */ }
+check('25i. une vente sans ingrédient suffisant est refusée', pasStock);
+{
+  // Le riz n'a pas bougé du tour précédent : la transaction a bien été annulée,
+  // et pas seulement la ligne refusée.
+  const riz = await stock(RR);
+  check('25i2. et le stock d\'ingrédient est intact', riz === 49.1, `riz ${riz}`);
+}
+
+// 25j. Un caissier ne réécrit pas la carte.
+{
+  await canWrite('25j. un caissier ne modifie pas une recette',
+    `INSERT INTO recipe_ingredients (dish_id, ingredient_id, quantity)
+     VALUES ('${RJ}', '${RH}', 1)`, false, SERVEUR);
+}
+
+// 25k. La vue de marge reste en security_invoker.
+{
+  const def = (await q(`
+    SELECT coalesce(c.reloptions::text, '') AS o
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relname = 'recipe_costs'`)).rows[0].o;
+  check('25k. recipe_costs reste en security_invoker',
+    def.includes('security_invoker=true'), `options : ${def || '(aucune)'}`);
+}
+{
+  const vue = (await q(`
+    SELECT unit_cost, margin, margin_pct FROM recipe_costs WHERE id = '${RJ}'`)).rows[0];
+  // 4 500 − 165 = 4 335, soit 96,3 %
+  check('25l. la marge du plat est calculée sur son coût de recette',
+    Number(vue.unit_cost) === 165 && Number(vue.margin) === 4335 && Number(vue.margin_pct) === 96.3,
+    `coût ${vue.unit_cost}, marge ${vue.margin}, ${vue.margin_pct} %`);
+}
+
+// 25m. Les recettes sont du tenant : un autre restaurant ne les voit pas.
+{
+  await canRead('25m. un autre restaurant ne voit pas la recette',
+    `SELECT count(*) FROM recipe_ingredients WHERE dish_id = '${RJ}'`, false, PATRON);
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);

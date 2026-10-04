@@ -12,6 +12,7 @@ import {
   Users,
   Menu,
   UtensilsCrossed,
+  ChefHat,
 } from 'lucide-react';
 import { LoginPage } from '@/components/auth/LoginPage';
 import { InventoryTab } from '@/components/inventory/InventoryTab';
@@ -21,6 +22,7 @@ import { DebtsModule } from '@/components/debts/DebtsModule';
 import { ReportsTab } from '@/components/reports/ReportsTab';
 import { ForecastModule } from '@/components/forecast/ForecastModule';
 import { FloorModule } from '@/components/restaurant/FloorModule';
+import { RecipesModule } from '@/components/restaurant/RecipesModule';
 import { TeamModule } from '@/components/team/TeamModule';
 import { ProductForm } from '@/components/products/ProductForm';
 import { RestockModal } from '@/components/products/RestockModal';
@@ -147,6 +149,7 @@ export default function HomePage() {
     // Salle : module restaurant, donc filtré comme les autres. La caisse
     // comptoir reste disponible — un restaurant sert aussi à emporter.
     { key: 'floor',     label: 'Salle',     icon: UtensilsCrossed, locked: false },
+    { key: 'recipes',   label: 'Recettes',  icon: ChefHat,         locked: false },
     { key: 'team',      label: 'Équipe',     icon: Users,           locked: false },
   ];
 
@@ -272,6 +275,13 @@ export default function HomePage() {
               {/* La salle ne vend rien : le stock n'est touché qu'à la clôture
                   (Sprint 14), donc aucun rafraîchissement des produits ici. */}
               <FloorModule products={products} />
+            </div>
+          )}
+
+          {tab === 'recipes' && (
+            <div className="space-y-4">
+              <h2 className="text-xl font-bold text-slate-800">Recettes</h2>
+              <RecipesModule />
             </div>
           )}
 

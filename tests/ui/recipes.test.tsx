@@ -1,0 +1,176 @@
+import { describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+
+/**
+ * Les recettes : ce qu'un plat coûte vraiment.
+ *
+ * Le test porte sur le calcul affiché et sur le refus d'une recette
+ * circulaire — la contrainte qu'une clé étrangère ne peut pas exprimer.
+ * L'écriture passe par add_recipe_ingredient(), pas par un INSERT direct.
+ */
+
+const { plats, ingredients, rpc } = vi.hoisted(() => {
+  const plats: unknown[] = [];
+  const ingredients: unknown[] = [];
+  const rpc = vi.fn(async () => ({ data: null, error: null }));
+  return { plats, ingredients, rpc };
+});
+
+const chaine = (donnees: unknown) => {
+  const c: Record<string, unknown> = {};
+  c.select = () => c;
+  c.eq = () => c;
+  c.order = () => c;
+  c.then = (ok: (v: unknown) => unknown) => ok({ data: donnees, error: null });
+  c.delete = () => ({ eq: async () => ({ error: null }) });
+  return c;
+};
+
+const supabase = {
+  from: (table: string) =>
+    table === 'recipe_costs'
+      ? chaine(plats)
+      : table === 'recipe_ingredients'
+        ? chaine(ingredients)
+        : chaine([{ id: 'p1', name: 'Poulet braisé' }, { id: 'p2', name: 'Riz blanc' }]),
+  rpc,
+  auth: { getUser: vi.fn() },
+};
+
+vi.mock('@/components/providers/SupabaseProvider', () => ({
+  useSupabase: () => ({
+    supabase,
+    ownerId: 'org-1',
+    actorName: 'Recette',
+    user: { id: 'u1', email: 'a@b.c' },
+    canManageProducts: true,
+    isEmployee: false,
+    org: { domain: 'restaurant' },
+  }),
+}));
+
+import { RecipesModule } from '@/components/restaurant/RecipesModule';
+
+const PLAT = {
+  id: 'p1',
+  name: 'Poulet braisé',
+  category: 'Plats',
+  price_sell: 4500,
+  stock_qty: 0,
+  unit_cost: 165,
+  margin: 4335,
+  margin_pct: 96.3,
+  ingredient_count: 2,
+};
+
+function definirPlats(...l: unknown[]) {
+  plats.length = 0;
+  plats.push(...l);
+}
+
+function definirIngredients(...l: unknown[]) {
+  ingredients.length = 0;
+  ingredients.push(...l);
+}
+
+describe('RecipesModule — le coût de revient d\'un plat', () => {
+  it('invite à créer des produits quand le catalogue est vide', async () => {
+    definirPlats();
+    render(<RecipesModule />);
+    await waitFor(() => {
+      expect(screen.getByText(/Aucun plat à composer/i)).toBeInTheDocument();
+    });
+  });
+
+  it('affiche le coût, la marge et le pourcentage du plat choisi', async () => {
+    definirPlats(PLAT);
+    render(<RecipesModule />);
+
+    await waitFor(() => expect(screen.getByLabelText(/Plat à composer/i)).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/Plat à composer/i), { target: { value: 'p1' } });
+
+    // 4 500 − 165 = 4 335, soit 96,3 %. C'est la marge RÉELLE : le prix
+    // d'achat du plat (2 000) ne doit pas apparaître.
+    await waitFor(() => expect(screen.getByText('165 F')).toBeInTheDocument());
+    expect(screen.getByText('96.3 %')).toBeInTheDocument();
+  });
+
+  it('affiche un tiret quand le plat n\'a pas de recette', async () => {
+    definirPlats({ ...PLAT, ingredient_count: 0, unit_cost: 2000, margin: 2500, margin_pct: 55.6 });
+    render(<RecipesModule />);
+
+    await waitFor(() => expect(screen.getByLabelText(/Plat à composer/i)).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/Plat à composer/i), { target: { value: 'p1' } });
+
+    // Sans recette, il n'y a pas de coût de revient à afficher : le prix
+    // d'achat du plat n'est PAS un coût de recette, et le montrer ferait
+    // croire à une précision qui n'existe pas. Même la marge s'efface.
+    await waitFor(() => expect(screen.getAllByText('—').length).toBeGreaterThan(0));
+    expect(screen.queryByText('55.6 %')).not.toBeInTheDocument();
+    expect(screen.queryByText('2 000 F')).not.toBeInTheDocument();
+  });
+
+  it('signale un ingrédient insuffisant pour une portion', async () => {
+    definirPlats(PLAT);
+    definirIngredients(
+      {
+        ingredient_id: 'p2',
+        quantity: 0.3,
+        ingredient: { name: 'Riz blanc', unit: 'kg', stock_qty: 50, price_buy: 400 },
+      },
+      {
+        ingredient_id: 'p3',
+        quantity: 1,
+        ingredient: { name: 'Poulet fermier', unit: 'pce', stock_qty: 0, price_buy: 1500 },
+      },
+    );
+    render(<RecipesModule />);
+
+    await waitFor(() => expect(screen.getByLabelText(/Plat à composer/i)).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/Plat à composer/i), { target: { value: 'p1' } });
+
+    await waitFor(() => expect(screen.getByText(/1 ingrédient ne suffit pas/i)).toBeInTheDocument());
+    // Le patron doit savoir que la vente sera refusée, pas seulement qu'un
+    // chiffre a bougé.
+    expect(screen.getByText(/la vente de ce plat sera refusée/i)).toBeInTheDocument();
+  });
+
+  it('écrit les ingrédients par la fonction, pas par un INSERT direct', async () => {
+    definirPlats(PLAT);
+    definirIngredients();
+    render(<RecipesModule />);
+
+    await waitFor(() => expect(screen.getByLabelText(/Plat à composer/i)).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/Plat à composer/i), { target: { value: 'p1' } });
+    await waitFor(() => expect(screen.getByLabelText(/Ingrédient à ajouter/i)).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(/Ingrédient à ajouter/i), { target: { value: 'p2' } });
+    fireEvent.change(screen.getByLabelText(/Quantité pour une portion/i), { target: { value: '0,3' } });
+    fireEvent.click(screen.getByRole('button', { name: /Ajouter/i }));
+
+    await waitFor(() => expect(rpc).toHaveBeenCalledWith('add_recipe_ingredient', {
+      p_dish_id: 'p1',
+      p_ingredient_id: 'p2',
+      p_quantity: 0.3,
+    }));
+  });
+
+  it('affiche l\'erreur quand la base refuse une recette circulaire', async () => {
+    definirPlats(PLAT);
+    definirIngredients();
+    rpc.mockResolvedValueOnce({
+      data: null,
+      error: { message: 'Cet ingrédient contient déjà ce plat : la recette formerait un cercle' },
+    } as never);
+    render(<RecipesModule />);
+
+    await waitFor(() => expect(screen.getByLabelText(/Plat à composer/i)).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/Plat à composer/i), { target: { value: 'p1' } });
+    await waitFor(() => expect(screen.getByLabelText(/Ingrédient à ajouter/i)).toBeInTheDocument());
+
+    fireEvent.change(screen.getByLabelText(/Ingrédient à ajouter/i), { target: { value: 'p2' } });
+    fireEvent.click(screen.getByRole('button', { name: /Ajouter/i }));
+
+    await waitFor(() => expect(screen.getByText(/formerait un cercle/i)).toBeInTheDocument());
+  });
+});
