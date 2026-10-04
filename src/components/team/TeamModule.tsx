@@ -54,6 +54,7 @@ export function TeamModule() {
   const [copied, setCopied] = useState(false);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [revokingId, setRevokingId] = useState<string | null>(null);
+  const [changingRoleId, setChangingRoleId] = useState<string | null>(null);
 
   // Confirmation suppression
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -224,6 +225,28 @@ export function TeamModule() {
       setFetchError((e as Error).message);
     } finally {
       setRevokingId(null);
+    }
+  };
+
+  const changeRole = async (memberId: string, role: 'employee' | 'manager') => {
+    setChangingRoleId(memberId);
+    setFetchError('');
+    try {
+      const token = await getToken();
+      if (!token) throw new Error('Session expirée. Veuillez vous reconnecter.');
+      const res = await fetch(`/api/employees/${memberId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+        body: JSON.stringify({ role }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(json?.error ?? `Erreur serveur (${res.status})`);
+      await fetchMembers();
+    } catch (e) {
+      setFetchError((e as Error).message);
+      await fetchMembers();
+    } finally {
+      setChangingRoleId(null);
     }
   };
 
@@ -434,9 +457,19 @@ export function TeamModule() {
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="font-medium text-slate-800 text-sm">{m.member_name}</div>
-                        <Badge className="bg-slate-100 text-slate-600 hover:bg-slate-100 text-xs mt-0.5">
-                          {m.role}
-                        </Badge>
+                        <select
+                          aria-label={`Rôle de ${m.member_name}`}
+                          value={m.role}
+                          disabled={changingRoleId === m.member_id}
+                          onChange={(e) => changeRole(m.member_id, e.target.value as 'employee' | 'manager')}
+                          className="mt-0.5 rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-xs text-slate-600 focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:opacity-50"
+                        >
+                          <option value="employee">employee</option>
+                          <option value="manager">manager</option>
+                        </select>
+                        {changingRoleId === m.member_id && (
+                          <Loader2 className="h-3 w-3 animate-spin inline ml-1 text-slate-400" />
+                        )}
                       </div>
                       {deletingId === m.member_id ? (
                         <Loader2 className="h-4 w-4 animate-spin text-red-500" />
