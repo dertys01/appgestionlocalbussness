@@ -23,6 +23,7 @@ const ORDER = [
   'migration_security.sql',
   'migration_webhook_claim.sql',
   'migration_fk_indexes.sql',
+  'migration_domain.sql',
 ];
 
 let failed = 0;

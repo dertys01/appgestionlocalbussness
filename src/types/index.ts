@@ -120,6 +120,12 @@ export interface Organization {
   ifu: string | null;
   address: string | null;
   invoice_counter: number;
+  /**
+   * Domaine d'activité : 'retail' (caisse comptoir) ou 'restaurant'
+   * (salle, tables, commande ouverte). Ne décide que des modules affichés —
+   * jamais d'un droit ni d'un quota (src/lib/modules.ts).
+   */
+  domain: 'retail' | 'restaurant';
   created_at: string;
   updated_at: string;
 }

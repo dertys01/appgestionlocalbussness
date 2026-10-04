@@ -8,6 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { PLAN_LABELS, PLAN_LIMITS } from '@/lib/utils/plans';
+import { normalizeDomain, DOMAIN_LABELS, DOMAIN_DESCRIPTIONS, type Domain } from '@/lib/modules';
 import type { Plan } from '@/types';
 
 const PLANS: { id: Plan; price: string; features: string[] }[] = [
@@ -44,6 +45,27 @@ export function SettingsModule() {
   const [loadingCheckout, setLoadingCheckout] = useState<Plan | null>(null);
   const [loadingPortal, setLoadingPortal] = useState(false);
   const [billingError, setBillingError] = useState('');
+
+  // Domaine d'activité : la bascule commerce ⇄ restauration. Aucun risque —
+  // elle ne touche ni aux données, ni aux quotas, ni aux RLS : elle change la
+  // liste des modules affichés (src/lib/modules.ts).
+  const [domain, setDomain] = useState<Domain>(() => normalizeDomain(org?.domain));
+  const [savingDomain, setSavingDomain] = useState<Domain | null>(null);
+  const [domainError, setDomainError] = useState('');
+
+  const changeDomain = async (d: Domain) => {
+    if (d === normalizeDomain(org?.domain)) return;
+    setSavingDomain(d);
+    setDomainError('');
+    const { error } = await supabase
+      .from('organizations')
+      .update({ domain: d } as Record<string, unknown>)
+      .eq('id', org?.id);
+    setSavingDomain(null);
+    if (error) { setDomainError(error.message); return; }
+    setDomain(d);
+    await refreshOrg();
+  };
 
   const saveOrg = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -185,6 +207,47 @@ export function SettingsModule() {
                   Enregistrer
                 </Button>
               </form>
+            </CardContent>
+          </Card>
+
+          {/* Domaine d'activité */}
+          <Card className="border-slate-200">
+            <CardContent className="p-5 space-y-3">
+              <div className="flex items-center justify-between">
+                <h3 className="font-semibold text-slate-800 text-sm">Domaine d&apos;activité</h3>
+                <Badge className="bg-indigo-100 text-indigo-700">{DOMAIN_LABELS[domain]}</Badge>
+              </div>
+              <p className="text-xs text-slate-500">
+                Détermine les écrans affichés. Vos produits, ventes, dettes et
+                rapports ne changent pas, et vous pouvez revenir en arrière
+                quand vous voulez.
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2">
+                {(['retail', 'restaurant'] as const).map((d) => {
+                  const actif = domain === d;
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => changeDomain(d)}
+                      disabled={savingDomain !== null}
+                      aria-pressed={actif}
+                      className={`text-left rounded-lg border-2 p-3 transition-colors disabled:opacity-60 ${
+                        actif ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-indigo-300'
+                      }`}
+                    >
+                      <span className="block text-sm font-medium text-slate-800">{DOMAIN_LABELS[d]}</span>
+                      <span className="block text-xs text-slate-500 mt-0.5">{DOMAIN_DESCRIPTIONS[d]}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {savingDomain && (
+                <p className="text-xs text-slate-500 flex items-center gap-1.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Changement en cours…
+                </p>
+              )}
+              {domainError && <p className="text-red-600 text-sm">{domainError}</p>}
             </CardContent>
           </Card>
 
