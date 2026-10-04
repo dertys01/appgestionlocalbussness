@@ -413,6 +413,9 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
     [cart]
   );
 
+  /** Ce que le client a réellement posé sur le comptoir. */
+  const donne = Number(String(amountGiven).replace(',', '.'));
+
   // ── Crédit client ──
   // Une vente à crédit exige un nom ET un téléphone : sans numéro, la dette
   // n'est rattachable à personne et la relance WhatsApp devient impossible.
@@ -1144,21 +1147,42 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                   className="text-sm"
                 />
               </div>
-              {parseFloat(String(amountGiven).replace(',', '.')) >= total && (
+              {donne >= total && total > 0 && (
                 <div className="flex justify-between rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2">
                   <span className="text-sm font-medium text-emerald-700">Monnaie à rendre</span>
                   <span className="text-sm font-bold text-emerald-700">
-                    {formatCFA(parseFloat(String(amountGiven).replace(',', '.')) - total)}
+                    {formatCFA(donne - total)}
                   </span>
                 </div>
               )}
-              {parseFloat(String(amountGiven).replace(',', '.')) > 0 && parseFloat(String(amountGiven).replace(',', '.')) < total && (
-                <div className="flex justify-between rounded-lg bg-red-50 border border-red-200 px-3 py-2">
-                  <span className="text-sm font-medium text-red-600">Reste à payer</span>
-                  <span className="text-sm font-bold text-red-600">
-                    {formatCFA(total - parseFloat(String(amountGiven).replace(',', '.')))}
-                  </span>
-                </div>
+              {donne > 0 && donne < total && (
+                <>
+                  <div className="flex justify-between rounded-lg bg-red-50 border border-red-200 px-3 py-2">
+                    <span className="text-sm font-medium text-red-600">Reste à payer</span>
+                    <span className="text-sm font-bold text-red-600">
+                      {formatCFA(total - donne)}
+                    </span>
+                  </div>
+                  {/* Un vente espèces comptée entière alors qu'il manque
+                      de l'argent dans la caisse est un chiffre faux, et c'est
+                      le chiffre sur lequel le commerçant décide. La vente à
+                      crédit existe justement pour ce cas : elle exige le nom et
+                      le téléphone du client, donc la dette reste
+                      recouvrable. Proposer l'autre voie ici évite qu'on
+                      enregistre une vente qui n'a pas été payée. */}
+                  <p className="text-[11px] text-red-600">
+                    Une vente espèces est enregistrée comme payée en totalité.
+                    Pour suivre ce reste à payer, utilisez{' '}
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod('credit')}
+                      className="underline font-medium hover:text-red-700"
+                    >
+                      Crédit
+                    </button>
+                    .
+                  </p>
+                </>
               )}
             </div>
           )}

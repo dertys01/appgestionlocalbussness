@@ -65,6 +65,10 @@ const ORDER = [
   'migration_restaurant_finitions.sql',
   // Carte par jour de la semaine : un plat du vendredi le mardi, c'est faux.
   'migration_menu_days.sql',
+  // Base de caisse : un seul chiffre d'affaires sur tous les écrans. Doit
+  //precéder le rejouage de DERNIERE_VERSION, qui réinstalle l'ancienne
+  // version de get_sales_summary() via migration_sales_summary.sql.
+  'migration_ca_caisse.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -202,6 +206,12 @@ const DERNIERE_VERSION = [
   // ⚠ suppliers passe après weighted_sales : celui-ci recrée
   //   products_with_supplier, et il lui faut la table suppliers pour ce faire.
   'migration_suppliers.sql',     // products_with_supplier (remise en état)
+  // En DERNIÈRE position de cette liste : ca_caisse redéfinit
+  // get_sales_summary(), record_credit_sale() et pay_customer_debt(), que
+  // migration_sales_summary.sql et migration_credit_fns.sql réinstallent dans
+  // leur version antérieure — celle qui compte le CA en brut. Sans cette
+  // remise en état, la rejouabilité laisserait trois écrans avec trois
+  // chiffres, ce qu'on vient précisément de corriger.
   'migration_profitability.sql',  // archive_product, restore_product, gel du cout
   'migration_expenses.sql',       // seed_expense_categories
   'migration_invitations.sql',    // redeem_invitation, purge_accepted_invitations
@@ -221,6 +231,7 @@ const DERNIERE_VERSION = [
   // remise en état s'arrête à migration_partial_payment.sql.
   // En DERNIÈRE position, comme la règle du dépôt l'impose.
   'migration_security.sql',
+  'migration_ca_caisse.sql',
 ];
 
 console.log(`\n▸ Rejouabilité (${REPLAYABLE.length} migrations incrémentales)`);
@@ -2586,15 +2597,39 @@ const synthese = (await q(
   `SELECT day::text AS day, revenue, cash, momo, tx
      FROM get_sales_summary('${SYN.a}', '${SYN.b}', 'UTC')`)).rows;
 
-// La référence est calculée en SQL de la façon dont le client le faisait en
-// JavaScript : SUM(total_amount), puis espèces et Mobile Money à part — les
-// crédits (payment_method = 'credit') n'entrent dans aucune des deux.
+// Référence en BASE DE CAISSE : amount_received, pas total_amount.
+//
+// Ce test disait autrefois « identique à l'ancien calcul client », et c'était
+// vrai — mais l'ancien calcul comptait ce qui était FACTURÉ. Trois écrans
+// affichaient alors trois chiffres pour la même journée (recette navigateur du
+// 04/10/2026 : 42 300 F en Ventes, 34 300 F en Rentabilité). La référence est
+// donc ce que l'application PROMET au commerçant : « une vente à crédit entre
+// dans le chiffre d'affaires quand vous encaissez ».
+//
+// cash et momo incluent les règlements de dettes par leur moyen de paiement,
+// sinon l'argent liquide reçu d'un client pour solder sa dette n'entrait dans
+// aucun des deux — et les modes de paiement ne correspondaient pas au total
+// affiché juste au-dessus.
 const refSyn = (await q(`
-  SELECT COALESCE(SUM(total_amount), 0) AS revenue,
+  SELECT COALESCE(SUM(amount_received), 0) AS revenue,
          COALESCE(SUM(CASE WHEN payment_method = 'cash'
-                           THEN total_amount ELSE 0 END), 0) AS cash,
+                           THEN amount_received ELSE 0 END), 0)
+           + COALESCE((SELECT SUM(cp.amount) FROM credit_payments cp
+                        WHERE cp.method = 'cash'
+                          AND cp.sale_id IN (
+                            SELECT id FROM sales
+                             WHERE created_at >= ('${SYN.a}'::timestamp AT TIME ZONE 'UTC')
+                               AND created_at <  (('${SYN.b}'::date + 1)::timestamp AT TIME ZONE 'UTC')
+                          )), 0) AS cash,
          COALESCE(SUM(CASE WHEN payment_method = 'momo'
-                           THEN total_amount ELSE 0 END), 0) AS momo,
+                           THEN amount_received ELSE 0 END), 0)
+           + COALESCE((SELECT SUM(cp.amount) FROM credit_payments cp
+                        WHERE cp.method = 'momo'
+                          AND cp.sale_id IN (
+                            SELECT id FROM sales
+                             WHERE created_at >= ('${SYN.a}'::timestamp AT TIME ZONE 'UTC')
+                               AND created_at <  (('${SYN.b}'::date + 1)::timestamp AT TIME ZONE 'UTC')
+                          )), 0) AS momo,
          COUNT(*) AS tx
     FROM sales
    WHERE created_at >= ('${SYN.a}'::timestamp AT TIME ZONE 'UTC')
@@ -2602,13 +2637,13 @@ const refSyn = (await q(`
 
 const somme = (col) => synthese.reduce((t, r) => t + Number(r[col]), 0);
 
-check('21a. total de période identique à l’ancien calcul client',
+check('21a. chiffre d’affaires en base de caisse (amount_received)',
   somme('revenue') === Number(refSyn.revenue),
   `fonction ${somme('revenue')} / SQL ${refSyn.revenue}`);
-check('21b. part espèces identique',
+check('21b. part espèces, règlements de dettes inclus',
   somme('cash') === Number(refSyn.cash),
   `fonction ${somme('cash')} / SQL ${refSyn.cash}`);
-check('21c. part Mobile Money identique',
+check('21c. part Mobile Money, règlements de dettes inclus',
   somme('momo') === Number(refSyn.momo),
   `fonction ${somme('momo')} / SQL ${refSyn.momo}`);
 check('21d. nombre de transactions identique',
@@ -3556,6 +3591,227 @@ await canWrite('27h. un caissier ne change pas les jours de service',
   const servi = Number((await q(`SELECT servi_aujourdhui FROM restaurant_menu_today
     WHERE id = '${RJ}'`)).rows[0].servi_aujourdhui);
   check('27i. remettre à null rend le plat servi tous les jours', Boolean(servi) === true);
+}
+
+const CAISSER2 = 'abababab-0000-4000-8000-0000000000ca';
+
+// ─── 28. Base de caisse : un seul chiffre d'affaires ──────────────────────
+//
+// Recette navigateur du 04/10/2026 : deux écrans, le même jour, la même
+// boutique, deux chiffres d'affaires. 42 300 F sur « Ventes », 34 300 F sur
+// « Rentabilité » — l'écart valait exactement la dette non réglée. La cause :
+// get_sales_summary() comptait total_amount, get_cash_flow() amount_received.
+//
+// Ces tests verrouillent la base de caisse ET le fait que les trois écrans ne
+// puissent plus diverger entre eux.
+console.log('\n▸ Base de caisse');
+
+const CA = 'dddddddd-0000-0000-0000-0000000000ca';
+{
+  // Boutique isolée : ces ventes ne doivent pas gonfler les totaux des autres
+  // sections du harnais.
+  await q(`INSERT INTO auth.users (id, email) VALUES ('${CA}', 'caisse@test.local')`);
+  await q(`INSERT INTO organizations (id, name, slug, plan, timezone)
+    VALUES ('${CA}', 'Boutique caisse', 'boutique-caisse', 'pro', 'Africa/Porto-Novo')`);
+  await q(`INSERT INTO products (id, user_id, name, price_sell, price_buy, stock_qty)
+    VALUES ('eeeeeeee-0000-0000-0000-0000000000e1', '${CA}', 'Article', 1000, 500, 100)`);
+}
+
+// Une vente à crédit de 9 000 avec 1 000 d'acompte : 8 000 restent dûs.
+await q(`SELECT set_config('request.jwt.claim.sub', '${CA}', false)`);
+
+// Totaux AVANT toute écriture de la section : la période couvre déjà les ventes
+// des sections précédentes : seules les variations prouvent le comportement.
+const _j = (await q(`SELECT (now() AT TIME ZONE 'UTC')::date::text d`)).rows[0].d;
+const _avant = (await q(`SELECT revenue::text r, cash::text c FROM get_sales_summary('${_j}','${_j}','UTC')`)).rows[0];
+const baseR0 = Number(_avant.r);
+const baseC0 = Number(_avant.c);
+
+const vCredit = await q(`SELECT record_credit_sale(
+  '[{"product_id":"eeeeeeee-0000-0000-0000-0000000000e1","quantity":9}]'::jsonb,
+  'Client Test', '0102030405', NULL, 1000)`);
+const creditId = vCredit.rows[0].record_credit_sale.id;
+const detteId = vCredit.rows[0].record_credit_sale.debt_id;
+
+// La période contient déjà les ventes des sections précédentes : on mesure
+// donc des ÉCARTS, pas des absolus. C'est ce que voit l'utilisateur — un total
+// qui bouge de 3 000 après un encaissement de 3 000.
+const jourCa = (await q(`SELECT (now() AT TIME ZONE 'UTC')::date::text AS d`)).rows[0].d;
+const ca = async () => {
+  const r = (await q(`SELECT revenue::text r, cash::text c, momo::text m
+    FROM get_sales_summary('${jourCa}','${jourCa}','UTC')`)).rows[0];
+  return { r: Number(r.r), c: Number(r.c), m: Number(r.m) };
+};
+
+const base = await ca();
+check('28a. une vente à crédit de 9 000 n’entre dans le CA que pour son acompte',
+  base.r - baseR0 === 1000, `+${base.r - baseR0}, attendu +1000`);
+check('28a2. et l’acompte va bien aux espèces',
+  base.c - baseC0 === 1000, `+${base.c - baseC0}, attendu +1000`);
+
+// Le règlement de 3 000, en Mobile Money : 3 000 de plus au CA, et 3 000 en momo.
+await q(`SELECT pay_customer_debt('${detteId}', 3000, 'momo')`);
+const momo3k = await ca();
+
+check('28b. encaisser 3 000 ajoute 3 000 au chiffre d’affaires',
+  momo3k.r - base.r === 3000, `+${momo3k.r - base.r}, attendu +3000`);
+check('28c. et ces 3 000 apparaissent en Mobile Money, pas en espèces',
+  momo3k.m - base.m === 3000 && momo3k.c === base.c,
+  `espèces ${base.c} → ${momo3k.c}, momo ${base.m} → ${momo3k.m}`);
+check('28d. le prix facturé (9 000) ne transparaît nulle part',
+  momo3k.r - baseR0 < 9000,
+  `CA de la boutique = ${momo3k.r - baseR0}, facturé 9000`);
+
+// Le même geste, en espèces cette fois : c'est le cas que le bug initial
+// ignorait — l'argent liquide d'un règlement n'entrait dans AUCUN total.
+await q(`SELECT pay_customer_debt('${detteId}', 2000, 'cash')`);
+const cash2k = await ca();
+check('28e. un règlement en espèces entre dans le total « Espèces »',
+  cash2k.c - momo3k.c === 2000,
+  `espèces ${momo3k.c} → ${cash2k.c}, attendu +2000`);
+
+// Le reliquat solde la vente.
+await q(`SELECT pay_customer_debt('${detteId}', 4000, 'cash')`);
+const cash4k = await ca();
+const solder = await q(`SELECT settled FROM sales WHERE id='${creditId}'`);
+
+check('28f. la vente est soldée',
+  solder.rows[0].settled === true || String(solder.rows[0].settled) === 't');
+check('28g. le CA atteint alors le montant facturé, 9 000',
+  cash4k.r - baseR0 === 9000, `CA = ${cash4k.r - baseR0}, attendu 9000`);
+// Espèces réellement rattachées : l'acompte de 1 000 à la vente, plus 2 000 du
+// deuxième règlement. Le troisième (4 000) ne solde que 3 000 de reste dû : son
+// excédent de 1 000 reste au client, sans vente rattachée, et ne doit entrer
+// dans aucun total — d'où 6 000 et non 7 000. C'est vérifié plus bas en 28n.
+check('28h. les espèces couvrent 1 000 + 2 000 + 3 000 = 6 000',
+  cash4k.c - baseC0 === 6000, `espèces ${baseC0} → ${cash4k.c}`);
+
+// Les trois écrans doivent afficher le MÊME chiffre. C'est le défaut qu'on
+// corrige : ils divergeaient parce que chacun lisait une colonne différente.
+{
+  // get_cash_flow() découpe avec le fuseau de l'organisation (Porto-Novo, soit
+  // UTC+1) : la fenêtre doit couvrir les deux dates possibles, sinon la vente
+  // du jour tombe juste après la borne et la fonction renvoie zéro.
+  const d0 = (await q(`SELECT ((now() AT TIME ZONE 'UTC')::date - 1)::date::text d`)).rows[0].d;
+  const flux = (await q(`SELECT revenue FROM get_cash_flow('${d0}'::date,'${jourCa}'::date)`))
+    .rows.reduce((t, r) => t + Number(r.revenue), 0);
+  const syn = (await q(
+    `SELECT revenue FROM get_sales_summary('${d0}','${jourCa}','UTC')`))
+    .rows.reduce((t, r) => t + Number(r.revenue), 0);
+
+  check('28i. synthèse et flux de caisse affichent le même chiffre',
+    syn === flux, `synthèse ${syn} / flux ${flux}`);
+
+  // L'invariant, énoncé directement : sur toute la période, le chiffre
+  // d'affaires rendu par la fonction est la somme de ce qui a été ENCAISSÉ.
+  // Avec la base brute (total_amount), cette égalité tient tant qu'aucune
+  // dette n'est ouverte — et cesse de tenir dès la première, ce qui est
+  // précisément le jour où le commerçant en a le plus besoin.
+  const sommeRecue = (await q(`
+    SELECT COALESCE(SUM(amount_received), 0)::text AS r,
+           COALESCE(SUM(total_amount), 0)::text    AS b
+      FROM sales
+     WHERE created_at >= ('${d0}'::timestamp AT TIME ZONE 'UTC')
+       AND created_at <  (('${jourCa}'::date + 1)::timestamp AT TIME ZONE 'UTC')`)).rows[0];
+
+  check('28j. le chiffre d’affaires de la période vaut exactement la somme encaissée',
+    Number(syn) === Number(sommeRecue.r),
+    `synthèse ${syn} / somme amount_received ${sommeRecue.r}`);
+  check('28k2. et il est STRICTEMENT inférieur au facturé, puisqu\'une dette est ouverte',
+    Number(syn) < Number(sommeRecue.b),
+    `encaissé ${syn} / facturé ${sommeRecue.b}`);
+}
+
+// Un geste qui solde plusieurs ventes reste UN versement annoncé au client.
+// Deux ventes ouvertes pour ce client : c'est le cas qui produit une
+// ventilation. Une seule vente ne le ferait pas — le règlement la solderait
+// entièrement et le geste n'aurait qu'une ligne.
+for (const qte of [2, 1]) {
+  await q(`SELECT record_credit_sale(
+    '[{"product_id":"eeeeeeee-0000-0000-0000-0000000000e1","quantity":${qte}}]'::jsonb,
+    'Client Test', '0102030405', NULL, 0)`);
+}
+// 10 chiffres : normalize_phone() ne préfixe que les numéros à 8 chiffres.
+const d2 = (await q(`SELECT id::text d FROM customer_debts
+  WHERE user_id='${CA}' AND phone='0102030405'`)).rows[0].d;
+{
+
+  const avant = (await q(`SELECT payments_count::text p, sales_count::text n
+    FROM get_customer_debts() WHERE debt_id='${d2}'`)).rows[0];
+
+  if (!avant) {
+    // Filet de sécurité : sans cette ligne, le block suivant planterait sur
+    // undefined et masquerait la cause réelle (dette soldée, plan, téléphone).
+    const toutes = await q(`SELECT debt_id::text d, total_due::text t
+      FROM get_customer_debts()`);
+    check('28k. la dette de test est bien listée', false,
+      `dette ${d2} absente — liste : ${JSON.stringify(toutes.rows)}`);
+  } else {
+    // Le règlement de 2 500 solde la vente de 2 000 (la plus ancienne) puis 500
+    // entame la suivante : un geste, deux lignes de ventilation.
+    await q(`SELECT pay_customer_debt('${d2}', 2500, 'cash')`);
+    const apres = (await q(`SELECT payments_count::text p, sales_count::text n
+      FROM get_customer_debts() WHERE debt_id='${d2}'`)).rows[0];
+
+    check('28k. un règlement ventilé reste un seul versement annoncé',
+      Number(apres.p) === Number(avant.p) + 1,
+      `${avant.p} → ${apres.p}`);
+    check('28l. et les deux ventes ont bien été traversées',
+      Number(apres.n) === Number(avant.n) - 1,
+      `${avant.n} → ${apres.n} vente(s) due(s)`);
+
+    // Un geste de 2 500, ventilé en 2 000 + 500 : une seule ligne par
+    // gesture_id, deux lignes par vente. C'est la preuve que la ventilation
+    // ne transforme pas un versement en deux dans l'historique du client.
+    const geste = await q(`
+      SELECT count(*)::text lignes, count(DISTINCT gesture_id)::text gestes
+        FROM credit_payments
+       WHERE user_id='${CA}' AND day = current_date AND sale_id IS NOT NULL
+         AND gesture_id IN (
+           SELECT gesture_id FROM credit_payments
+            WHERE user_id='${CA}' AND day = current_date
+              AND amount IN (2000, 500)
+              GROUP BY 1 HAVING count(*) = 2)`);
+    check('28l2. les deux lignes d\'un même geste partagent son identifiant',
+      Number(geste.rows[0].gestes) === 1 && Number(geste.rows[0].lignes) === 2,
+      `${geste.rows[0].lignes} ligne(s), ${geste.rows[0].gestes} geste(s)`);
+  }
+}
+
+// Un règlement supérieur à la dette reste un règlement, et n'entre dans
+// aucun total : il ne solde aucune vente.
+{
+  // 500 restent dus (le règlement précédent en a laissé). On verse 2 000 :
+  // 500 soldent la vente, 1 500 restent au client.
+  const _c = await ca();
+  const reste = await q(`SELECT pay_customer_debt('${detteId}', 2000, 'cash')`);
+  const apresExcedent = await ca();
+
+  check('28m. un versement supérieur à la dette laisse un crédit au client',
+    Number(reste.rows[0].pay_customer_debt.balance_after) === 0,
+    `solde ${reste.rows[0].pay_customer_debt.balance_after}`);
+  check('28n. seuls les 500 qui soldent la vente entrent au chiffre d’affaires',
+    apresExcedent.r - _c.r === 500 && apresExcedent.c - _c.c === 500,
+    `CA +${apresExcedent.r - _c.r}, espèces +${apresExcedent.c - _c.c}, attendu +500`);
+
+  const orphelin = await q(`SELECT count(*)::text c FROM credit_payments
+    WHERE sale_id IS NULL AND user_id='${CA}'`);
+  check('28n2. le crédit restant de 1 500 est enregistré sans vente rattachée',
+    Number(orphelin.rows[0].c) >= 1, `${orphelin.rows[0].c} ligne(s)`);
+}
+
+// Un caissier peut encaisser un règlement (il prend l'argent au comptoir), mais
+// seulement sur une vente de la boutique — et il ne peut pas écrire dans
+// credit_payments directement, ce qui passerait outre la répartition FIFO.
+{
+  await q(`INSERT INTO auth.users (id, email) VALUES ('${CAISSER2}', 'caisse2@test.local')`);
+  await q(`INSERT INTO business_members (owner_id, member_id, member_name, role)
+    VALUES ('${CA}', '${CAISSER2}', 'Caissier', 'employee')`);
+
+  await canWrite('28o. un caissier n’écrit pas un versement à la main',
+    `INSERT INTO credit_payments (debt_id, user_id, amount, day, method)
+     VALUES ('${d2}', '${CA}', 100, current_date, 'cash')`,
+    false, CAISSER2);
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);

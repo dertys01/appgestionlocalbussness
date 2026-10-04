@@ -95,21 +95,61 @@ passaient pas par le navigateur.
 
 | Gravité | Défaut | Corrigé |
 |---|---|---|
+| **CRITIQUE** | Trois écrans, deux chiffres d'affaires : 42 300 F en Ventes, 34 300 F en Rentabilité, l'écart valant la dette non réglée | base de caisse partout (`migration_ca_caisse.sql`) |
 | **ÉLEVÉ** | Champ quantité `type="number"` : la virgule est rejetée. « 2,5 kg » — le geste central d'un commerce au poids — vidait la saisie | `type="text"` + `inputMode="decimal"`, filtrage inchangé |
 | **ÉLEVÉ** | `Stock insuffisant` reste affiché après correction du panier : il expliquait un refus périmé et la vente suivante restait entachée d'un avertissement caduc | l'erreur suit tout ce qui décrit la vente |
 | **ÉLEVÉ** | Le reçu imprimait `2.5` et le badge `2.5`, à côté d'un stock écrit `48,4 pce` | `formatQty` partout |
+| **ÉLEVÉ** | Un règlement de dette en espèces n'entrait dans aucun total — le CA *baissait* le jour où un client payait en liquide | `credit_payments.sale_id` + `gesture_id` |
 | **MOYEN** | `relance'` — apostrophe parasite à la place de l'accent | `relancé` |
-| **MOYEN** | Vente espèces : `amountGiven` n'est pas envoyé, une vente « payée 3 000 sur 5 500 » est comptée entièrement encaissée | documenté, non corrigé — le serveur ne peut pas savoir l'intention |
+| **MOYEN** | Vente espèces : `amountGiven` n'est pas envoyé, une vente « payée 3 000 sur 5 500 » est comptée entièrement encaissée | l'écran propose désormais Crédit ; le serveur ne peut pas deviner l'intention |
+| **MOYEN** | `pay_customer_debt` demande le moyen, le module envoyait `'cash'` en dur | sélecteur Espèces / MoMo à côté du montant |
 | **FAIBLE** | Rentabilité : `Vendus 6,5` arrondi à 7 dans le tableau, alors que le graphe dit 6,5 | non corrigé |
 
 ### Ce qui reste ouvert
 
-- **Le CA n'a qu'une seule base, mais deux écrans la nomment différemment.**
-  `Rapports → Ventes` compte `SUM(total_amount)` (brut), `Rapports →
-  Rentabilité` compte `SUM(amount_received)` (encaissé). Sur la journée de la
-  recette : **34 300 F** d'un côté, **25 300 F** de l'autre — l'écart est
-  exactement la dette non réglée. L'écran Dettes promet pourtant « une vente à
-  crédit n'entre pas dans le chiffre d'affaires : elle y entre quand vous
-  encaissez ». **Deux des trois écrans contredisent la phrase du troisième.**
-  C'est le défaut le plus grave de cette recette et il n'est pas corrigé : le
-  choix (brut ou encaissé) est une décision de gestion, pas un bug.
+- ~~Le CA n'a qu'une seule base, mais deux écrans la nomment différemment.~~
+  **Corrigé** (`migration_ca_caisse.sql`, 04/10/2026) : les trois écrans lisent
+  la même fonction, en base de caisse. Vérifié après correction, sur la journée
+  de recette : Historique **36 450 F**, Rapports → Ventes **36 450 F**,
+  Rentabilité **36 450 F**.
+
+---
+
+## Les trois correctifs de fin de recette (04/10/2026)
+
+### 1. Base de caisse, partout
+
+`get_sales_summary()` comptait `SUM(total_amount)` — le **facturé** — là où
+`get_cash_flow()` et `get_product_profitability()` comptent
+`SUM(amount_received)` — l'**encaissé**. Trois écrans, deux chiffres, et
+l'écran Dettes qui promet par écrit une troisième définition.
+
+La fonction compte maintenant l'encaissé. Le repère n'est pas une préférence :
+c'est la phrase que l'application affiche déjà au commerçant, et que deux
+écrans sur trois contredisaient.
+
+Second volet, trouvé dans la même passe : **un règlement de dette encaissé en
+espèces n'entrait dans aucun total.** Ni « Espèces », ni « Mobile Money » — le
+commerçant qui recevait 8 000 F en liquide d'un client voyait son chiffre
+d'affaires diminuer ce jour-là. `credit_payments` ne disait pas quelle vente le
+règlement solderait ; il le dit maintenant (`sale_id`), et un geste qui solde
+deux ventes reste **un** versement dans l'historique du client (`gesture_id`).
+
+### 2. Vente espèces à moitié payée
+
+Le champ « Montant donné » n'était pas transmis : une vente de 5 500 F pour
+3 000 F POSÉS sur le comptoir était enregistrée comme **entièrement encaissée**.
+Le serveur ne peut pas deviner l'intention, mais l'interface pouvait ne pas
+proposer l'impasse. Le caissier voit maintenant sous « Reste à payer » que la
+vente sera comptée entière, avec le lien **Crédit** — la voie qui, elle, exige
+le nom et le téléphone, donc une dette recouvrable.
+
+### 3. Un caissier peut encaisser un règlement — et doit pouvoir dire comment
+
+`pay_customer_debt()` demande déjà le moyen de paiement ; le module Dettes
+envoyait `'cash'` en dur. Une boutique qui encaisse par Orange Money voyait cet
+argent entrer dans « Espèces ». Le choix est maintenant **à côté du montant**,
+là où le caissier compte l'argent.
+
+Vérifié : règlement de 1 000 F choisi en MoMo → CA +1 000, MoMo +1 000,
+Espèces inchangé.

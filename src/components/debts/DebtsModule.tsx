@@ -55,6 +55,17 @@ export function DebtsModule() {
   const [error, setError] = useState('');
   const [payingId, setPayingId] = useState<string | null>(null);
   const [amounts, setAmounts] = useState<Record<string, string>>({});
+  /**
+   * Moyen du règlement en cours de saisie.
+   *
+   * L'argent reçu d'un client ne peut pas être en Mobile Money ET en espèces.
+   * La fonction le demande déjà (p_method), et le module envoyait « cash » en
+   * dur : une boutique qui encaisse par Orange Money voyait cet argent entrer
+   * dans le total « Espèces » du rapport. Le choix est donc ici, à côté du
+   * montant — c'est de l'information que le caissier a sous les yeux au
+   * moment de compter.
+   */
+  const [method, setMethod] = useState<'cash' | 'momo'>('cash');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -87,10 +98,13 @@ export function DebtsModule() {
     setPayingId(debt.debt_id);
     setError('');
     try {
+      // Le moyen est choisi ici, pas par la fonction : c'est une décision de
+      // l'encaissement, et une boutique qui reçoit en Mobile Money doit le
+      // voir entrer dans le MoMo du rapport — pas dans « Espèces ».
       const { error: err } = await supabase.rpc('pay_customer_debt', {
         p_debt_id: debt.debt_id,
         p_amount: montant,
-        p_method: 'cash',
+        p_method: method,
       });
       if (err) throw new Error(readablePlanError(err.message));
       setAmounts((prev) => ({ ...prev, [debt.debt_id]: '' }));
@@ -235,6 +249,32 @@ export function DebtsModule() {
                           className="text-sm h-9"
                           aria-label={`Montant encaissé pour ${d.name ?? d.phone}`}
                         />
+                        {/* Le moyen se choisit au moment de compter l'argent,
+                            pas dans un réglage caché plus haut : c'est
+                            précisément l'information que le caissier a sous
+                            les yeux. */}
+                        <div
+                          role="radiogroup"
+                          aria-label={`Moyen du règlement pour ${d.name ?? d.phone}`}
+                          className="flex rounded-lg border border-slate-200 overflow-hidden shrink-0 h-9"
+                        >
+                          {(['cash', 'momo'] as const).map((m) => (
+                            <button
+                              key={m}
+                              type="button"
+                              role="radio"
+                              aria-checked={method === m}
+                              onClick={() => setMethod(m)}
+                              className={`px-2.5 text-xs font-medium transition-colors ${
+                                method === m
+                                  ? 'bg-indigo-600 text-white'
+                                  : 'bg-white text-slate-500 hover:bg-slate-50'
+                              }`}
+                            >
+                              {m === 'cash' ? 'Espèces' : 'MoMo'}
+                            </button>
+                          ))}
+                        </div>
                         <Button
                           onClick={() => pay(d)}
                           disabled={payingId === d.debt_id}

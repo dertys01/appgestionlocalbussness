@@ -134,6 +134,20 @@ export function ReportsModule() {
     [cashTotal, momoTotal]
   );
 
+  /**
+   * Ce que les deux modes de paiement ne couvrent pas.
+   *
+   * Les règlements de dettes d'avant la base de caisse ne sont pas ventilés par
+   * moyen : leur argent est bien dans le chiffre d'affaires, mais pas dans
+   * « Espèces » ni « Mobile Money ». L'écart est donc visible — un commerçant
+   * qui additionne les deux parts et retrouve moins que le total doit savoir
+   * pourquoi, sinon il cherche le bug chez lui pendant des semaines.
+   *
+   * Le dire vaut mieux que l'arrondir en silence : ces versements se
+   * ventilent d'eux-mêmes à la prochaine saisie.
+   */
+  const nonVentile = Math.max(0, totalRevenu - cashTotal - momoTotal);
+
   return (
     <div className="space-y-5">
       {error && (
@@ -284,6 +298,13 @@ export function ReportsModule() {
                 <div className="text-center text-xs text-slate-500 mt-1">
                   Panier moyen : <strong>{formatCFA(moyenneParVente)}</strong>
                 </div>
+                {nonVentile > 0 && (
+                  <p className="text-[11px] text-slate-400 text-center mt-1">
+                    {formatCFA(nonVentile)} de règlements de dettes anciens ne sont
+                    pas encore ventilés par moyen : ils sont dans le chiffre
+                    d&apos;affaires, pas dans les deux parts ci-dessus.
+                  </p>
+                )}
               </>
             )}
           </CardContent>

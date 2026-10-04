@@ -63,6 +63,23 @@ point à vérifier après un `git pull`.
 | 18 | `migration_credit_fns.sql` | `record_credit_sale()`, `pay_customer_debt()`, `get_customer_debts()` |
 | 18b | `migration_sales_summary.sql` | `get_sales_summary()`, `get_top_products()` — totaux et top produits d'une période sans télécharger les ventes |
 | 19 | `migration_security.sql` | RLS sur `rate_limits`, verrou de `organizations.plan`, index unique de `subscriptions`, policies de `business_members`, réparation de la suppression de compte (jetons `auth.users`, FK différées), **retrait de la clé `anon`** (section 7) |
+| 19b | `migration_ca_caisse.sql` | **Base de caisse** : `credit_payments.sale_id` + `gesture_id`, `get_sales_summary()` en `SUM(amount_received)`, `pay_customer_debt()` ventilé par vente, `get_customer_debts()` en `COUNT(DISTINCT gesture_id)` |
+
+**Le chiffre d'affaires est en base de caisse, partout.** Une seule
+définition : la somme de ce qui est réellement rentré (`sales.amount_received`),
+jamais de ce qui a été facturé (`total_amount`). Les trois écrans qui affichent un
+chiffre — Historique des ventes, Rapports → Ventes, Rentabilité — lisent la même
+fonction, donc ils ne peuvent pas diverger. C'est aussi ce que promet l'écran
+Dettes au commerçant : *« une vente à crédit n'entre pas dans le chiffre
+d'affaires : elle y entre quand vous encaissez »*.
+
+Un règlement de dette entre dans les modes de paiement **par son moyen** :
+`credit_payments.sale_id` dit quelle vente il solde, `gesture_id` dit à quel geste
+il appartient — un règlement qui solde deux ventes est ventilé en deux lignes
+mais reste **un** versement dans l'historique du client. Les versements
+antérieurs à cette migration ne sont pas ventilés (seuls les acomptes à la vente
+sont rattachables sans ambiguïté) : l'écart est affiché sous le graphique des
+modes de paiement plutôt que perdu en silence.
 
 `migration_security.sql` **doit fermer la série** : elle réécrit ce que les
 migrations précédentes ont posé (policies de `business_members`, garde de
