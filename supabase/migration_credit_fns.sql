@@ -24,6 +24,7 @@ CREATE OR REPLACE FUNCTION normalize_phone(p_phone text)
 RETURNS text
 LANGUAGE plpgsql
 IMMUTABLE
+SET search_path = public
 AS $$
 DECLARE
   v_digits text;
