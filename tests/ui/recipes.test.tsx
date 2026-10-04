@@ -146,7 +146,9 @@ describe('RecipesModule — le coût de revient d\'un plat', () => {
 
     fireEvent.change(screen.getByLabelText(/Ingrédient à ajouter/i), { target: { value: 'p2' } });
     fireEvent.change(screen.getByLabelText(/Quantité pour une portion/i), { target: { value: '0,3' } });
-    fireEvent.click(screen.getByRole('button', { name: /Ajouter/i }));
+    // Deux boutons « Ajouter » coexistent (option et ingrédient) : le libellé
+// exact lève l'ambiguïté.
+    fireEvent.click(screen.getByRole('button', { name: "Ajouter l'ingrédient" }));
 
     await waitFor(() => expect(rpc).toHaveBeenCalledWith('add_recipe_ingredient', {
       p_dish_id: 'p1',
@@ -169,7 +171,7 @@ describe('RecipesModule — le coût de revient d\'un plat', () => {
     await waitFor(() => expect(screen.getByLabelText(/Ingrédient à ajouter/i)).toBeInTheDocument());
 
     fireEvent.change(screen.getByLabelText(/Ingrédient à ajouter/i), { target: { value: 'p2' } });
-    fireEvent.click(screen.getByRole('button', { name: /Ajouter/i }));
+    fireEvent.click(screen.getByRole('button', { name: "Ajouter l'ingrédient" }));
 
     await waitFor(() => expect(screen.getByText(/formerait un cercle/i)).toBeInTheDocument());
   });

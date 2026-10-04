@@ -1081,6 +1081,7 @@ et encaisser en salle ; le 15 est un gain de pilotage, le 16 du confort.
 
 | Date | Commit | Objet |
 |---|---|---|
+| 04/10/2026 | — | **Sprint 16 (suite) — carte de la semaine, impression cuisine, carte d'options** : `products.menu_days` + vue `restaurant_menu_today`, `printKitchenTicket()` (72 mm, jamais de prix, HTML échappé), création des options depuis Recettes · section 27 du harnais, **9 contrôles SQL** · tests **144 → 153** · `RECETTE-RESTAURANT.md` |
 | 04/10/2026 | — | **Sprint 16 — restaurant : finitions** : modificateurs (« bien cuit », « double portion ») au prix et au ticket cuisine, plat du jour, **pourboire hors du chiffre d'affaires** (une manne n'est pas une recette), réservations · section 26 du harnais, **18 contrôles SQL** · tests **142 → 144** |
 | 04/10/2026 | — | **Sprint 15 — restaurant : coût de matière** : table `recipe_ingredients`, `product_cost()` récursif (un plat peut contenir un plat), deux déclencheurs sur `sale_items` (coût figé = recette, ingrédients décrémentés), `add_recipe_ingredient()` qui refuse les cycles, vue `recipe_costs` · section 25 du harnais, **14 contrôles SQL** · tests **136 → 142** |
 | 04/10/2026 | — | **Sprint 14 — restaurant : clôture d'addition** : `close_table_order()` transforme les lignes de commande en vente via `create_sale()`, ticket de cuisine **sans prix**, `send_order_items()`. Le fractionnement n'écrit **qu'une vente** · section 24 du harnais, **21 contrôles SQL** · tests **134 → 136** |

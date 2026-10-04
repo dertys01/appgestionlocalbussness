@@ -23,6 +23,14 @@ export interface Product {
   archived_at: string | null;
   /** Fournisseur principal ; null tant qu'aucun n'est choisi. */
   supplier_id: string | null;
+  /**
+   * Jours de service : 0 = dimanche … 6 = samedi. `null` = tous les jours.
+   *
+   * Restaurant uniquement. Un plat absent des jours de service ne doit pas
+   * être proposé à la commande : le client commande ce qu'il voit, et la
+   * cuisine ne cuisine pas ce qui n'est pas au menu.
+   */
+  menu_days: number[] | null;
   created_at: string;
   updated_at: string;
 }

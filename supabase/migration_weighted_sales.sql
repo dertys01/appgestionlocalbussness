@@ -54,6 +54,13 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS unit text NOT NULL DEFAULT 'pce';
 --
 DROP VIEW IF EXISTS products_with_supplier;
 
+-- Les vues du module restaurant dépendent elles aussi de products : recipe_costs
+-- et restaurant_menu_today lisent son stock et son prix. Sans ce DROP, le même
+-- ALTER échoue en 0A000 sur une base où ces vues existent déjà — c'est-à-dire
+-- sur toute base ayant déjà reçu les sprints 15 et 17, c'est-à-dire la nôtre.
+DROP VIEW IF EXISTS recipe_costs;
+DROP VIEW IF EXISTS restaurant_menu_today;
+
 -- ⚠ Le type n'est changé QUE si la colonne est encore entière : le refaire
 --   échoue en 0A000 pour la même raison.
 DO $$

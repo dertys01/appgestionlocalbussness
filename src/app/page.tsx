@@ -274,7 +274,7 @@ export default function HomePage() {
               <h2 className="text-xl font-bold text-slate-800">Salle</h2>
               {/* La salle ne vend rien : le stock n'est touché qu'à la clôture
                   (Sprint 14), donc aucun rafraîchissement des produits ici. */}
-              <FloorModule products={products} />
+              <FloorModule products={products} onChanged={fetchProducts} />
             </div>
           )}
 

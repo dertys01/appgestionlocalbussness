@@ -63,6 +63,8 @@ const ORDER = [
   'migration_recipes.sql',
   // Modificateurs, plat du jour, pourboire, réservations.
   'migration_restaurant_finitions.sql',
+  // Carte par jour de la semaine : un plat du vendredi le mardi, c'est faux.
+  'migration_menu_days.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -188,7 +190,15 @@ const DERNIERE_VERSION = [
   // Fonctions redefinies par plusieurs migrations : seule la derniere compte.
   'migration_sales_rpc.sql',      // bump_rate_limit, purge_rate_limits
   'migration_price_override.sql', // create_sale (prix negocié)
+  // ⚠ weighted_sales supprime recipe_costs et restaurant_menu_today avant
+  //   leurs ALTER : ces deux vues lisent products.stock_qty. Comme il est
+  //   rejoué APRÈS migration_recipes.sql dans cette liste, il les efface sans
+  //   qu'elles soient recréées — et le test 25k échouait sur une vue absente
+  //   alors que la migration était bien appliquée. Les deux migrations doivent
+  //   suivre, dans cet ordre précis.
   'migration_weighted_sales.sql', // create_sale (NUMERIC) + vue fournisseur
+  'migration_recipes.sql',       // recipe_costs (reprise après le DROP)
+  'migration_menu_days.sql',     // restaurant_menu_today (idem)
   // ⚠ suppliers passe après weighted_sales : celui-ci recrée
   //   products_with_supplier, et il lui faut la table suppliers pour ce faire.
   'migration_suppliers.sql',     // products_with_supplier (remise en état)
@@ -3445,6 +3455,81 @@ await canWrite('26q. un caissier peut prendre une réservation',
 // ...mais il ne voit pas les réservations d'un autre restaurant.
 await canRead('26r. un autre restaurant ne voit pas les réservations',
   `SELECT count(*) FROM restaurant_reservations WHERE owner_id='${RESTO}'`, false, PATRON);
+
+// ─── 27. Restaurant : carte par jour de la semaine ──────────
+// Une carte qui propose un plat non servi est pire qu'une carte courte : le
+// client commande ce qu'il voit, et la cuisine ne cuisine pas ce qui n'est pas
+// au menu.
+console.log('\n▸ Restaurant — carte de la semaine');
+
+// 27a. Un jour hors 0-6 est refusé, un doublon aussi (le tableau ne doit pas
+// se remplir de 5, 5, 5 par trois clics répétés).
+let jourFaux = false;
+try {
+  await q(`UPDATE products SET menu_days = ARRAY[1, 9] WHERE id = '${RJ}'`);
+} catch { jourFaux = true; }
+check('27a. un jour de semaine inexistant est refusé', jourFaux);
+
+let vide = false;
+try {
+  await q(`UPDATE products SET menu_days = ARRAY[]::int[] WHERE id = '${RJ}'`);
+} catch { vide = true; }
+check('27b. un tableau de jours vide est refusé', vide);
+
+// 27c. NULL = tous les jours : le défaut, pour qu'un plat créé depuis Stock
+// reste servi sans configuration.
+check('27c. NULL signifie tous les jours',
+  (await q(`SELECT menu_days FROM products WHERE id='${RH}'`)).rows[0].menu_days === null);
+
+// 27d. Les jours se pose et se lisent, et la vue du jour suit.
+{
+  // 5 = vendredi, 6 = samedi.
+  await q(`UPDATE products SET menu_days = ARRAY[5, 6] WHERE id = '${RJ}'`);
+  const v = (await q(`SELECT menu_days FROM products WHERE id='${RJ}'`)).rows[0].menu_days;
+  check('27d. les jours de service se posent',
+    Array.isArray(v) && v.includes(5) && v.includes(6), `menu_days ${JSON.stringify(v)}`);
+
+  const jour = (await q(`SELECT extract(dow FROM now())::int AS d`)).rows[0].d;
+  const servi = Number((await q(`SELECT servi_aujourdhui FROM restaurant_menu_today
+    WHERE id = '${RJ}'`)).rows[0].servi_aujourdhui);
+
+  // Le test ne dépend pas du jour où il tourne : il vérifie la COHÉRENCE entre
+  // la colonne et la vue, pas une date figée.
+  // PGlite renvoie le boolean du SQL sous forme de 0/1, pas true/false :
+  // la comparaison se fait donc en booléen des deux côtés.
+  const attendu = jour === 5 || jour === 6;
+  check('27e. la carte du jour suit les jours de service',
+    Boolean(servi) === attendu, `aujourd'hui ${jour}, servi=${servi}, attendu=${attendu}`);
+
+  // Un plat sans jours reste servi tous les jours.
+  const riz = (await q(`SELECT servi_aujourdhui FROM restaurant_menu_today
+    WHERE id = '${RR}'`)).rows[0].servi_aujourdhui;
+  check('27f. un plat sans jours est servi tous les jours', Boolean(riz) === true);
+}
+
+// 27g. La vue du jour reste en security_invoker : en DEFINER elle exposerait la
+// carte d'un autre restaurant.
+{
+  const def = (await q(`
+    SELECT coalesce(c.reloptions::text, '') AS o
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relname = 'restaurant_menu_today'`)).rows[0].o;
+  check('27g. restaurant_menu_today reste en security_invoker',
+    def.includes('security_invoker=true'), `options : ${def || '(aucune)'}`);
+}
+
+// 27h. Un caissier ne change pas la carte : c'est une décision de patron.
+await canWrite('27h. un caissier ne change pas les jours de service',
+  `UPDATE products SET menu_days = ARRAY[1,2,3] WHERE id = '${RJ}'`, false, SERVEUR);
+
+// 27i. Retirer tous les jours revient à « tous les jours » : c'est ce que fait
+// l'interface, et un tableau vide serait refusé par la contrainte.
+{
+  await q(`UPDATE products SET menu_days = NULL WHERE id = '${RJ}'`);
+  const servi = Number((await q(`SELECT servi_aujourdhui FROM restaurant_menu_today
+    WHERE id = '${RJ}'`)).rows[0].servi_aujourdhui);
+  check('27i. remettre à null rend le plat servi tous les jours', Boolean(servi) === true);
+}
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
 process.exit(failures ? 1 : 0);

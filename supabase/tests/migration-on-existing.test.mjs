@@ -28,6 +28,7 @@ const ORDER = [
   'migration_table_checkout.sql',
   'migration_recipes.sql',
   'migration_restaurant_finitions.sql',
+  'migration_menu_days.sql',
 ];
 
 let failed = 0;
@@ -76,6 +77,11 @@ check('la vue products_with_supplier existe', vue === 1, `${vue}`);
 // l'état de la base de l'utilisateur au moment où il colle le fichier.
 await db.exec(`
   DROP VIEW IF EXISTS products_with_supplier;
+  -- Les vues du module restaurant lisent aussi products.stock_qty : sans ce
+  -- DROP, l'ALTER échoue en 0A000 sur la base réelle — celle qui a déjà reçu
+  -- les sprints 15 et 17. C'est exactement ce que teste ce fichier.
+  DROP VIEW IF EXISTS recipe_costs;
+  DROP VIEW IF EXISTS restaurant_menu_today;
   ALTER TABLE sale_items   ALTER COLUMN quantity TYPE integer;
   ALTER TABLE products     ALTER COLUMN stock_qty TYPE integer;
   ALTER TABLE products     ALTER COLUMN min_stock_level TYPE integer;

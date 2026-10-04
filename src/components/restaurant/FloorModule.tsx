@@ -13,6 +13,8 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { logActivity } from '@/lib/utils/activity';
 import { formatCFA, formatQty } from '@/lib/utils/currency';
+import { printKitchenTicket } from '@/lib/utils/kitchen';
+import { platsServisAujourdhui } from '@/lib/utils/menu';
 import { lireMontant } from '@/lib/utils/nombres';
 import type { Product } from '@/types';
 
@@ -71,8 +73,26 @@ const minutesDepuis = (iso: string | null) => {
   return Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
 };
 
-export function FloorModule({ products }: { products: Product[] }) {
-  const { supabase, ownerId, actorName, user, canManageProducts, isEmployee } = useSupabase();
+/** getDay() : 0 = dimanche. L'ordre commence donc par lundi, comme un menu. */
+const JOURS = [
+  { valeur: 1, court: 'Lun' },
+  { valeur: 2, court: 'Mar' },
+  { valeur: 3, court: 'Mer' },
+  { valeur: 4, court: 'Jeu' },
+  { valeur: 5, court: 'Ven' },
+  { valeur: 6, court: 'Sam' },
+  { valeur: 0, court: 'Dim' },
+] as const;
+
+export function FloorModule({
+  products,
+  onChanged,
+}: {
+  products: Product[];
+  /** Rafraîchit le catalogue après une modification de carte. */
+  onChanged?: () => void;
+}) {
+  const { supabase, ownerId, actorName, user, canManageProducts, isEmployee, org } = useSupabase();
 
   const [tables, setTables] = useState<TableRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -100,6 +120,9 @@ export function FloorModule({ products }: { products: Product[] }) {
   const [modifiers, setModifiers] = useState<Modifier[]>([]);
   const [modSelection, setModSelection] = useState('');
   const [platChoisi, setPlatChoisi] = useState<Product | null>(null);
+  // Carte du jour : un restaurant ne sert pas le poisson le mardi. Sans ce
+  // filtre, la commande propose des plats que la cuisine ne cuisine pas.
+  const [menuDuJour, setMenuDuJour] = useState(true);
 
   // Le client Supabase n'est typé sur aucun schéma : les noms de colonnes ne
   // sont pas vérifiés. Une petite surface typée vaut mieux que des `any`.
@@ -297,7 +320,7 @@ export function FloorModule({ products }: { products: Product[] }) {
   // serveur ne doive pas épeler un plat au client.
   const resultats = useMemo(() => {
     const q = search.trim().toLowerCase();
-    const actifs = products.filter((p) => p.is_active !== false);
+    const actifs = platsServisAujourdhui(products, menuDuJour);
     if (!q) return actifs.slice(0, 12);
     const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
     const nq = norm(q);
@@ -313,7 +336,7 @@ export function FloorModule({ products }: { products: Product[] }) {
       .sort((a, b) => a.rang - b.rang)
       .map((x) => x.p)
       .slice(0, 12);
-  }, [products, search]);
+  }, [products, search, menuDuJour]);
 
   // Le supplément des modificateurs compte dans le total affiché : c'est le
 // montant que la table va payer. La commande ne le contient pas encore tant que
@@ -394,6 +417,39 @@ export function FloorModule({ products }: { products: Product[] }) {
     setBusy(false);
     if (err) { setError(err.message); return; }
     await loadLines(orderId);
+  };
+
+  /**
+   * Le ticket de cuisine.
+   *
+   * On imprime AVANT de marquer « parti » : un ticket jeté parce que
+   * l'impression a échoué est récupérable, une commande partie sans papier
+   * ne l'est pas. Les lignes viennent de l'état affiché, pas d'une requête
+   * supplémentaire — ce sont exactement celles que le serveur vient de lire.
+   */
+  const imprimerTicket = () => {
+    if (!org || !orderId) return;
+    const ok = printKitchenTicket({
+      orderId,
+      tableName: tableOuverte?.name ?? null,
+      zone: tableOuverte?.zone || null,
+      openedAt: tableOuverte?.opened_at ?? null,
+      items: lines.map((l) => ({
+        product_name: l.name ?? 'Plat',
+        quantity: Number(l.quantity),
+        note: l.note,
+        modifier: l.modifier,
+        status: l.status,
+      })),
+      org,
+    });
+    if (!ok) {
+      // Popup bloquée : on ne marque rien, et on le dit. Le serveur doit
+      // savoir qu'il faut imprimer depuis un autre écran.
+      setError('Le navigateur a bloqué la fenêtre d\'impression. Autorisez les fenêtres pour cet site, puis réessayez.');
+      return;
+    }
+    void sendToKitchen();
   };
 
   // ── Aucune table : le module n'a rien à montrer tant que la salle est vide
@@ -608,11 +664,11 @@ export function FloorModule({ products }: { products: Product[] }) {
                   <Button
                     variant="outline"
                     size="sm"
-                    onClick={sendToKitchen}
-                    disabled={busy || !lines.some((l) => l.status === 'new')}
+                    onClick={imprimerTicket}
+                    disabled={busy || lines.length === 0}
                     className="gap-1.5"
                   >
-                    <ChefHat className="h-3.5 w-3.5" /> Tout est parti en cuisine
+                    <ChefHat className="h-3.5 w-3.5" /> Imprimer le ticket cuisine
                   </Button>
 
                   {!splitOpen ? (
@@ -665,9 +721,10 @@ export function FloorModule({ products }: { products: Product[] }) {
                   </div>
                 )}
 
-                {/* Pourboire : laissé sur la table, hors application. On le note
-                    pour le savoir, sans l'ajouter au chiffre d'affaires — sinon
-                    les rapports Gateway mensuels surestimeraient le CA. */}
+                {/* Pourboire : laissé sur la table, hors application. On le note pour le
+                    savoir, sans l'ajouter au chiffre d'affaires — sinon les
+                    rapports mensuels surestimeraient le CA, et les frais
+                    seraient calculés sur une recette qui n'a jamais eu lieu. */}
                 <div className="flex items-center gap-2">
                   <label htmlFor="tip" className="text-xs font-medium text-slate-600 shrink-0">
                     Pourboire
@@ -721,13 +778,78 @@ export function FloorModule({ products }: { products: Product[] }) {
             )}
 
             {/* Ajout */}
+            {/* Menu du jour : le patron règle la carte d'ici, ou depuis Recettes.
+          Un plat servi tous les jours garde menu_days = null. */}
+      {peutEncaisser && platChoisi && (
+        <div className="rounded-lg border border-slate-200 p-3 space-y-2">
+          <p className="text-xs font-medium text-slate-700">
+            Servi le… <span className="text-slate-500">(tous les jours par défaut)</span>
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {JOURS.map((j) => {
+              const jours = ((platChoisi as { menu_days?: number[] | null }).menu_days ?? null);
+              const actif = jours === null || jours.includes(j.valeur);
+              return (
+                <button
+                  key={j.valeur}
+                  type="button"
+                  aria-pressed={actif}
+                  onClick={async () => {
+                    const base = jours ?? JOURS.map((x) => x.valeur);
+                    const suivant = actif ? base.filter((d) => d !== j.valeur) : [...base, j.valeur];
+                    const value = suivant.length === 0 || suivant.length === 7 ? null : suivant;
+                    setPlatChoisi({ ...platChoisi, menu_days: value });
+                    await db.from('products').update({ menu_days: value }).eq('id', platChoisi.id);
+                    await onChanged?.();
+                  }}
+                  className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                    actif
+                      ? 'border-emerald-500 bg-emerald-600 text-white'
+                      : 'border-slate-200 bg-white text-slate-500'
+                  }`}
+                >
+                  {j.court}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Carte du jour active : des plats du catalogue peuvent ne pas être servis
+              aujourd'hui. Il faut pouvoir les proposer quand même — le client
+              demande précisément celui qui n'est pas au menu. */}
+            {!menuDuJour && (
+              <p className="text-[11px] text-amber-700">
+                Toute la carte est proposée, y compris les plats non servis
+                aujourd&apos;hui.
+              </p>
+            )}
+
             <div className="space-y-2 pt-1">
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Chercher un plat…"
-                aria-label="Chercher un plat à commander"
-              />
+              <div className="flex items-center gap-2">
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Chercher un plat…"
+                  aria-label="Chercher un plat à commander"
+                />
+                <button
+                  type="button"
+                  onClick={() => setMenuDuJour((v) => !v)}
+                  aria-pressed={!menuDuJour}
+                  title={menuDuJour
+                    ? 'Carte du jour : seuls les plats servis aujourd\'hui sont proposés'
+                    : 'Toute la carte est proposée, y compris les plats du jour'}
+                  className={`shrink-0 rounded-lg border px-2 py-2 text-xs font-medium transition-colors ${
+                    menuDuJour
+                      ? 'border-emerald-300 bg-emerald-50 text-emerald-700'
+                      : 'border-slate-200 bg-white text-slate-500'
+                  }`}
+                >
+                  Carte du jour
+                </button>
+              </div>
               <div className="flex gap-2">
                 <Input
                   value={qty}
