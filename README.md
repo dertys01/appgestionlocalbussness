@@ -182,7 +182,7 @@ le premier cas avant de le subir.
 npm run test:db
 ```
 
-Le harnais applique les 24 migrations sur un Postgres réel (PGlite, WASM) puis
+Le harnais applique les 25 migrations sur un Postgres réel (PGlite, WASM) puis
 vérifie le comportement : atomicité de `create_sale`, cas de stock insuffisant,
 isolation entre organisations, droits employé/patron, rate limiting. C'est le
 seul moyen fiable de valider du SQL avant de le pousser en production — un

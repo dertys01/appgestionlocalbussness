@@ -52,6 +52,7 @@ const ORDER = [
   'migration_security.sql',
   // claim_webhook_event() : idempotence atomique du webhook Stripe.
   'migration_webhook_claim.sql',
+  'migration_fk_indexes.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
