@@ -1,7 +1,9 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { UtensilsCrossed, Loader2, Plus, Users, Clock, CheckCircle2, PackageX } from 'lucide-react';
+import {
+  UtensilsCrossed, Loader2, Plus, Users, Clock, CheckCircle2, PackageX, ChefHat,
+} from 'lucide-react';
 
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { Card, CardContent } from '@/components/ui/card';
@@ -58,7 +60,7 @@ const minutesDepuis = (iso: string | null) => {
 };
 
 export function FloorModule({ products }: { products: Product[] }) {
-  const { supabase, ownerId, actorName, user, canManageProducts } = useSupabase();
+  const { supabase, ownerId, actorName, user, canManageProducts, isEmployee } = useSupabase();
 
   const [tables, setTables] = useState<TableRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -267,6 +269,62 @@ export function FloorModule({ products }: { products: Product[] }) {
 
   const totalLignes = lines.reduce((n, l) => n + Number(l.quantity) * Number(l.unit_price), 0);
 
+  // ── Clôture ────────────────────────────────────────────────
+  // Fractionner ne multiplie PAS les ventes : trois convives à 12 000 F font
+  // une vente de 36 000 F, répartie en 3 parts pour l'affichage. La part de
+  // chacun est donc purement visuelle, et c'est le total qu'on encaisse.
+  const [splitCount, setSplitCount] = useState(1);
+  const [splitOpen, setSplitOpen] = useState(false);
+  const [payment, setPayment] = useState<'cash' | 'momo'>('cash');
+  const [closing, setClosing] = useState(false);
+  const [closed, setClosed] = useState<{ total: number; paid: number; invoice: string | null; saleId: string; perShare: number } | null>(null);
+  // Le caissier encaisse en salle mais ne solde pas : la clôture écrit dans
+  // sales, c'est la vente du patron. Le patron peut, lui.
+  const peutEncaisser = !isEmployee || canManageProducts;
+
+  const part = splitCount > 0 ? Math.round((totalLignes / splitCount) * 100) / 100 : 0;
+
+  const closeOrder = async () => {
+    if (!orderId) return;
+    setClosing(true);
+    setError('');
+    const { data, error: err } = await db.rpc('close_table_order', {
+      p_order_id: orderId,
+      p_payment_method: payment,
+      p_split_count: splitCount,
+      // Une addition à crédit exige un numéro : close_table_order() le refuse
+      // sans, sinon la dette ne serait rattachable à personne. Le Sprint 16
+      // ouvrira le crédit depuis cet écran ; ici on ne l'expose pas.
+      p_client_phone: null,
+    });
+    setClosing(false);
+    if (err) { setError(err.message); return; }
+    const r = data as { total_amount: number; amount_paid: number; invoice_number: string | null; sale_id: string; per_share: number };
+    setClosed({
+      total: Number(r.total_amount),
+      paid: Number(r.amount_paid),
+      invoice: r.invoice_number ?? null,
+      saleId: r.sale_id,
+      perShare: Number(r.per_share),
+    });
+    // La commande disparaît du plan : la table redevient libre.
+    setOrderId(null);
+    setOuverte(null);
+    setLines([]);
+    setSplitOpen(false);
+    await loadTables();
+  };
+
+  const sendToKitchen = async () => {
+    if (!orderId) return;
+    setBusy(true);
+    setError('');
+    const { error: err } = await db.rpc('send_order_items', { p_order_id: orderId });
+    setBusy(false);
+    if (err) { setError(err.message); return; }
+    await loadLines(orderId);
+  };
+
   // ── Aucune table : le module n'a rien à montrer tant que la salle est vide
   if (!loading && tables.length === 0) {
     return (
@@ -309,6 +367,28 @@ export function FloorModule({ products }: { products: Product[] }) {
     <div className="space-y-4">
       {error && (
         <p className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{error}</p>
+      )}
+
+      {/* ── Addition encaissée ── */}
+      {closed && (
+        <Card className="border-emerald-200 bg-emerald-50">
+          <CardContent className="p-4 space-y-1">
+            <p className="text-sm font-semibold text-emerald-800 flex items-center gap-1.5">
+              <CheckCircle2 className="h-4 w-4" /> Addition encaissée
+            </p>
+            <p className="text-xs text-emerald-700">
+              {formatCFA(closed.total)}
+              {closed.invoice ? ` · facture ${closed.invoice}` : ''}
+              {closed.perShare !== closed.total ? ` · ${formatCFA(closed.perShare)} par part` : ''}
+            </p>
+            <button
+              onClick={() => setClosed(null)}
+              className="text-xs text-emerald-700 underline"
+            >
+              Fermer
+            </button>
+          </CardContent>
+        </Card>
       )}
 
       {/* ── Plan de la salle ── */}
@@ -438,6 +518,105 @@ export function FloorModule({ products }: { products: Product[] }) {
                 <div className="flex items-center justify-between px-3 py-2 bg-slate-50 rounded-b-lg">
                   <span className="text-sm font-medium text-slate-600">Total</span>
                   <span className="font-bold text-indigo-600">{formatCFA(totalLignes)}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Encaissement */}
+            {lines.length > 0 && (
+              <div className="space-y-2 pt-2 border-t border-slate-100">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={sendToKitchen}
+                    disabled={busy || !lines.some((l) => l.status === 'new')}
+                    className="gap-1.5"
+                  >
+                    <ChefHat className="h-3.5 w-3.5" /> Tout est parti en cuisine
+                  </Button>
+
+                  {!splitOpen ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => { // 2 parts par défaut : c'est le cas le plus fréquent (« on est deux »), et
+                      // l'utilisateur ajuste immédiatement s'il est trois.
+                      setSplitCount(2); setSplitOpen(true); }}
+                      className="gap-1.5"
+                    >
+                      <Users className="h-3.5 w-3.5" /> Partager l&apos;addition
+                    </Button>
+                  ) : null}
+                </div>
+
+                {splitOpen && (
+                  <div className="rounded-lg border border-slate-200 p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-slate-600">Répartir en</span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => setSplitCount((n) => Math.max(2, n - 1))}
+                          aria-label="Moins de parts"
+                          className="h-7 w-7 rounded-lg border border-slate-200 text-slate-600"
+                        >
+                          −
+                        </button>
+                        <span className="font-semibold text-slate-800 w-6 text-center">{splitCount}</span>
+                        <button
+                          onClick={() => setSplitCount((n) => Math.min(20, n + 1))}
+                          aria-label="Plus de parts"
+                          className="h-7 w-7 rounded-lg border border-slate-200 text-slate-600"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      {formatCFA(part)} par personne. L&apos;addition reste
+                      {' '}<strong>{formatCFA(totalLignes)}</strong> : une seule vente est écrite,
+                      le partage est pour l&apos;affichage.
+                    </p>
+                    <button
+                      onClick={() => setSplitOpen(false)}
+                      className="text-xs text-slate-500 hover:text-slate-700 underline"
+                    >
+                      Annuler le partage
+                    </button>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="flex rounded-lg border border-slate-200 overflow-hidden">
+                    {(['cash', 'momo'] as const).map((m) => (
+                      <button
+                        key={m}
+                        onClick={() => setPayment(m)}
+                        aria-pressed={payment === m}
+                        className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                          payment === m ? 'bg-indigo-600 text-white' : 'bg-white text-slate-600'
+                        }`}
+                      >
+                        {m === 'cash' ? 'Espèces' : 'Mobile Money'}
+                      </button>
+                    ))}
+                  </div>
+
+                  {peutEncaisser ? (
+                    <Button
+                      onClick={closeOrder}
+                      disabled={closing}
+                      className="bg-emerald-700 hover:bg-emerald-800 gap-2"
+                    >
+                      {closing
+                        ? <><Loader2 className="h-4 w-4 animate-spin" /> Encaissement…</>
+                        : <><CheckCircle2 className="h-4 w-4" /> Encaisser {formatCFA(totalLignes)}</>}
+                    </Button>
+                  ) : (
+                    <p className="text-xs text-slate-500">
+                      Demandez l&apos;addition : seul le patron encaisse.
+                    </p>
+                  )}
                 </div>
               </div>
             )}

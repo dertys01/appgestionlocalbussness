@@ -10,9 +10,9 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
  * Sprint 14 écrira dans `sales`.
  */
 
-const { salle, inserts } = vi.hoisted(() => {
+const { salle, inserts, lignesCommande } = vi.hoisted(() => {
   const inserts: Array<Record<string, unknown>> = [];
-  return { salle: [] as unknown[], inserts };
+  return { salle: [] as unknown[], inserts, lignesCommande: [] as unknown[] };
 });
 
 // Le plan de salle vient de la vue restaurant_floor, qui répond déjà au tri :
@@ -37,13 +37,25 @@ const chaine = (donnees: unknown) => {
   return c;
 };
 
+const { rpcResultats } = vi.hoisted(() => ({ rpcResultats: [] as unknown[] }));
+
 const supabase = {
   from: (table: string) =>
     table === 'restaurant_floor'
       ? chaine(salle)
       : table === 'restaurant_order_items'
-        ? chaine([])
+        ? chaine(lignesCommande)
         : chaine({ id: 'x' }),
+  rpc: vi.fn(async (fn: string) => {
+    rpcResultats.push(fn);
+    if (fn === 'close_table_order') {
+      return {
+        data: { total_amount: 9200, amount_paid: 9200, invoice_number: 'FAC-2026-00042', sale_id: 'v-1', per_share: 4600 },
+        error: null,
+      };
+    }
+    return { data: 1, error: null };
+  }),
   auth: { getUser: vi.fn() },
 };
 
@@ -54,6 +66,7 @@ vi.mock('@/components/providers/SupabaseProvider', () => ({
     actorName: 'Recette',
     user: { id: 'u1', email: 'a@b.c' },
     canManageProducts: true,
+    isEmployee: false,
     org: { domain: 'restaurant' },
   }),
 }));
@@ -86,6 +99,21 @@ function definirSalle(...lignes: ReturnType<typeof table>[]) {
   salle.length = 0;
   salle.push(...lignes);
 }
+
+function definirCommande(...ls: unknown[]) {
+  lignesCommande.length = 0;
+  lignesCommande.push(...ls);
+}
+
+const plat = {
+  id: 'l1',
+  product_id: 'p1',
+  quantity: 2,
+  unit_price: 4500,
+  note: null,
+  status: 'new',
+  product: { name: 'Poulet braisé' },
+};
 
 describe('FloorModule — la salle', () => {
   it('propose de créer une table quand la salle est vide', async () => {
@@ -146,6 +174,46 @@ describe('FloorModule — la salle', () => {
     expect(inserts[0].owner_id).toBe('org-1');
     // L'unicité vient de l'index partiel en base ; le client n'écrit qu'une fois.
     expect(screen.getByText(/Fermer le panneau/i)).toBeInTheDocument();
+  });
+
+  it('partage l\'addition sans multiplier les ventes', async () => {
+    definirSalle(table({ order_id: 'cmd-9', status: 'open', customer_name: 'M. Kponou' }));
+    definirCommande(plat);
+    render(<FloorModule products={produits} />);
+
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Table 1'));
+    await waitFor(() => expect(screen.getByText(/Fermer le panneau/i)).toBeInTheDocument());
+    // La ligne doit être chargée : le partage n'apparaît qu'au-dessus d'une
+    // commande non vide. Le plat apparaît aussi dans la grille de choix, d'où
+    // getAllByText.
+    await waitFor(() => expect(screen.getAllByText(/Poulet braisé/).length).toBeGreaterThan(1));
+
+    fireEvent.click(screen.getByText(/Partager l'addition/i));
+    // 2 parts sur 9 000 : 4 500 chacune.
+    await waitFor(() => expect(screen.getByText(/4\s?500 F par personne/i)).toBeInTheDocument());
+    // Le total reste le total : le partage est un affichage, pas une écriture.
+    // (Le plan de salle affiche le même montant — d'où getAllByText.)
+    expect(screen.getAllByText('9 000 F').length).toBeGreaterThan(0);
+  });
+
+  it('encaisse l\'addition et confirme avec le numéro de facture', async () => {
+    definirSalle(table({ order_id: 'cmd-9', status: 'open' }));
+    definirCommande(plat);
+    render(<FloorModule products={produits} />);
+
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Table 1'));
+    await waitFor(() => expect(screen.getByText(/Fermer le panneau/i)).toBeInTheDocument());
+    // Le bouton d'encaissement n'existe qu'au-dessus d'une commande non vide :
+    // attendre la ligne, sinon le clic part avant qu'il ne soit rendu.
+    await waitFor(() => expect(screen.getAllByText(/Poulet braisé/).length).toBeGreaterThan(1));
+
+    fireEvent.click(screen.getByRole('button', { name: /Encaisser 9\s?000 F/ }));
+
+    await waitFor(() => expect(screen.getByText(/Addition encaissée/i)).toBeInTheDocument());
+    expect(screen.getByText(/FAC-2026-00042/)).toBeInTheDocument();
+    expect(rpcResultats).toContain('close_table_order');
   });
 
   it('n\'écrit rien dans le stock : une commande n\'est pas une vente', async () => {
