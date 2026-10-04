@@ -87,10 +87,37 @@ describe('POS — la recherche trouve ce qu’on tape', () => {
 });
 
 describe('POS — les articles cachés à la caisse', () => {
-  it('ne propose ni un article en rupture ni un article archivé', () => {
+  // Un article ARCHIVÉ a disparu de la vente : il n'a plus à être proposé, et
+  // le chercher ne doit pas le faire revenir.
+  it('ne propose jamais un article archivé', () => {
     renderPOS();
-    expect(screen.queryByText('Rupture test')).toBeNull();
     expect(screen.queryByText('Article archivé')).toBeNull();
+  });
+
+  // Un article EN RUPTURE, lui, reste visible et marqué. C'est le premier écart
+  // avec les caisses du commerce : un client demande de l'huile, le caissier
+  // tape « huile », et l'écran ne disait rien. Impossible alors de distinguer
+  // « il n'y en a plus » de « on n'en vend pas » — deux réponses opposées au
+  // client, et une impression d'erreur dans le logiciel.
+  it('garde l’article en rupture visible, marqué', () => {
+    renderPOS();
+    expect(screen.getByText('Rupture test')).toBeInTheDocument();
+    expect(screen.getAllByText('Rupture de stock').length).toBeGreaterThan(0);
+  });
+
+  it('un article en rupture ne se met pas au panier', () => {
+    renderPOS();
+    fireEvent.click(screen.getByText('Rupture test'));
+    // Le message est celui du scanner : même situation, même réponse.
+    expect(screen.getByText(/est en rupture de stock/)).toBeInTheDocument();
+    // Et rien n'a été ajouté : le total reste celui d'un panier vide.
+    expect(screen.getByRole('button', { name: /Panier vide/ })).toBeInTheDocument();
+  });
+
+  it('la recherche le trouve aussi', async () => {
+    renderPOS();
+    fireEvent.change(champRecherche(), { target: { value: 'rupture' } });
+    await waitFor(() => expect(screen.getByText('Rupture test')).toBeInTheDocument());
   });
 });
 

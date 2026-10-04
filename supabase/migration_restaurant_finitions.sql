@@ -225,7 +225,18 @@ BEGIN
   SELECT name INTO v_table FROM restaurant_tables WHERE id = v_order.table_id;
   v_table := COALESCE(v_table, 'à emporter');
 
-  -- Le prix unitaire inclut désormais le supplément du modificateur.
+  -- Le prix unitaire inclut le supplément du modificateur.
+  --
+  -- Regroupement par (produit, PRIX EFFECTIF), jamais par produit seul.
+  -- L'ancien code faisait min(unit_price + extra_price) par produit : deux
+  -- lignes du MÊME plat avec deux options différentes — une double portion
+  -- puis « bien cuit » — étaient fusionnées, et seul le supplément le moins
+  -- cher survivait. Une table à 10 500 F était encaissée 9 000 F, sans que
+  -- l'écran et le reçu divergent : ils divergeaient du prix affiché.
+  --
+  -- La fusion reste juste quand elle doit l'être : deux lignes du même plat au
+  -- MÊME prix (deux « bien cuit ») redeviennent une ligne de quantité 2, ce que
+  -- create_sale() exige — il refuse deux prix différents pour un même article.
   SELECT coalesce(jsonb_agg(jsonb_build_object(
            'product_id', a.product_id, 'quantity', a.quantity, 'unit_price', a.unit_price)), '[]'::jsonb),
          coalesce(sum(a.quantity * a.unit_price), 0)
@@ -233,13 +244,10 @@ BEGIN
     FROM (
       SELECT i.product_id,
              sum(i.quantity)::numeric(12,3) AS quantity,
-             -- Le prix retenu est le plus bas : deux suppléments différents sur
-             -- le même plat (une portion, un fromage) ne peuvent pas être
-             -- fusionnés — c'est le montant le plus proche du service réel.
-             min(i.unit_price + i.extra_price)::numeric(12,2) AS unit_price
+             (i.unit_price + i.extra_price)::numeric(12,2) AS unit_price
         FROM restaurant_order_items i
        WHERE i.order_id = p_order_id
-       GROUP BY i.product_id
+       GROUP BY i.product_id, (i.unit_price + i.extra_price)
     ) AS a;
 
   IF p_payment_method = 'credit' THEN

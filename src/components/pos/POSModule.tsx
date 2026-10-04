@@ -187,15 +187,22 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
   } | null>(null);
 
   /**
-   * Catalogue de la caisse : en stock, non archivé, puis filtré et classé.
+   * Catalogue de la caisse : non archivé, puis filtré et classé.
+   *
+   * Les articles EN RUPTURE restent visibles, marqués « Rupture », au lieu de
+   * disparaître. C'est le premier écart avec les caisses du commerce : un
+   * client demande de l'huile, le caissier tape « huile », et l'écran ne
+   * répondait rien — impossible de distinguer « on n'en a plus » de « on
+   * n'en vend pas ». Le stock parti signifie « plus pour l'instant », pas
+   * « ça n'existe pas ici ».
    *
    * Le classement vient de `rechercher()`, qui tolère les fautes de frappe,
    * trouve une variante par son nombre (« 128/6 ») et un article par son prix.
    * Le simple `includes()` d'avant renvoyait « aucun résultat » sur une faute —
-   * ce que le caissier lit comme une rupture de stock.
+   * ce que le caissier lisait comme une rupture de stock.
    */
   const disponibles = useMemo(
-    () => products.filter((p) => p.stock_qty > 0 && p.is_active !== false),
+    () => products.filter((p) => p.is_active !== false),
     [products],
   );
 
@@ -446,6 +453,24 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
       return [...prev, { product, quantity: 1, unitPrice: null }];
     });
   }, []);
+
+  /**
+   * Clic sur une tuile du catalogue.
+   *
+   * Un article en rupture ne s'ajoute pas — il répond. Le message est le même
+   * que celui du scanner, parce que c'est la même situation vue de deux
+   * endroits : le client demande un produit, la caisse n'a plus rien. Le
+   * caissier peut alors dire « il n'y en a plus » au lieu de chercher pourquoi
+   * le produit n'est pas dans la liste.
+   */
+  const ajouter = (product: Product) => {
+    if (product.stock_qty <= 0) {
+      setScanError(`« ${product.name} » est en rupture de stock.`);
+      return;
+    }
+    setScanError('');
+    addToCart(product);
+  };
 
   /**
    * Quantité saisie. Le champ est décimal : « 1,2 » comme « 1.2 » sont acceptés
@@ -782,19 +807,28 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
               return (
                 <button
                   key={p.id}
-                  onClick={() => addToCart(p)}
-                  className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-indigo-50/40 active:bg-indigo-50 transition-colors"
+                  onClick={() => ajouter(p)}
+                  aria-disabled={p.stock_qty <= 0 || undefined}
+                  className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors ${
+                    p.stock_qty > 0
+                      ? 'hover:bg-indigo-50/40 active:bg-indigo-50'
+                      : 'bg-slate-50/60 cursor-not-allowed'
+                  }`}
                 >
                   <div className="flex-1 min-w-0">
-                    <div className="font-medium text-slate-800 text-sm truncate">
+                    <div className={`text-sm truncate ${p.stock_qty > 0 ? 'font-medium text-slate-800' : 'text-slate-400 line-through'}`}>
                       {p.name}
                       <span className="ml-2 text-xs font-normal text-slate-400">{p.category ?? '—'}</span>
                     </div>
                     <div className="text-xs text-slate-500">
-                      Stock : {formatQty(p.stock_qty)} {p.unit ?? 'pce'}
+                      {p.stock_qty > 0 ? (
+                        <>Stock : {formatQty(p.stock_qty)} {p.unit ?? 'pce'}</>
+                      ) : (
+                        <span className="text-red-500 font-medium">Rupture de stock</span>
+                      )}
                     </div>
                   </div>
-                  <div className="font-semibold text-indigo-600 text-sm whitespace-nowrap">
+                  <div className={`text-sm whitespace-nowrap ${p.stock_qty > 0 ? 'font-semibold text-indigo-600' : 'text-slate-300 font-semibold'}`}>
                     {formatCFA(p.price_sell)}
                   </div>
                   {inCart && (
@@ -832,8 +866,13 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
             return (
               <button
                 key={p.id}
-                onClick={() => addToCart(p)}
-                className="group relative text-left rounded-xl border border-slate-200 bg-white p-3 shadow-sm hover:border-indigo-400 hover:shadow-md transition-all active:scale-95"
+                onClick={() => ajouter(p)}
+                aria-disabled={p.stock_qty <= 0 || undefined}
+                className={`group relative text-left rounded-xl border p-3 shadow-sm transition-all ${
+                  p.stock_qty > 0
+                    ? 'border-slate-200 bg-white hover:border-indigo-400 hover:shadow-md active:scale-95'
+                    : 'border-slate-200 bg-slate-50 cursor-not-allowed'
+                }`}
               >
                 {inCart && (
                   <span className="absolute -top-2 -right-2 h-5 min-w-5 px-1 rounded-full bg-indigo-600 text-white text-xs flex items-center justify-center font-bold">
@@ -841,12 +880,16 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                   </span>
                 )}
                 <div className="text-xs text-slate-500 mb-1">{p.category ?? '—'}</div>
-                <div className="font-semibold text-slate-800 text-sm leading-tight line-clamp-2">
+                <div className={`font-semibold text-sm leading-tight line-clamp-2 ${p.stock_qty > 0 ? 'text-slate-800' : 'text-slate-400 line-through'}`}>
                   {p.name}
                 </div>
-                <div className="mt-2 font-bold text-indigo-600">{formatCFA(p.price_sell)}</div>
+                <div className={`mt-2 font-bold ${p.stock_qty > 0 ? 'text-indigo-600' : 'text-slate-300'}`}>{formatCFA(p.price_sell)}</div>
                 <div className="text-xs text-slate-500">
-                  Stock : {formatQty(p.stock_qty)} {p.unit ?? 'pce'}
+                  {p.stock_qty > 0 ? (
+                    <>Stock : {formatQty(p.stock_qty)} {p.unit ?? 'pce'}</>
+                  ) : (
+                    <span className="text-red-500 font-medium">Rupture de stock</span>
+                  )}
                 </div>
               </button>
             );

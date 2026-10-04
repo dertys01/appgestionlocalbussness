@@ -1288,16 +1288,20 @@ const ligne = (saleId) =>
 }
 
 {
-  // 6. Deux prix différents pour le même article : ambigu, donc refusé.
-  //    Prendre le minimum ou le maximum permettrait de fabriquer un panier truqué.
-  let msg = '';
-  try {
-    await vendre(JSON.stringify([
-      { product_id: NEGO, quantity: 1, unit_price: 100 },
-      { product_id: NEGO, quantity: 1, unit_price: 9000 },
-    ]));
-  } catch (e) { msg = e.message; }
-  check('11r. deux prix pour le même article : refusé', /Deux prix différents/.test(msg), msg || 'accepté !');
+  // 6. Deux prix différents pour le même article : deux LIGNES, pas un prix
+  //    unique. L'ancien code refusait le panier ; quand le restaurant a commencé à
+  //    passer au travers de ce refus, il s'est aligné sur le prix le MOINS cher et
+  //    sous-facturé de 5 000 — « un poulet à 100 puis un à 9 000 » devenait
+  //    200. Garder les deux prix supprime le risque : plus rien à arbitrer.
+  const v = await vendre(JSON.stringify([
+    { product_id: NEGO, quantity: 1, unit_price: 100 },
+    { product_id: NEGO, quantity: 1, unit_price: 9000 },
+  ]));
+  const li = (await ligne(v.id)).rows;
+  check('11r. deux prix pour le même article donnent deux lignes', li.length === 2,
+    `${li.length} ligne(s)`);
+  check('11r2. et le total additionne les deux prix, sans arbitrage',
+    Number(v.total_amount) === 9100, String(v.total_amount));
 }
 
 {
@@ -1316,12 +1320,12 @@ const ligne = (saleId) =>
 
 {
   // 8. Le stock est décrémenté du montant réel, même avec un prix négocié.
-  //    Ventes abouties : 2 (11a) + 2 (11e) + 1 (11j) + 1 (11m) + 3 (11s) = 9.
-  //    Les ventes refusées (prix 0, négatif, non numérique, conflit) ne doivent
-  //    rien consommer : c'est le point qu'on vérifie ici.
+  //    Ventes abouties : 2 (11a) + 2 (11e) + 1 (11j) + 1 (11m) + 3 (11s) + 2 (11r) = 11.
+  //    Les ventes refusées (prix 0, négatif, non numérique) ne doivent rien
+  //    consommer : c'est le point qu'on vérifie ici.
   const stock = (await q(`SELECT stock_qty FROM products WHERE id='${NEGO}'`)).rows[0].stock_qty;
-  check('11w. stock décrémenté du seul volume vendu (9 unités)',
-    Number(stock) === 100 - 9, `stock = ${stock}, attendu ${100 - 9}`);
+  check('11w. stock décrémenté du seul volume vendu (11 unités)',
+    Number(stock) === 100 - 11, `stock = ${stock}, attendu ${100 - 11}`);
 }
 
 {
@@ -3204,9 +3208,11 @@ await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, uni
   check('24m. une commande soldée sort du ticket de cuisine', lignes === 0, `${lignes} ligne(s)`);
 }
 
-// 24p. Deux lignes du MÊME plat à des prix différents : le regroupement retient
-// le prix le plus bas. Sans cela, create_sale() refuserait la clôture d'une
-// table parfaitement normale (« un poulet à 4 000 puis un à 4 500 »).
+// 24p. Deux lignes du MÊME plat à des prix différents : les deux prix sont
+// conservés. Le regroupement par produit seul gardait le moins cher — une table
+// à 8 500 était encaissée 8 000, et le restaurant perdait 500 F à chaque fois
+// qu'un client commandait le même plat deux fois avec deux options.
+// Trouvé en recette navigateur le 04/10/2026.
 {
   const OD = 'cccccccc-0000-0000-0000-0000000000a6';
   await q(`INSERT INTO restaurant_orders (id, owner_id, opened_by)
@@ -3214,8 +3220,8 @@ await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, uni
   await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price)
     VALUES ('${OD}', '${PS}', 1, 4500), ('${OD}', '${PS}', 1, 4000)`);
   const res = (await q(`SELECT close_table_order('${OD}', 'cash')`)).rows[0].close_table_order;
-  check('24p. deux prix pour un même plat retiennent le plus bas',
-    Number(res.total_amount) === 8000, `total ${res.total_amount}`);
+  check('24p. deux prix pour un même plat sont tous les deux facturés',
+    Number(res.total_amount) === 8500, `total ${res.total_amount}, attendu 8 500`);
 }
 
 // 24n. « C'est parti » : idempotent, et un plat déjà servi n'est pas ré-expédié.
@@ -3420,6 +3426,90 @@ const rizAvantMod = await stock(RR);
   check('26c. le modificateur ne modifie pas la consommation d\'ingrédients',
     Math.abs((rizAvantMod - rizApres) - 0.6) < 0.001,
     `consommé ${(rizAvantMod - rizApres).toFixed(2)} kg, attendu 0,6`);
+}
+
+// 26b2. DEUX options du MÊME plat ne perdent pas le supplément le plus cher.
+//
+// Trouvé en recette navigateur le 04/10/2026, en clôturant une table de la
+// recette : une double portion (supplément 1 500) puis un « bien cuit »
+// (supplément 0) du même poulet. L'écran annonçait 10 500 F, la vente enregistrée
+// valait 9 000 — le restaurant perdait 1 500 F sur chaque table qui commande le
+// même plat deux fois avec des options différentes. La cause : le regroupement
+// par produit seul, qui gardait le seul prix le MOINS cher.
+const OMD = 'cccccccc-0000-0000-0000-0000000000b3';
+await q(`INSERT INTO restaurant_orders (id, owner_id, opened_by)
+  VALUES ('${OMD}', '${RESTO}', '${RESTO}')`);
+await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price, extra_price, modifier)
+  VALUES ('${OMD}', '${RJ}', 1, 4500, 1500, 'Double portion'),
+         ('${OMD}', '${RJ}', 1, 4500,    0, 'Bien cuit')`);
+{
+  const res = (await q(`SELECT close_table_order('${OMD}', 'cash')`)).rows[0].close_table_order;
+  // 4 500 + 1 500 + 4 500 + 0 = 10 500. L'ancien calcul rendait 9 000.
+  check('26b2. deux options du même plat gardent les DEUX suppléments',
+    Number(res.total_amount) === 10500, `total ${res.total_amount}, attendu 10 500`);
+
+  // Et la vente porte deux lignes, pas une : c'est la condition pour que le
+  // détail corresponde à ce que le client a commandé.
+  const venteId = (await q(`SELECT id FROM sales WHERE user_id='${RESTO}'
+    ORDER BY created_at DESC LIMIT 1`)).rows[0].id;
+  const lignes = await q(`SELECT count(*)::int c, sum(subtotal)::text s
+    FROM sale_items WHERE sale_id = '${venteId}'`);
+  check('26b3. la vente porte une ligne par prix, donc deux lignes',
+    Number(lignes.rows[0].c) === 2 && Number(lignes.rows[0].s) === 10500,
+    `${lignes.rows[0].c} ligne(s), ${lignes.rows[0].s}`);
+}
+
+// 26b4. Deux lignes du même plat AU MÊME prix fusionnent bien, sinon
+// create_sale() refuserait « Deux prix différents pour le même article ».
+{
+  const OMF = 'cccccccc-0000-0000-0000-0000000000b4';
+  await q(`INSERT INTO restaurant_orders (id, owner_id, opened_by)
+    VALUES ('${OMF}', '${RESTO}', '${RESTO}')`);
+  await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price, extra_price, modifier)
+    VALUES ('${OMF}', '${RJ}', 1, 4500, 0, 'Bien cuit'),
+           ('${OMF}', '${RJ}', 1, 4500, 0, 'Bien cuit')`);
+  const res = (await q(`SELECT close_table_order('${OMF}', 'cash')`)).rows[0].close_table_order;
+  check('26b4. deux lignes au même prix restent une seule ligne de vente',
+    Number(res.total_amount) === 9000, `total ${res.total_amount}, attendu 9 000`);
+}
+
+// 26b5. Le PATRON encaisse sa table alors qu'il n'a AUCUNE ligne dans
+// business_members — et c'est le cas réel : seule redeem_invitation() en crée
+// une, pour un employé. Un restaurant inscrit aujourd'hui n'a donc AUCUN membre
+// enregistré, et la garde de rôle doit le laisser passer.
+//
+// Cette ligne a été écrite après avoir appliqué à la main, en production, une
+// version de close_table_order() qui avait perdu la condition
+// « v_owner <> auth.uid() » : le restaurant ne pouvait plus encaisser. Le test
+// 23j couvrait déjà le cas, mais il le couvre par hasard — en étant le premier
+// à appeler la clôture, il s'arrêtait sur une erreur inattendue, sans dire de
+// quelle garde il s'agissait. Ici c'est nommé, et vérifié deux fois : le refus
+// doit être vide ET la vente doit exister.
+{
+  const lignes = await count(
+    `SELECT count(*) FROM business_members WHERE member_id = '${RESTO}'`);
+  check('26b5. le patron du restaurant n\'a bien aucune ligne d\'équipe', lignes === 0,
+    `${lignes} ligne(s)`);
+
+  const OH = 'cccccccc-0000-0000-0000-0000000000b5';
+  await q(`INSERT INTO restaurant_orders (id, owner_id, opened_by)
+    VALUES ('${OH}', '${RESTO}', '${SERVEUR}')`);
+  await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price)
+    VALUES ('${OH}', '${RJ}', 1, 4500)`);
+
+  await q(`SELECT set_config('request.jwt.claim.sub', '${RESTO}', false)`);
+  await e('SET ROLE authenticated');
+  let refus = '';
+  try {
+    await q(`SELECT close_table_order('${OH}', 'cash')`);
+  } catch (ex) { refus = ex.message; }
+  await e('RESET ROLE');
+
+  check('26b6. le patron encaisse sa première addition sans être dans l\'équipe',
+    refus === '', refus.slice(0, 70));
+  const vente = await count(
+    `SELECT count(*) FROM sales WHERE user_id='${RESTO}' AND total_amount = 4500`);
+  check('26b7. et la vente est bien écrite', vente >= 1, `${vente} vente(s) de 4 500`);
 }
 
 // 26d. Le ticket de cuisine montre le modificateur, TOUJOURS sans prix.

@@ -176,6 +176,9 @@ DECLARE
   v_price      numeric(12,2);     -- prix réellement facturé
   v_cost       numeric(12,2);
   v_stock      numeric(12,3);
+  -- Quantité totale demandée pour un produit, toutes lignes confondues : c'est
+  -- elle qu'on compare au stock, pas la quantité d'une ligne prise isolément.
+  v_demande    numeric(12,3);
   v_qty        numeric(12,3);
   v_total      numeric(12,2) := 0;
   v_discount   numeric(12,2) := 0;
@@ -233,49 +236,55 @@ BEGIN
     RAISE EXCEPTION 'Ligne de panier invalide' USING ERRCODE = '22023';
   END IF;
 
-  -- ── Agréger par produit ──
-  IF EXISTS (
-    SELECT 1 FROM (
-      SELECT (e->>'product_id')::uuid AS product_id
-        FROM jsonb_array_elements(p_items) AS e
-       WHERE e ? 'unit_price'
-       GROUP BY 1
-      HAVING count(DISTINCT e->>'unit_price') > 1
-    ) AS conflit
-  ) THEN
-    RAISE EXCEPTION 'Deux prix différents pour le même article : regroupez la ligne'
-      USING ERRCODE = '22023';
-  END IF;
-
-  SELECT array_agg(product_id ORDER BY product_id),
-         array_agg(quantity   ORDER BY product_id),
-         array_agg(unit_price ORDER BY product_id)
+  -- ── Agréger par (produit, prix) ──
+  --
+  -- L'agrégation se fait par produit ET par prix convenu, pas par produit seul.
+  -- La version d'avant gardait MIN(unit_price) et REFUSAIT deux prix pour un même
+  -- article — refus qui protégeait d'une sous-facturation, puisque le MIN perdait
+  -- la différence. Mais le restaurant a le cas légitime : le même plat commandé
+  -- deux fois avec deux options (une double portion, puis « bien cuit »). Cette
+  -- ligne doit survivre à son prix.
+  --
+  -- Deux lignes au MÊME prix fusionnent toujours : 2 × « bien cuit » redeviennent
+  -- une ligne de quantité 2, ce qui est le panier du comptoir.
+  SELECT array_agg(product_id ORDER BY product_id, coalesce(unit_price, -1)),
+         array_agg(quantity   ORDER BY product_id, coalesce(unit_price, -1)),
+         array_agg(unit_price ORDER BY product_id, coalesce(unit_price, -1))
     INTO v_ids, v_qtys, v_agreed
     FROM (
       SELECT (e->>'product_id')::uuid AS product_id,
              -- SUM conserve le fractionnaire : 1,2 + 0,8 = 2,0 et non 1.
              SUM((replace(e->>'quantity', ',', '.'))::numeric)::numeric(12,3) AS quantity,
-             MIN((e->>'unit_price')::numeric) AS unit_price
+             (e->>'unit_price')::numeric AS unit_price
         FROM jsonb_array_elements(p_items) AS e
-       GROUP BY 1
+       GROUP BY 1, 3
     ) AS aggregated;
 
   -- ── Verrouiller les lignes produits et valider le stock ──
+  --
+  -- Le contrôle porte sur la quantité TOTALE par produit, pas sur chaque ligne :
+  -- deux lignes du même produit verrouillent la même rangée, et vérifier 1 puis 1
+  -- laisserait passer 2 sur un stock de 1 — l'erreur n'apparaîtrait qu'ensuite,
+  -- en contrainte CHECK, avec un message que personne ne sait traduire.
   FOR v_i IN 1 .. COALESCE(array_length(v_ids, 1), 0) LOOP
     SELECT p.name, p.price_sell, COALESCE(p.price_buy, 0), p.stock_qty
       INTO v_name, v_list, v_cost, v_stock
       FROM products p
      WHERE p.id = v_ids[v_i]
        AND p.user_id = v_owner
-       FOR UPDATE;
+     FOR UPDATE;
 
     IF NOT FOUND THEN
       RAISE EXCEPTION 'Produit introuvable : %', v_ids[v_i] USING ERRCODE = 'P0002';
     END IF;
 
-    IF v_stock < v_qtys[v_i] THEN
+    SELECT COALESCE(SUM(u.q), 0) INTO v_demande
+      FROM unnest(v_qtys) WITH ORDINALITY AS u(q, n)
+     WHERE u.n >= v_i AND v_ids[u.n] = v_ids[v_i];
+
+    IF v_stock < v_demande THEN
       RAISE EXCEPTION 'Stock insuffisant pour « % » (disponible : %, demandé : %)',
-        v_name, v_stock, v_qtys[v_i] USING ERRCODE = '23514';
+        v_name, v_stock, v_demande USING ERRCODE = '23514';
     END IF;
 
     v_price := COALESCE(v_agreed[v_i], v_list);
