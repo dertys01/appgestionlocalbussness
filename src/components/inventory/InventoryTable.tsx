@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useMemo } from 'react';
-import { AlertTriangle, Search, ArrowUpDown, Pencil, Trash2, Plus, PackagePlus, Download, Upload } from 'lucide-react';
+import { useState, useEffect, useMemo } from 'react';
+import { AlertTriangle, Search, ArrowUpDown, Pencil, Trash2, Plus, PackagePlus, Download, Upload, Loader2 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -19,6 +19,8 @@ import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { logActivity } from '@/lib/utils/activity';
 import { toCSV, downloadCSV } from '@/lib/utils/export';
 import { isFeatureAllowed } from '@/lib/utils/plans';
+import { isDemoSku } from '@/lib/starterCatalog';
+import { removeStarterCatalog } from '@/lib/starterCatalog.client';
 import type { Product } from '@/types';
 
 interface InventoryTableProps {
@@ -35,6 +37,29 @@ type SortDir = 'asc' | 'desc';
 
 export function InventoryTable({ products, onEdit, onRestock, onAdd, onImport, onRefresh }: InventoryTableProps) {
   const { supabase, plan, canManageProducts, ownerId, actorName } = useSupabase();
+  const [exemples, setExemples] = useState(0);
+  const [nettoyage, setNettoyage] = useState(false);
+  const [avertissement, setAvertissement] = useState('');
+
+  // Compté à partir de la liste déjà chargée, pas d'une requête de plus : le
+  // stock est rafraîchi après chaque écriture, donc la bannière suit tout
+  // seul et ne peut pas afficher un nombre périmé.
+  useEffect(() => {
+    if (!ownerId) return;
+    // is_active : un exemple archivé n'est plus à l'écran, donc plus à
+    // proposer. Le compter ferait une bannière qui ne s'éteint jamais.
+    setExemples(products.filter((p) => isDemoSku(p.sku) && p.is_active !== false).length);
+  }, [products, ownerId]);
+
+  const retirerExemples = async () => {
+    if (!ownerId) return;
+    setNettoyage(true);
+    setAvertissement('');
+    const r = await removeStarterCatalog(supabase, ownerId);
+    setNettoyage(false);
+    if ('erreur' in r) { setAvertissement(r.erreur); return; }
+    onRefresh();
+  };
 
   const handleExport = () => {
     const csv = toCSV(products as unknown as Record<string, unknown>[], [
@@ -221,6 +246,35 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onImport, o
           </Button>
         )}
       </div>
+
+      {/* Catalogue d'exemple : la bannière reste tant qu'il en reste, parce
+          qu'un article d'exemple oublié dans le stock finit par être vendu —
+          et une vente fantôme dans le chiffre d'affaires est pire qu'une
+          ligne inutile. */}
+      {exemples > 0 && canManageProducts && (
+        <div className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2">
+          <p className="text-xs text-amber-900 flex-1 min-w-60">
+            <strong>{exemples} article(s) d&apos;exemple</strong> sont dans votre
+            stock. Ils ne sont pas à vous : remplacez-les par vos produits, ou
+            retirez-les en un clic.
+          </p>
+          {avertissement && (
+            <p className="text-xs text-red-700 w-full">{avertissement}</p>
+          )}
+          <Button
+            onClick={retirerExemples}
+            disabled={nettoyage}
+            className="bg-white hover:bg-amber-100 text-amber-900 border border-amber-300 gap-1.5 shrink-0"
+            aria-label="Retirer les articles d'exemple"
+          >
+            {nettoyage ? (
+              <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Retrait...</>
+            ) : (
+              <><Trash2 className="h-3.5 w-3.5" /> Retirer</>
+            )}
+          </Button>
+        </div>
+      )}
 
       {/* Tableau */}
       <div className="rounded-lg border border-slate-200 overflow-x-auto">

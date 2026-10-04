@@ -8,6 +8,7 @@ import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { SupplierSelect } from '@/components/products/SupplierSelect';
 import { logActivity } from '@/lib/utils/activity';
 import { canAddProduct, PLAN_LIMITS, PLAN_LABELS } from '@/lib/utils/plans';
+import { fieldExamples } from '@/lib/starterCatalog';
 import { lireMontant } from '@/lib/utils/nombres';
 import type { Product } from '@/types';
 
@@ -26,7 +27,10 @@ interface ProductFormProps {
 const UNITES = ['pce', 'kg', 'g', 'L', 'sachet', 'botte', 'panier', 'tablette'];
 
 export function ProductForm({ product, onClose, onSaved, currentProductCount = 0 }: ProductFormProps) {
-  const { supabase, ownerId, actorName, plan } = useSupabase();
+  const { supabase, ownerId, actorName, plan, org } = useSupabase();
+  // Les exemples des champs suivent le domaine : « Samsung Galaxy A05 » dans un
+  // maquis est une faute de goût qui se voit, et qui se répète à chaque fiche.
+  const exemples = fieldExamples(org?.domain);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [categories, setCategories] = useState<string[]>([]);
@@ -183,7 +187,7 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
               id="pf-nom"
               value={form.name}
               onChange={(e) => set('name', e.target.value)}
-              placeholder="Ex: Samsung Galaxy A05"
+              placeholder={`Ex: ${exemples.product}`}
               required
             />
           </div>
@@ -197,7 +201,7 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
               id="pf-sku"
               value={form.sku}
               onChange={(e) => set('sku', e.target.value)}
-              placeholder="Ex: SM-A055F"
+              placeholder={`Ex: ${exemples.sku}`}
               className="font-mono"
             />
           </div>
@@ -213,7 +217,7 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
               list="categories-list"
               value={form.category}
               onChange={(e) => set('category', e.target.value)}
-              placeholder="Ex: smartphones, accessoires..."
+              placeholder={`Ex: ${exemples.category}`}
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             />
             <datalist id="categories-list">

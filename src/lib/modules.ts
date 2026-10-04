@@ -19,8 +19,24 @@ import type { Tab } from '@/types';
 
 export type Domain = 'retail' | 'restaurant';
 
-/** Onglets communs : ils servent les deux activités, inchangés. */
-const COMMUN: Tab[] = ['dashboard', 'pos', 'inventory', 'sales', 'debts', 'reports', 'team'];
+/**
+ * Onglets communs : ils servent les deux activités, inchangés.
+ *
+ * `settings` en fait partie, et pour une raison qui n'est pas évidente :
+ * l'écran des réglages n'appartient ni au commerce ni au restaurant. La garde
+ * de `page.tsx` — « un onglet hors domaine retombe sur le premier module du
+ * domaine » — rejette tout onglet absent de cette liste. Sans `settings` ici,
+ * le bouton Paramètres de la barre latérale changeait l'onglet… et la même
+ * passe de rendu le remettait sur Accueil. L'écran était rendu dans le code et
+ * inatteignable à la souris.
+ *
+ * C'est aussi là que se trouve la bascule de domaine : un écran inaccessible
+ * rendrait le choix de l'activité définitif, alors qu'il est censé être
+ * réversible.
+ */
+const COMMUN: Tab[] = [
+  'dashboard', 'pos', 'inventory', 'sales', 'debts', 'reports', 'team', 'settings',
+];
 
 /** Modules propres au commerce : le prévisionnel. */
 const RETAIL_ONLY: Tab[] = ['forecast'];

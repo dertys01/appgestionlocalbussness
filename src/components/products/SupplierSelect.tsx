@@ -5,6 +5,7 @@ import { Plus, Check, Loader2, Truck, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
+import { fieldExamples } from '@/lib/starterCatalog';
 import type { Supplier } from '@/types';
 
 interface SupplierSelectProps {
@@ -26,7 +27,8 @@ interface SupplierSelectProps {
  * saisie ; la création se fait donc ici, en une ligne.
  */
 export function SupplierSelect({ value, onChange, disabled, id }: SupplierSelectProps) {
-  const { supabase, ownerId, canManageProducts } = useSupabase();
+  const { supabase, ownerId, canManageProducts, org } = useSupabase();
+  const exemples = fieldExamples(org?.domain);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
@@ -136,7 +138,7 @@ export function SupplierSelect({ value, onChange, disabled, id }: SupplierSelect
               if (e.key === 'Enter') { e.preventDefault(); createInline(); }
               if (e.key === 'Escape') { setCreating(false); setNewName(''); }
             }}
-            placeholder="Ex : Grossiste Cokhan"
+            placeholder={`Ex : ${exemples.supplier}`}
             disabled={saving}
             className="bg-white"
           />

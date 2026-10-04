@@ -7,6 +7,7 @@ import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { logActivity } from '@/lib/utils/activity';
 import { PLAN_LIMITS } from '@/lib/utils/plans';
 import { formatCFA } from '@/lib/utils/currency';
+import { starterCatalog } from '@/lib/starterCatalog';
 import {
   parseProductsCsv, lignesImportables, type ImportResult,
 } from '@/lib/utils/importProducts';
@@ -37,7 +38,7 @@ const LIBELLE_STATUT = {
 } as const;
 
 export function ProductImportModal({ products, onClose, onDone }: ProductImportProps) {
-  const { supabase, ownerId, actorName, plan } = useSupabase();
+  const { supabase, ownerId, actorName, plan, org } = useSupabase();
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [fichier, setFichier] = useState('');
@@ -137,11 +138,21 @@ export function ProductImportModal({ products, onClose, onDone }: ProductImportP
   };
 
   const telechargerModele = () => {
-    const csv = toCSV(
-      [
-        { produit: 'Riz parfumé 25 kg', sku: '', categorie: 'cereal', achat: 12000, vente: 15000, stock: 8, mini: 3 },
-        { produit: 'Samsung A17 128/6', sku: '', categorie: 'smartphones', achat: 93000, vente: 108000, stock: 4, mini: 2 },
-      ],
+    // Le modèle suit le domaine : un maquis qui télécharge un gabarit rempli de
+    // smartphones repart avec un fichier qu'il faut réécrire entièrement. Trois
+    // lignes du catalogue réel suffisent à montrer la forme.
+    const apercu = starterCatalog(org?.domain)
+      .slice(0, 3)
+      .map((a) => ({
+        produit: a.name,
+        sku: '',
+        categorie: a.category,
+        achat: a.priceBuy,
+        vente: a.priceSell,
+        stock: a.stock,
+        mini: a.minStock,
+      }));
+    const csv = toCSV(apercu,
       [
         { key: 'produit', label: 'Produit' },
         { key: 'sku', label: 'SKU' },

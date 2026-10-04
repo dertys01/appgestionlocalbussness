@@ -1,12 +1,14 @@
 'use client';
 
 import { useState } from 'react';
-import { Package, Users, CheckCircle, Loader2, ArrowRight, Store, UtensilsCrossed } from 'lucide-react';
+import { Package, Users, CheckCircle, Loader2, ArrowRight, Store, UtensilsCrossed, Sparkles, Trash2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { logActivity } from '@/lib/utils/activity';
 import { normalizeDomain, DOMAIN_LABELS, DOMAIN_DESCRIPTIONS, type Domain } from '@/lib/modules';
+import { fieldExamples, starterCount, starterCategories, starterPlats } from '@/lib/starterCatalog';
+import { loadStarterCatalog, removeStarterCatalog } from '@/lib/starterCatalog.client';
 
 interface OnboardingWizardProps {
   onComplete: () => void;
@@ -33,6 +35,11 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const [productName, setProductName] = useState('');
   const [productPrice, setProductPrice] = useState('');
   const [productStock, setProductStock] = useState('');
+
+  // Catalogue d'exemple. « exemples » = combien d'articles sont chargés, pour
+  // l'afficher et proposer leur retrait d'un clic plus tard.
+  const [catalogue, setCatalogue] = useState<{ charges: number; recettes: number } | null>(null);
+  const exemples = fieldExamples(domain);
 
   const handleSkipOrComplete = async () => {
     await markDone();
@@ -98,6 +105,50 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
 
     setLoading(false);
     setStep('invite');
+  };
+
+  /**
+   * Charge le catalogue d'exemple du domaine.
+   *
+   * C'est la porte de sortie de l'assistant pour qui n'a pas encore sa liste de
+   * produits sous la main — le cas le plus courant au maquis, où l'on commence
+   * à encaisser le jour même. Un catalogue cohérent et chiffré vaut mieux que
+   * dix écrans de saisie : on voit tout de suite à quoi ressemble l'écran
+   * « Recettes », et on remplace les articles au fur et à mesure.
+   */
+  const handleLoadCatalog = async () => {
+    if (!ownerId) return;
+    setLoading(true);
+    setError('');
+    const r = await loadStarterCatalog(supabase, ownerId, domain);
+    setLoading(false);
+    if ('erreur' in r) { setError(r.erreur); return; }
+
+    setCatalogue(r);
+    if (user) {
+      await logActivity({
+        ownerId,
+        actorId: user.id,
+        actorEmail: user.email ?? '',
+        actorName: user.email,
+        action: 'product_add',
+        description:
+          `Catalogue d'exemple chargé : ${r.charges} articles` +
+          (r.recettes > 0 ? `, ${r.recettes} ingrédients de recette` : ''),
+      });
+    }
+    setStep('invite');
+  };
+
+  /** Retire les exemples — l'inverse exact du bouton qui les charge. */
+  const handleRemoveCatalog = async () => {
+    if (!ownerId) return;
+    setLoading(true);
+    setError('');
+    const r = await removeStarterCatalog(supabase, ownerId);
+    setLoading(false);
+    if ('erreur' in r) { setError(r.erreur); return; }
+    setCatalogue(null);
   };
 
   const steps = [
@@ -204,6 +255,46 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
               <Button onClick={() => setStep('first-product')} className="w-full bg-indigo-600 hover:bg-indigo-700 gap-2">
                 Commencer la configuration <ArrowRight className="h-4 w-4" />
               </Button>
+
+              {/* ── Catalogue d'exemple ──
+                  La porte de sortie pour qui n'a pas encore sa liste : on
+                  charge un catalogue cohérent, et on remplace article par
+                  article. L'aperçu est là pour qu'il sache ce qu'il va
+                  obtenir — un nom et un nombre ne suffisent pas à dire « je
+                  peux faire confiance ». */}
+              <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 p-4 text-left space-y-3">
+                <div className="flex items-start gap-2">
+                  <Sparkles className="h-4 w-4 text-indigo-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="text-sm font-semibold text-slate-800">
+                      Ou partez d&apos;un catalogue prêt
+                    </p>
+                    <p className="text-xs text-slate-600">
+                      {starterCount(domain)} articles d&apos;exemple pour{' '}
+                      {DOMAIN_LABELS[domain].toLowerCase()}, avec prix d&apos;achat
+                      et prix de vente — modifiables ou supprimables en un clic
+                      depuis l&apos;onglet Stock.
+                    </p>
+                    <p className="text-[11px] text-slate-500">
+                      {starterCategories(domain).join(' · ')}
+                      {starterPlats(domain).length > 0 &&
+                        ` — ${starterPlats(domain).length} plats avec recette`}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  onClick={handleLoadCatalog}
+                  disabled={loading}
+                  className="w-full bg-indigo-600 hover:bg-indigo-700 gap-2"
+                >
+                  {loading ? (
+                    <><Loader2 className="h-4 w-4 animate-spin" /> Chargement...</>
+                  ) : (
+                    <><Sparkles className="h-4 w-4" /> Charger le catalogue d&apos;exemple</>
+                  )}
+                </Button>
+              </div>
+
               <button onClick={handleSkipOrComplete} className="text-sm text-slate-500 hover:text-slate-600 underline">
                 Passer et aller au tableau de bord
               </button>
@@ -225,7 +316,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                 <div className="space-y-1">
                   <label className="text-sm font-medium text-slate-700">Nom du produit *</label>
                   <Input value={productName} onChange={(e) => setProductName(e.target.value)}
-                    placeholder="Ex: Samsung Galaxy A15" autoFocus />
+                    placeholder={`Ex: ${exemples.product}`} autoFocus />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1">
@@ -291,6 +382,27 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
                   Commencez à enregistrer vos ventes.
                 </p>
               </div>
+
+              {/* Les exemples ne doivent pas rester en place sans que personne
+                  ne les voie : on propose de les retirer, et l'onglet Stock
+                  garde le même bouton tant qu'il en reste. */}
+              {catalogue && catalogue.charges > 0 && (
+                <div className="rounded-xl bg-slate-50 border border-slate-200 p-4 text-left space-y-3">
+                  <p className="text-sm text-slate-700">
+                    <strong>{catalogue.charges} articles d&apos;exemple</strong> sont
+                    chargés. Ils ne vous coûtent rien tant que vous ne les
+                    remplacez pas — gardez-les pour découvrir l&apos;écran, ou
+                    retirez-les maintenant.
+                  </p>
+                  <Button
+                    onClick={handleRemoveCatalog}
+                    disabled={loading}
+                    className="w-full bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 gap-2"
+                  >
+                    <Trash2 className="h-4 w-4" /> Retirer les articles d&apos;exemple
+                  </Button>
+                </div>
+              )}
               <div className="rounded-xl bg-indigo-50 border border-indigo-100 p-4 text-left">
                 <p className="text-xs font-semibold text-indigo-700 mb-2">Plan gratuit inclut :</p>
                 <ul className="text-xs text-slate-600 space-y-1">

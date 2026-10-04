@@ -40,6 +40,27 @@ describe('domaines d\'activité', () => {
     }
   });
 
+  it('les réglages appartiennent aux deux domaines', () => {
+    // La garde de page.tsx renvoie sur l'Accueil tout onglet absent de la
+    // liste du domaine. Sans `settings` ici, le bouton Paramètres changeait
+    // l'onglet puis était annoncé dans la même passe de rendu : l'écran des
+    // réglages — et la bascule de domaine qui s'y trouve — étaient
+    // inatteignables. Trouvé en recette navigateur le 04/10/2026.
+    expect(isModuleEnabled('retail', 'settings')).toBe(true);
+    expect(isModuleEnabled('restaurant', 'settings')).toBe(true);
+    for (const d of ['retail', 'restaurant'] as const) {
+      expect(getEnabledModules(d)).toContain('settings');
+    }
+  });
+
+  it('le repli n\'est jamais les réglages', () => {
+    // Si `settings` devenait le premier module de la liste, un onglet hors
+    // domaine ouvrirait les réglages au lieu de l'accueil.
+    for (const d of ['retail', 'restaurant'] as const) {
+      expect(fallbackTab(d)).toBe('dashboard');
+    }
+  });
+
   it('n\'a aucun module propre au commerce en restaurant', () => {
     // forecast est le seul module propre au commerce aujourd'hui ; il ne doit
     // jamais apparaître en restaurant.
