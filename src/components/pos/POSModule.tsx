@@ -21,7 +21,7 @@ import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { formatCFA } from '@/lib/utils/currency';
+import { formatCFA, formatQty } from '@/lib/utils/currency';
 import { rechercher } from '@/lib/utils/productSearch';
 import { generateWhatsAppReceiptLink } from '@/lib/utils/whatsapp';
 import { logActivity } from '@/lib/utils/activity';
@@ -55,16 +55,9 @@ type PaymentMethod = 'cash' | 'momo' | 'credit';
  */
 const PRODUCT_PAGE_SIZE = 60;
 
-/**
- * Quantité affichée : « 1,5 » et non « 1.50000001 » ni « 2 » pour 2 kg.
- *
- * Le point décimal est LOCAL — un Amount bruto s'affiche avec un point chez
- * les anglophones, une virgule chez nous. `maximumFractionDigits: 3` évite la
- *Notation scientifique sur les grands nombres.
- */
-function formatQty(n: number): string {
-  return n.toLocaleString('fr-FR', { maximumFractionDigits: 3 });
-}
+// formatQty vit désormais dans lib/utils/currency : la salle en a besoin aussi, et
+// deux lectures de quantité qui divergent afficheraient « 1.5 » et « 1,5 » sur
+// deux écrans du même service.
 
 interface ReceiptState {
   saleId: string;

@@ -182,6 +182,7 @@ export type Tab =
   | 'reports'
   | 'forecast'
   | 'team'
+  | 'floor'
   | 'settings';
 
 /** Sous-vue de l'onglet Rapports. */

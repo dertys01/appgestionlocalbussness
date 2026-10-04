@@ -55,6 +55,8 @@ const ORDER = [
   'migration_fk_indexes.sql',
   // organizations.domain : paramètre d'affichage, jamais un privilège.
   'migration_domain.sql',
+  // Salle et commande ouverte : Sprint 13.
+  'migration_restaurant_tables.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -2746,6 +2748,222 @@ const authHelpers = (await q(`
 check('22g. authenticated appelle toujours les deux helpers des policies',
   JSON.stringify(authHelpers) === JSON.stringify(['can_manage_products', 'get_business_owner_id']),
   `présentes : ${authHelpers.join(', ') || 'aucune'}`);
+
+// ─── 23. Restaurant : salle et commande ouverte ──────────────
+// Une commande n'est pas une vente : elle vit sur une table avant d'être
+// soldée, et elle ne touche pas au chiffre d'affaires tant qu'elle n'est pas
+// close. Ces contrôles verrouillent les trois invariants qui font le métier —
+// une seule commande ouverte par table, l'isolation entre restaurants, et
+// l'impossibilité pour un caissier de clôturer une addition.
+console.log('\n▸ Restaurant — salle et commande ouverte');
+
+// UUID.ne clashes avec le reste de la suite : les identifiants 13131313 et
+// 14141414 sont déjà pris plus haut (section invitation). Un duplicate key
+// ferait échouer la section entière sur un détail de fixture.
+const RESTO = '23232323-2323-2323-2323-232323232323';
+const SERVEUR = '25252525-2525-2525-2525-252525252525';
+
+await q(`INSERT INTO auth.users (id, email) VALUES
+  ('${RESTO}', 'resto@test.ci'), ('${SERVEUR}', 'serveur@test.ci')
+  ON CONFLICT DO NOTHING`);
+await q(`INSERT INTO organizations (id, name, slug, domain)
+  VALUES ('${RESTO}', 'Maquis Test', 'maquis-test', 'restaurant')`);
+await q(`INSERT INTO business_members (owner_id, member_id, member_name, role)
+  VALUES ('${RESTO}', '${SERVEUR}', 'Serveur', 'employee')`);
+
+const T1 = 'bbbbbbbb-0000-0000-0000-000000000001';
+const T2 = 'bbbbbbbb-0000-0000-0000-000000000002';
+const O2 = 'cccccccc-0000-0000-0000-000000000002';
+await q(`INSERT INTO restaurant_tables (id, owner_id, name, zone, seats) VALUES
+  ('${T1}', '${RESTO}', 'Table 1', 'Terrasse', 4),
+  ('${T2}', '${RESTO}', 'Table 2', 'Terrasse', 2)`);
+
+const O1 = 'cccccccc-0000-0000-0000-000000000001';
+await q(`INSERT INTO restaurant_orders (id, owner_id, table_id, customer_name, opened_by)
+  VALUES ('${O1}', '${RESTO}', '${T1}', 'M. Kponou', '${PATRON}')`);
+
+// 23a. L'index unique parcial : une seule commande ouverte par table.
+{
+  let refuse = false;
+  try {
+    await q(`INSERT INTO restaurant_orders (owner_id, table_id, opened_by)
+      VALUES ('${RESTO}', '${T1}', '${PATRON}')`);
+  } catch {
+    refuse = true;
+  }
+  check('23a. une table déjà occupée refuse une seconde commande', refuse);
+}
+{
+  // La contrainte est partielle : après clôture, la table se libère.
+  await q(`UPDATE restaurant_orders SET status='closed', closed_at=now(), sale_id=NULL
+    WHERE id='${O1}'`);
+  let ok = true;
+  try {
+    await q(`INSERT INTO restaurant_orders (id, owner_id, table_id, opened_by)
+      VALUES ('${O2}', '${RESTO}', '${T1}', '${PATRON}')`);
+  } catch {
+    ok = false;
+  }
+  check('23b. une table libérée accepte une nouvelle commande', ok);
+}
+
+// 23c. Lignes de commande et total
+// Le stock de P1 a déjà bougé dans les sections précédentes : on le relit
+// juste avant, sinon ce contrôle comparerait une valeur au passage.
+const stockAvantCommande = await stock(P1);
+await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price, note)
+  VALUES ('${O2}', '${P1}', 2, 6000, 'bien cuit'), ('${O2}', '${P2}', 1, 4500, NULL)`);
+{
+  const total = Number((await q(`
+    SELECT coalesce(sum(quantity * unit_price), 0) AS t
+      FROM restaurant_order_items WHERE order_id='${O2}'`)).rows[0].t);
+  check('23c. le total de la commande vaut 16 500', total === 16500, `obtenu ${total}`);
+
+  // Le stock n'est PAS décrémenté : rien n'est vendu tant que la commande
+  // n'est pas close. Un serveur qui prend 12 plats ne doit pas faire tomber le
+  // stock sous zéro avant le service.
+  const s1 = await stock(P1);
+  check('23d. une commande ouverte ne décrémente pas le stock', s1 === stockAvantCommande,
+    `stock ${s1}, attendu ${stockAvantCommande}`);
+}
+
+await q(`UPDATE restaurant_orders SET status='open' WHERE id='${O2}'`);
+
+// 23e. Isolation entre deux restaurants : un tenant ne doit voir ni les
+// commandes ni les lignes de commande de l'autre. Le contrôle se fait en RÔLE
+// authenticated — lu en postgres, le superuser contourne les policies et le
+// test passerait toujours, ce qui ne prouverait rien.
+const A = '23636363-6363-6363-6363-636363636363';
+const B = '24646464-6464-6464-6464-646464646464';
+for (const u of [A, B]) {
+  await q(`INSERT INTO auth.users (id, email) VALUES ('${u}', '${u}@test.ci') ON CONFLICT DO NOTHING`);
+}
+await q(`INSERT INTO organizations (id, name, slug, domain)
+  VALUES ('${A}', 'Resto A', 'resto-a', 'restaurant'), ('${B}', 'Resto B', 'resto-b', 'restaurant')`);
+const PA = 'abababab-0000-0000-0000-000000000001';
+const PB = 'abababab-0000-0000-0000-000000000002';
+await q(`INSERT INTO products (id, user_id, name, price_buy, price_sell, stock_qty, min_stock_level)
+  VALUES ('${PA}', '${A}', 'Plat A', 1000, 2000, 50, 5), ('${PB}', '${B}', 'Plat B', 1000, 2000, 50, 5)`);
+const OA = 'cdcdcdcd-0000-0000-0000-00000000000a';
+const OB = 'cdcdcdcd-0000-0000-0000-00000000000b';
+await q(`INSERT INTO restaurant_orders (id, owner_id, table_id, opened_by)
+  VALUES ('${OA}', '${A}', NULL, '${A}'), ('${OB}', '${B}', NULL, '${B}')`);
+await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price) VALUES
+  ('${OA}', '${PA}', 1, 2000), ('${OB}', '${PB}', 1, 2000)`);
+
+{
+  // Les produits sont rattachés au tenant : c'est ce qui rend le test
+  // vérifiable par le RLS des produits, lui aussi deny-by-tenant.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${A}', false)`);
+  await e('SET ROLE authenticated');
+  const vus = Number((await q(`SELECT count(*)::int AS n FROM restaurant_order_items`)).rows[0].n);
+  await e('RESET ROLE');
+  check('23e. un restaurateur voit les lignes de SA commande', vus === 1, `${vus} ligne(s)`);
+}
+{
+  await q(`SELECT set_config('request.jwt.claim.sub', '${B}', false)`);
+  await e('SET ROLE authenticated');
+  const vus = Number((await q(`SELECT count(*)::int AS n FROM restaurant_order_items`)).rows[0].n);
+  const cmd = Number((await q(`SELECT count(*)::int AS n FROM restaurant_orders`)).rows[0].n);
+  await e('RESET ROLE');
+  check('23f. un autre restaurant ne voit pas les lignes de commande', vus === 1, `${vus} ligne(s)`);
+  check('23f2. un autre restaurant ne voit pas les commandes de l\'autre', cmd === 1, `${cmd} commande(s)`);
+}
+{
+  // write-only : lire est refusé, mais écrire dans la commande d'autrui doit
+  // l'être aussi — sinon un intrus viderait la commande d'un autre restaurant.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${B}', false)`);
+  await e('SET ROLE authenticated');
+  let refuse = false;
+  try {
+    await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price)
+      VALUES ('${OA}', '${PB}', 1, 2000)`);
+  } catch {
+    refuse = true;
+  }
+  await e('RESET ROLE');
+  check('23f3. on ne peut pas ajouter de ligne à la commande d\'un autre', refuse);
+}
+await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+
+// 23g. Un caissier encaisse mais ne clôture pas : c'est ce qui protège le CA.
+await canWrite('23g. un caissier ajoute un plat à une commande',
+  `INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price)
+   VALUES ('${O2}', '${P1}', 1, 7000)`, true, SERVEUR);
+{
+  await canWrite('23h. un caissier ne clôture pas une commande',
+    `UPDATE restaurant_orders SET status='closed', closed_at=now() WHERE id='${O2}'`, false, SERVEUR);
+
+  await canWrite('23i. un caissier ne réorganise pas la salle',
+    `INSERT INTO restaurant_tables (owner_id, name) VALUES ('${RESTO}', 'Table 99')`, false, SERVEUR);
+
+  // Le patron du restaurant est RESTO lui-même, pas PATRON : c'est lui le
+  // propriétaire de la ligne. Un tiers, même patron de sa propre boutique,
+  // n'a rien à faire sur cette commande.
+  await canWrite('23j. le patron clôture sa commande',
+    `UPDATE restaurant_orders SET status='closed', closed_at=now() WHERE id='${O2}'`, true, RESTO);
+}
+
+// 23j2. Une commande ne se supprime pas : elle s'annule ou se clôture. Une
+// suppression laisserait une table « occupée » sans commande et effacerait le
+// service du jour sans trace.
+await canWrite('23j2. personne ne supprime une commande',
+  `DELETE FROM restaurant_orders WHERE id='${O2}'`, false, RESTO);
+
+// 23j3. Un patron d'AUTRE boutique ne clôture pas la commande d'un restaurant
+// qui n'est pas le sien : l'isolation prime sur le rôle.
+await canWrite('23j3. un patron étranger ne clôture pas la commande',
+  `UPDATE restaurant_orders SET status='closed', closed_at=now() WHERE id='${O2}'`, false, PATRON);
+
+// 23k. Une commande close n'accepte plus de ligne : le ticket est figé.
+await canWrite('23k. une commande close refuse une ligne de plus',
+  `INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price)
+   VALUES ('${O2}', '${P1}', 1, 7000)`, false, PATRON);
+
+// 23l. La vue de la salle reste en security_invoker : en DEFINER elle
+// contournerait les RLS des trois tables et exposerait les autres restaurants.
+{
+  const def = (await q(`
+    SELECT coalesce(c.reloptions::text, '') AS o
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relname = 'restaurant_floor'`)).rows[0].o;
+  check('23l. restaurant_floor reste en security_invoker',
+    def.includes('security_invoker=true'), `options : ${def || '(aucune)'}`);
+}
+
+// 23m. La vue montre la commande EN COURS et son montant. Elle est testée sur
+// une commande neuve : O2 vient d'être close, la vue ne doit la voir que si
+// elle n'est pas filtrée sur status — c'est exactement ce qu'on vérifie ici.
+{
+  const TM = 'bbbbbbbb-0000-0000-0000-000000000039';
+  const OM = 'cccccccc-0000-0000-0000-000000000039';
+  await q(`INSERT INTO restaurant_tables (id, owner_id, name) VALUES ('${TM}', '${RESTO}', 'Table 9')`);
+  await q(`INSERT INTO restaurant_orders (id, owner_id, table_id, opened_by)
+    VALUES ('${OM}', '${RESTO}', '${TM}', '${PATRON}')`);
+  await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price)
+    VALUES ('${OM}', '${P1}', 3, 7000)`);
+
+  const row = (await q(`SELECT order_id, status, order_total FROM restaurant_floor
+    WHERE id='${TM}' AND owner_id='${RESTO}'`)).rows[0];
+  check('23m. la vue expose la commande en cours et son montant',
+    !!row && row.status === 'open' && Number(row.order_total) === 21000,
+    `total ${row ? row.order_total : 'aucune ligne'}`);
+
+  // Une table libre n'a pas de commande : la vue doit rester une ligne, pas
+  // disparaître — le plan de salle montre TOUTES les tables.
+  const libre = (await q(`SELECT count(*)::int AS n FROM restaurant_floor
+    WHERE id='${T2}' AND owner_id='${RESTO}'`)).rows[0].n;
+  check('23m2. une table libre reste visible, sans commande', libre === 1, `${libre} ligne(s)`);
+}
+
+// 23n. Quantité nulle ou négative refusée : une ligne sans quantité fausserait
+// le total sans aucun signal.
+let refNeg = false;
+try {
+  await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price)
+    VALUES ('${O2}', '${P1}', 0, 7000)`);
+} catch { refNeg = true; }
+check('23n. une ligne de quantité nulle est refusée', refNeg);
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
 process.exit(failures ? 1 : 0);

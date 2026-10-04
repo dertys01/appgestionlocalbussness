@@ -11,6 +11,7 @@ import {
   Brain,
   Users,
   Menu,
+  UtensilsCrossed,
 } from 'lucide-react';
 import { LoginPage } from '@/components/auth/LoginPage';
 import { InventoryTab } from '@/components/inventory/InventoryTab';
@@ -19,6 +20,7 @@ import { SalesHistory } from '@/components/sales/SalesHistory';
 import { DebtsModule } from '@/components/debts/DebtsModule';
 import { ReportsTab } from '@/components/reports/ReportsTab';
 import { ForecastModule } from '@/components/forecast/ForecastModule';
+import { FloorModule } from '@/components/restaurant/FloorModule';
 import { TeamModule } from '@/components/team/TeamModule';
 import { ProductForm } from '@/components/products/ProductForm';
 import { RestockModal } from '@/components/products/RestockModal';
@@ -142,6 +144,9 @@ export default function HomePage() {
     { key: 'debts',     label: 'Dettes',     icon: Handshake,       locked: !isFeatureAllowed(plan, 'reports') },
     { key: 'reports',   label: 'Rapports',   icon: BarChart2,       locked: !isFeatureAllowed(plan, 'reports') },
     { key: 'forecast',  label: 'Prévisions', icon: Brain,           locked: !isFeatureAllowed(plan, 'forecast') },
+    // Salle : module restaurant, donc filtré comme les autres. La caisse
+    // comptoir reste disponible — un restaurant sert aussi à emporter.
+    { key: 'floor',     label: 'Salle',     icon: UtensilsCrossed, locked: false },
     { key: 'team',      label: 'Équipe',     icon: Users,           locked: false },
   ];
 
@@ -258,6 +263,15 @@ export default function HomePage() {
             <div className="space-y-4">
               <h2 className="text-xl font-bold text-slate-800">Prévisions & Planification</h2>
               <ForecastModule onRestock={fetchProducts} />
+            </div>
+          )}
+
+          {tab === 'floor' && (
+            <div className="space-y-4">
+              <h2 className="text-xl font-bold text-slate-800">Salle</h2>
+              {/* La salle ne vend rien : le stock n'est touché qu'à la clôture
+                  (Sprint 14), donc aucun rafraîchissement des produits ici. */}
+              <FloorModule products={products} />
             </div>
           )}
 
