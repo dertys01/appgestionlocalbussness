@@ -974,6 +974,76 @@ npm test          → 0  (55 vérifications SQL, 122 tests de composant)
 | **Plan restaurant (3 phases)** | Audit distinct, pas encore planifié dans les sprints |
 | **Programme bêta** | `slots_total = 10`, accès ouvert — **ne pas modifier `supabase/migration_beta_program.sql`** |
 
+---
+
+## Sprints 12 à 16 — Un compte, deux domaines : commerce et restauration
+
+Décision du 04/10/2026 : **ni « all-in-one », ni deux applications**. Un seul socle,
+un seul dépôt, et le **domaine d'activité choisi à l'inscription** qui décide des
+modules affichés. Un restaurant ne doit pas voir l'onglet-season, un commerçant
+ne doit pas voir les tables — et le code d'un module ne doit jamais être conditionné
+par `if (isRestaurant)` ailleurs.
+
+Règle d'or retenue : un module d'un autre domaine **n'est pas rendu**, pas masqué.
+
+### Sprint 12 — Le domaine d'activité
+
+| | |
+|---|---|
+| **Objectif** | L'inscription demande l'activité, et l'interface s'y adapte |
+| **SQL** | `migration_domain.sql` : `organizations.domain text NOT NULL DEFAULT 'retail' CHECK (domain IN ('retail','restaurant'))` + `ALTER TABLE organizations ADD CONSTRAINT` en `DEFERRABLE` si besoin de backfill. Migration **réjouable** (`IF NOT EXISTS`) |
+| **Règle** | Le domaine est un **paramètre d'affichage**, jamais un privilège : les RLS, les plans, le tunnel Stripe et le rate limit ne changent pas. Un restaurateur reste soumis aux mêmes limites de produits |
+| **Code** | `src/lib/modules.ts` : `DOMAIN_MODULES: Record<Domain, Module[]>` + `getEnabledModules(domain)`. `OnboardingWizard` pose la question en premier écran (2 cartes : Commerce / Restaurant). `Sidebar` rend la nav **depuis cette liste** |
+| **Bascule** | Réglages → « Domaine d'activité », modifiable à tout moment (un maquis qui gère aussi un comptoir). Toute la migration de données passe par les outils d'import existants, pas de script caché |
+| **Tests** | `modules.test.ts` (parité modules ↔ onglets), le wizard rend bien la question de domaine, la bascule Persistance, `test:db` étendu à 26 migrations |
+| **Fin** | Un compte `retail` ne voit aucun module restaurant et réciproquement, vérifié par test et recette des deux profils |
+
+### Sprint 13 — Restaurant : tables et commande ouverte
+
+| | |
+|---|---|
+| **Objectif** | Le service du midi : une table, une commande qui n'est pas encore encaissée |
+| **SQL** | `migration_restaurant_tables.sql` : `restaurant_tables` (nom, zone, seats, active) · `restaurant_orders` (table_id, statut `open`/`closed`, opened_by, client_name) · `restaurant_order_items` (order_id, product_id, qty, prix convenu, notes cuisine, statut `new`/`sent`/`served`) |
+| **UI** | Écran « Salle » : plan des tables, couleur par état (libre / occupée / addition demandée). Ouverture d'une commande = ticket persistant, distincte de `sales` |
+| **Réutilisé** | Produits, stock, prix négociés, dettes, rapport de rentabilité — rien de dupliqué. Une table n'est qu'un **conteneur de commande** |
+| **Tests** | Ouverture/fermeture, deux commandes simultanées sur deux tables, isolation entre restaurants (RLS), commande vide impossible |
+| **Fin** | Un serveur prend une commande sur table 3, la ferme 40 min plus tard, sans passer par la caisse comptoir |
+
+### Sprint 14 — Restaurant : cuisine et encaissement fractionné
+
+| | |
+|---|---|
+| **Objectif** | Le flux réel : cuisine servie, addition partagée, encaissement partiel |
+| **UI** | **KDS** (écran cuisine) : tickets du jour triés par heure, tap pour « servi ». Impressions de ticket en cuisine (format court, sans prix) — la même commande peut être service **et** à emporter |
+| **Encaissement** | Clôture d'une table : total, **fractionnement** (par personne, en N parts), acompte déjà versé déduit, espèces/MoMo, facture à la clôture via le `create_sale` existant |
+| **SQL** | `restaurant_orders.split_count`, `amount_paid` · réutilisation de `sales` pour l'écriture comptable (une seule source de vérité sur le chiffre d'affaires) |
+| **Tests** | Fraction 3 ways, commande à moitié payée puis soldée, ticket cuisine sans prix, vente au poids toujours correcte en restaurant |
+| **Fin** | 4 convives, addition partagée en 3, sans ressaisie — et le CA du jour est identique à celui de la caisse comptoir |
+
+### Sprint 15 — Restaurant : coût de matière par plat
+
+| | |
+|---|---|
+| **Objectif** | La marge réelle d'un plat, pas d'une revente « prix − prix d'achat » |
+| **SQL** | `recipe_ingredients` (product_id, ingredient_product_id, qty) + trigger ou RPC `product_cost()` : coût recursively d'une recette (le plat peut contenir un autre plat) |
+| **UI** | Onglet Recettes : assembler un plat à partir d'ingrédients existants, coût et marge calculés en direct · l'écran Rentabilité affiche enfin la marge par plat |
+| **Règle** | Un ingrédient vendu à l'unité **décrémente** son stock à la vente du plat (trigger sur `restaurant_order_items` ou extension de `create_sale`) |
+| **Tests** | Coût d'un plat à deux niveaux, marge correcte en restaurant **et** en commerce, stock d'ingoût décrémenté exactement une fois |
+| **Fin** | « Poulet braisé » affiche sa marge vraie, et le patron sait quels plats sont réellement rentables |
+
+### Sprint 16 — Finitions restaurant et bascule finale
+
+| | |
+|---|---|
+| **Objectif** | Le mode restaurant devient crédible en production |
+| **Contenu** | Modificateurs (cuisson, sauce, portion) en options sur la ligne de commande · plats du jour / articles à la carte non disponibles · pourboire au choix à la clôture · reservations simples (nom, heure, personnes) · impression de ticket de table |
+| **Transverse** | Recette des deux profils sur les 3 sprints précédents · audit Lighthouse sur les nouveaux écrans · mise à jour README/SPRINTS |
+| **Hors périmètre assumé** | Paiement fractionné Stripe, inventaire de salle, formation, impression cuisine en réseau (KDS local) |
+
+**Ordre de livraison** : 12 (aucun risque, tout le reste en dépend) → 13 → 14 → 15 → 16.
+Chaque sprint est livrable indépendamment : un restaurant peut s'arrêter après le 14
+et encaisser en salle ; le 15 est un gain de pilotage, le 16 du confort.
+
 ## Garde-fous permanents
 
 - `bump_rate_limit()` doit rester en **`SECURITY DEFINER`**.
