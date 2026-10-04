@@ -2984,6 +2984,33 @@ try {
 } catch { refNeg = true; }
 check('23n. une ligne de quantité nulle est refusée', refNeg);
 
+// 23o. Une commande À EMPORTER : table_id NULL. Chez un maquis, c'est la moitié
+// du chiffre d'affaires, et la policy d'insertion l'interdisait — le serveur
+// devait inventer une table, ou faire encaisser au comptoir. Trouvé en recette
+// navigateur, le 04/10/2026.
+await canWrite('23o. un caissier peut ouvrir une commande à emporter',
+  `INSERT INTO restaurant_orders (owner_id, opened_by) VALUES ('${RESTO}', '${SERVEUR}')`, true, SERVEUR);
+
+// 23o2. Plusieurs à emporter simultanées : l'index unique ne porte que sur
+// table_id, qui vaut NULL ici — un serveur peut en prendre trois.
+for (const n of [1, 2]) {
+  await q(`INSERT INTO restaurant_orders (owner_id, opened_by, customer_name)
+    VALUES ('${RESTO}', '${SERVEUR}', 'Emport ${n}')`);
+}
+check('23o2. plusieurs commandes à emporter coexistent',
+  (await count(`SELECT count(*) FROM restaurant_orders
+     WHERE owner_id='${RESTO}' AND table_id IS NULL AND status='open'`)) === 3);
+
+// 23o3. Une commande sans plat ne peut pas être encaissée, à emporter ou non.
+{
+  const OV = 'cccccccc-0000-0000-0000-0000000000c9';
+  await q(`INSERT INTO restaurant_orders (id, owner_id, opened_by)
+    VALUES ('${OV}', '${RESTO}', '${SERVEUR}')`);
+  let refuse = false;
+  try { await q(`SELECT close_table_order('${OV}', 'cash')`); } catch { refuse = true; }
+  check('23o3. une commande à emporter vide est refusée à la clôture', refuse);
+}
+
 // ─── 24. Restaurant : clôture d'addition ────────────────────
 // Le lien qui manquait : une table servie doit entrer dans le chiffre
 // d'affaires, exactement comme un encaissement au comptoir, et une seule fois.

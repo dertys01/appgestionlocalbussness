@@ -240,6 +240,30 @@ export function FloorModule({
     await loadTables();
   };
 
+  // Commande à emporter : sans table. La moitié du chiffre d'affaires d'un
+  // maquis, et le plus simple quand la salle est pleine.
+  const openTakeaway = async () => {
+    if (!ownerId) return;
+    setBusy(true);
+    setError('');
+    const { data, error: err } = await db
+      .from('restaurant_orders')
+      .insert({
+        owner_id: ownerId,
+        table_id: null,
+        customer_name: clientName.trim() || null,
+        opened_by: user?.id ?? null,
+      })
+      .select('id')
+      .single();
+    setBusy(false);
+    if (err) { setError(err.message); return; }
+    setClientName('');
+    setOuverte({ tableId: '', nom: 'À emporter', client: clientName.trim() || null });
+    setOrderId(data.id);
+    await loadTables();
+  };
+
   const addLine = async (product: Product) => {
     if (!orderId) return;
     // Un champ quantité vide vaut 1 — le serveur tape rarement la quantité.
@@ -574,6 +598,17 @@ export function FloorModule({
             );
           })}
         </div>
+      )}
+
+      {/* ── À emporter ── */}
+      {peutEncaisser && orderId === null && (
+        <button
+          onClick={openTakeaway}
+          disabled={busy}
+          className="w-full rounded-xl border-2 border-dashed border-slate-300 py-2.5 text-sm font-medium text-slate-500 hover:border-indigo-300 hover:text-indigo-600 transition-colors disabled:opacity-60"
+        >
+          + Commande à emporter
+        </button>
       )}
 
       {/* ── Commande ouverte ── */}

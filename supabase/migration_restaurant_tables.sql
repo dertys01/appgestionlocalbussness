@@ -148,10 +148,20 @@ DROP POLICY IF EXISTS "restaurant_orders_read" ON restaurant_orders;
 CREATE POLICY "restaurant_orders_read" ON restaurant_orders
   FOR SELECT USING (owner_id = get_business_owner_id());
 
-DROP POLICY IF EXISTS "restaurant_orders_open" ON restaurant_orders;
-CREATE POLICY "restaurant_orders_open" ON restaurant_orders
-  FOR INSERT
-  WITH CHECK (
+DROP POLICY IF EXISTS "restaurant_orders_attach_table" ON restaurant_orders;
+CREATE POLICY "restaurant_orders_attach_table" ON restaurant_orders
+  FOR UPDATE
+  USING (status = 'open' AND table_id IS NULL)
+  WITH CHECK (status = 'open' AND table_id IS NOT NULL);
+
+-- Table_id NULL = commande à emporter, sans table. Chez un maquis, le service à
+-- emporter fait la moitié du chiffre d'affaires : interdire cette ligne
+-- condamnait le serveur à inventer une table, ou à faire encaisser au comptoir.
+-- Aucune limite sur leur nombre : l'index unique ne porte que sur table_id,
+-- qui est NULL ici.
+DROP POLICY IF EXISTS "restaurant_orders_takeaway" ON restaurant_orders;
+CREATE POLICY "restaurant_orders_takeaway" ON restaurant_orders
+  FOR INSERT WITH CHECK (
     owner_id = get_business_owner_id()
     AND status = 'open'
     AND closed_at IS NULL

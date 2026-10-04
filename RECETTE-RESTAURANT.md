@@ -88,7 +88,30 @@ la base réelle (rien n'a été écrit) :
 24. Modifier une recette, une option ou les jours servis → **impossible**.
 25. Ajouter une table → **impossible**.
 
-## Le piège final
+## Commandes à emporter
 
-26. Reprendre la commande de l'étape 6 et tenter de l'encaisser deux fois : le
-    second doit échouer, et **une seule vente** doit exister en base.
+26. Bouton **« + Commande à emporter »** sous le plan : aucune table n'est
+    occupée, la commande s'ouvre quand même et se clôture normalement. Après
+    encaissement, le plan de salle doit être entièrement libre.
+27. Reprendre l'addition de l'étape 6 et tenter de l'encaisser deux fois : le
+    second doit échouer (« Cette addition est déjà soldée »), et **une seule
+    vente** doit exister en base.
+
+## Le caissier — les 8 refus
+
+Créer l'invitation (Équipe → adresse email → lien), l'ouvrir dans un onglet
+privé, choisir nom + mot de passe. Il arrive connecté, avec sa propre session.
+
+| Vérification | Attendu | Vérifié le 04/10/2026 |
+|---|---|---|
+| Ouvrir une commande, ajouter des plats, choisir un modificateur | possible | ✓ |
+| « Tout est parti en cuisine » | possible | ✓ (RPC renvoie le nombre de lignes) |
+| Partager l'addition | possible (affichage seul) | ✓ |
+| Encaisser | « Demandez l'addition » | ✓ + RPC 403 « Seul le patron ou un manager peut encaisser » |
+| Modifier une recette | refusé | ✓ 403 RLS |
+| Ajouter une option | refusé | ✓ 403 RLS |
+| Ajouter une table | refusé | ✓ 403 RLS |
+| Modifier un prix, changer le domaine | refusé | ✓ 0 ligne écrite |
+
+Les refus viennent de la **RLS**, pas de l'interface : en console (clé anon +
+son jeton), la même écriture renvoie `42501`. C'est le contrôle qui compte.
