@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { serverError, requireEnv } from '@/lib/utils/server';
 import { createClient } from '@supabase/supabase-js';
+import { z } from 'zod';
 
 const SUPABASE_URL = requireEnv('NEXT_PUBLIC_SUPABASE_URL');
 const SERVICE_ROLE_KEY = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
@@ -9,6 +10,51 @@ function getAdminClient() {
   return createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
+}
+
+// PATCH : changer le rôle d'un membre (employee ↔ manager)
+export async function PATCH(
+  req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const jwt = req.headers.get('authorization')?.replace('Bearer ', '');
+    if (!jwt) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 });
+
+    const parsed = z
+      .object({ role: z.enum(['employee', 'manager']) })
+      .safeParse(await req.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Rôle invalide' }, { status: 400 });
+    }
+
+    const adminClient = getAdminClient();
+    const { data: { user }, error } = await adminClient.auth.getUser(jwt);
+    if (error || !user) return NextResponse.json({ error: 'Non authentifié' }, { status: 401 });
+
+    const { id: memberId } = await params;
+
+    // Seul le patron de ce tenant peut modifier le rôle, et uniquement un
+    // membre de SON équipe — le même garde-fou que DELETE.
+    const { data: membership } = await adminClient
+      .from('business_members')
+      .select('id')
+      .eq('owner_id', user.id)
+      .eq('member_id', memberId)
+      .maybeSingle();
+
+    if (!membership) return NextResponse.json({ error: 'Employé introuvable' }, { status: 404 });
+
+    const { error: updErr } = await adminClient
+      .from('business_members')
+      .update({ role: parsed.data.role })
+      .eq('id', membership.id);
+    if (updErr) return NextResponse.json({ error: 'Mise à jour impossible' }, { status: 500 });
+
+    return NextResponse.json({ success: true });
+  } catch (e) {
+    return NextResponse.json(serverError('employees.patch', e), { status: 500 });
+  }
 }
 
 // DELETE : supprimer un employé
