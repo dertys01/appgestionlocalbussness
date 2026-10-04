@@ -186,8 +186,8 @@ export function LoginPage() {
                   <p className="text-xs text-slate-500 mt-1">Un lien de réinitialisation sera envoyé à votre email</p>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-sm font-medium text-slate-700">Email</label>
-                  <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="vous@exemple.com" className={inputClass} />
+                  <label htmlFor="forgot-email" className="text-sm font-medium text-slate-700">Email</label>
+                  <input id="forgot-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="vous@exemple.com" className={inputClass} />
                 </div>
                 {error && <p className="text-red-600 text-sm">{error}</p>}
                 {info && <p className="text-emerald-700 text-sm">{info}</p>}
@@ -201,13 +201,13 @@ export function LoginPage() {
             ) : mode === 'login' ? (
               <form onSubmit={handleLogin} className="space-y-4">
                 <div className="space-y-1">
-                  <label className="text-sm font-medium text-slate-700">Email</label>
-                  <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="vous@exemple.com" className={inputClass} />
+                  <label htmlFor="login-email" className="text-sm font-medium text-slate-700">Email</label>
+                  <input id="login-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="vous@exemple.com" className={inputClass} />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-sm font-medium text-slate-700">Mot de passe</label>
+                  <label htmlFor="login-mdp" className="text-sm font-medium text-slate-700">Mot de passe</label>
                   <div className="relative">
-                    <input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="••••••••" className={inputClass + ' pr-11'} />
+                    <input id="login-mdp" type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="••••••••" className={inputClass + ' pr-11'} />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
@@ -229,17 +229,17 @@ export function LoginPage() {
             ) : (
               <form onSubmit={handleRegister} className="space-y-4">
                 <div className="space-y-1">
-                  <label className="text-sm font-medium text-slate-700">Nom de votre boutique</label>
-                  <input type="text" value={businessName} onChange={(e) => setBusinessName(e.target.value)} required placeholder="Ex: Épicerie Adjonou" className={inputClass} />
+                  <label htmlFor="reg-boutique" className="text-sm font-medium text-slate-700">Nom de votre boutique</label>
+                  <input id="reg-boutique" type="text" value={businessName} onChange={(e) => setBusinessName(e.target.value)} required placeholder="Ex: Épicerie Adjonou" className={inputClass} />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-sm font-medium text-slate-700">Email</label>
-                  <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="vous@exemple.com" className={inputClass} />
+                  <label htmlFor="reg-email" className="text-sm font-medium text-slate-700">Email</label>
+                  <input id="reg-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required placeholder="vous@exemple.com" className={inputClass} />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-sm font-medium text-slate-700">Mot de passe</label>
+                  <label htmlFor="reg-mdp" className="text-sm font-medium text-slate-700">Mot de passe</label>
                   <div className="relative">
-                    <input type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="8 caractères minimum" minLength={6} className={inputClass + ' pr-11'} />
+                    <input id="reg-mdp" type={showPassword ? 'text' : 'password'} value={password} onChange={(e) => setPassword(e.target.value)} required placeholder="8 caractères minimum" minLength={6} className={inputClass + ' pr-11'} />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
