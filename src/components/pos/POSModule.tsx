@@ -213,17 +213,26 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
     });
   }, [disponibles, plusVendus]);
 
+  const [tri, setTri] = useState<'frequence' | 'nom' | 'prixAsc' | 'prixDesc' | 'stockAsc'>('frequence');
+
   const filtered = useMemo(() => {
     // La recherche porte sur TOUT le catalogue, jamais sur la seule catégorie
     // retenue. Filtrer sur « laptop » puis chercher « a17 » ne doit pas
     // disparaître : le caissier taperait trois mots de plus, ne trouverait
     // rien, croiraitait que le téléphone n'existe pas. La catégorie est un
     // filtre de parcours ; la recherche est une recherche.
-    if (search.trim()) return rechercher(parFrequence, search).map((r) => r.product);
-    return categorie === null
-      ? parFrequence
-      : parFrequence.filter((p) => (p.category ?? '') === categorie);
-  }, [parFrequence, categorie, search]);
+    let list = search.trim()
+      ? rechercher(parFrequence, search).map((r) => r.product)
+      : categorie === null
+        ? parFrequence
+        : parFrequence.filter((p) => (p.category ?? '') === categorie);
+
+    if (tri === 'nom') list = [...list].sort((a, b) => a.name.localeCompare(b.name, 'fr'));
+    else if (tri === 'prixAsc') list = [...list].sort((a, b) => a.price_sell - b.price_sell);
+    else if (tri === 'prixDesc') list = [...list].sort((a, b) => b.price_sell - a.price_sell);
+    else if (tri === 'stockAsc') list = [...list].sort((a, b) => a.stock_qty - b.stock_qty);
+    return list;
+  }, [parFrequence, categorie, search, tri]);
 
   /** Les catégories présentes dans le catalogue, pour la barre de filtres. */
   const categories = useMemo(() => {
@@ -728,7 +737,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         {/* Le compteur évite qu'un commerçant cherche un produit absent en
             croyant qu'il n'existe pas : avec 1 000 références, une grille
             tronquée sans indication paraît vide. */}
-        <div className="flex items-center justify-between text-xs text-slate-500">
+        <div className="flex items-center gap-3 text-xs text-slate-500">
           <span>
             {filtered.length} produit{filtered.length > 1 ? 's' : ''}
             {search.trim() && ` pour « ${search.trim()} »`}
@@ -745,6 +754,18 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           >
             {vue === 'liste' ? 'Vue grille' : 'Vue liste'}
           </button>
+          <select
+            aria-label="Tri des produits"
+            value={tri}
+            onChange={(e) => setTri(e.target.value as typeof tri)}
+            className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-500 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="frequence">Les plus vendus</option>
+            <option value="nom">Nom A–Z</option>
+            <option value="prixAsc">Prix croissant</option>
+            <option value="prixDesc">Prix décroissant</option>
+            <option value="stockAsc">Stock faible d&apos;abord</option>
+          </select>
         </div>
 
         {vue === 'liste' ? (
@@ -758,9 +779,12 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                   className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-indigo-50/40 active:bg-indigo-50 transition-colors"
                 >
                   <div className="flex-1 min-w-0">
-                    <div className="font-medium text-slate-800 text-sm truncate">{p.name}</div>
-                    <div className="text-xs text-slate-500 truncate">
-                      {p.category ?? '—'} · Stock : {formatQty(p.stock_qty)} {p.unit ?? 'pce'}
+                    <div className="font-medium text-slate-800 text-sm truncate">
+                      {p.name}
+                      <span className="ml-2 text-xs font-normal text-slate-400">{p.category ?? '—'}</span>
+                    </div>
+                    <div className="text-xs text-slate-500">
+                      Stock : {formatQty(p.stock_qty)} {p.unit ?? 'pce'}
                     </div>
                   </div>
                   <div className="font-semibold text-indigo-600 text-sm whitespace-nowrap">
