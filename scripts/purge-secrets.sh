@@ -84,14 +84,18 @@ echo
 echo "Réécriture de l'historique…"
 python3 -m git_filter_repo --force --replace-text "$TEXTE"
 
+echo "Historique purgé."
+# On vérifie des CLÉS ENTIÈRES, jamais le seul préfixe 'eyJhbGci' : ce préfixe
+# apparaît dans ce fichier (les motifs ci-dessus), dans les tests de
+# l'assainisseur et dans un ancien commentaire tronqué. Le vérifier rendrait le
+# contrôle incapable de jamais passer.
 RESTANT=$(git log --all -p 2>/dev/null \
-  | grep -cE 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9' || true)
+  | grep -cE 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}' || true)
 if [ "$RESTANT" != "0" ]; then
   echo "ÉCHEC : il reste $RESTANT clé(s) dans l'historique. Ne pas pousser." >&2
   exit 1
 fi
-
-echo "Historique purgé. Force-push…"
+echo "0 clé dans l'historique. Force-push…"
 git push --force --mirror origin
 
 cat <<'FIN'
