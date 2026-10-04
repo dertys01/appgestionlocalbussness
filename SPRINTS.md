@@ -1081,6 +1081,7 @@ et encaisser en salle ; le 15 est un gain de pilotage, le 16 du confort.
 
 | Date | Commit | Objet |
 |---|---|---|
+| 04/10/2026 | — | **Sprint 13 — restaurant : salle et commande ouverte** : `restaurant_tables` / `restaurant_orders` / `restaurant_order_items` + vue `restaurant_floor`, onglet Salle, état des plats (à envoyer / envoyé / servi). Une commande **n'encaisse rien** — `sales` reste la source unique du CA, la clôture est au Sprint 14 · section 23 du harnais, **15 contrôles SQL** · tests **128 → 134** |
 | 04/10/2026 | — | **Sprint 12 — le domaine d'activité** : `organizations.domain`, question à l'inscription, navigation rendue depuis `src/lib/modules.ts`, bascule dans les réglages · tests **122 → 128** |
 | 04/10/2026 | — | Correctifs de sécurité et de robustesse issus de l'audit : webhook Stripe atomique (`claim_webhook_event`), jetons d'invitation hachés (sha256), validation zod des API, verrous de stock, Sentry client, CI GitHub Actions + Gitleaks · migrations **22 → 26** |
 | 03/10/2026 | — | Recette **prod** du Sprint 11 — barre de catégories, + vendus, reprise de vente, recherche tolérante |

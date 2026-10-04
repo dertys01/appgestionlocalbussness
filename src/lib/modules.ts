@@ -26,11 +26,13 @@ const COMMUN: Tab[] = ['dashboard', 'pos', 'inventory', 'sales', 'debts', 'repor
 const RETAIL_ONLY: Tab[] = ['forecast'];
 
 /**
- * Modules propres à la restauration. Vide au Sprint 12 : les écrans Salle,
- * Cuisine et Recettes arrivent aux sprints 13 à 15. La liste existe pour que
- * l'ajout d'un module soit une ligne, pas une refonte.
+ * Modules propres à la restauration.
+ *
+ * `floor` = la salle et la commande ouverte (Sprint 13). Cuisine et recettes
+ * arrivent aux sprints 14 et 15 : la liste existe pour qu'un module de plus
+ * soit une ligne, pas une refonte.
  */
-const RESTAURANT_ONLY: Tab[] = [];
+const RESTAURANT_ONLY: Tab[] = ['floor'];
 
 export const DOMAIN_MODULES: Record<Domain, Tab[]> = {
   retail: [...COMMUN, ...RETAIL_ONLY],

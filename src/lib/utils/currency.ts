@@ -14,3 +14,16 @@ const CFA_FORMATTER = new Intl.NumberFormat('fr-FR', {
 export function formatCFA(amount: number): string {
   return CFA_FORMATTER.format(amount) + ' F';
 }
+
+/**
+ * Quantité affichée : « 1,5 » et non « 1.50000001 ».
+ *
+ * Le point décimal est LOCAL — un montant brut s'affiche avec un point chez les
+ * anglophones, une virgule chez nous. `maximumFractionDigits: 3` évite la
+ * notation scientifique et les zéros de fin sur les gros nombres.
+ */
+const QTY_FORMATTER = new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 3 });
+
+export function formatQty(n: number): string {
+  return QTY_FORMATTER.format(n);
+}
