@@ -1,39 +1,64 @@
-# Sécurité — à faire après incident
+# Sécurité — incident de fuite de clés
 
-## Moment de la rotation
+## Où on en est
 
-**Fin de projet** : ces opérations sont à faire après la stabilisation des
-fonctionnalités — la purge force-pousse et invaliderait le rythme de commits
-en cours. Dès que la prod devient réellement utilisée, la clé doit être tournée
-avant tout le reste.
+**La clé service role est encore valide dans l'historique git.** Elle y est
+depuis les commits antérieurs à `591c2e7` (« hardcode service role key »). Le
+code actuel est propre — aucun secret dans le dernier commit, vérifié par
+Gitleaks en CI à chaque push — mais l'historique, lui, les contient encore.
 
-Les clés Supabase (anon **et service role**) ont été commitées en clair dans
-l'historique git (commits antérieurs à `591c2e7` : « hardcode supabase
-credentials as fallback », « hardcode service role key »). L'état courant du
-code est propre, mais l'historique les contient toujours.
+Tant que la clé n'est pas tournée, la purge ne sert à rien : réécrire
+l'historique ne révoque pas une clé. L'ordre n'est donc pas négociable.
 
-Actions requises, dans l'ordre :
+## Ce qui a été préparé
 
-1. **Révoquer et régénérer** la clé service role dans le dashboard Supabase
-   (Settings → API). La clé anon peut rester si le projet est privé, mais la
-   rotation reste conseillée.
-2. Mettre à jour `.env.local` et les variables Vercel (`NEXT_PUBLIC_SUPABASE_URL`,
-   `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`,
-   `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `SENTRY_AUTH_TOKEN`).
-3. Redéployer, puis purger l'historique (`git filter-repo`) ou reconsidérer
-   le dépôt comme définitivement compromis. Ne JAMAIS force-pusher sans avoir
-   d'abord tourné les clés.
-4. La CI (`.github/workflows/ci.yml`, job `secrets`) exécute Gitleaks pour
-   empêcher toute nouvelle fuite.
+- La purge est **testée** : simulation sur un clone jetable, 121 commits
+  réécrits, 0 occurrence de clé `service_role` ensuite, arbre du dernier commit
+  inchangé, suite de tests verte.
+- `scripts/purge-secrets.sh` fait le travail, `--check` d'abord (par défaut),
+  `--purge` seulement quand c'est décidé.
+- Le script remplace les **valeurs exactes** trouvées, pas « tout ce qui
+  ressemble à un JWT » : la clé anon est publique par principe, elle sert au
+  navigateur, et l'abraser n'aurait aucun intérêt.
 
-## Durcissements en place
+## Les deux étapes qui restent — dans cet ordre
 
-- Rate limiting persistant (`bump_rate_limit`, table `rate_limits`) sur toutes
-  les écritures des routes sensibles (`src/proxy.ts`).
-- Webhook Stripe : signature vérifiée, idempotence atomique via
-  `claim_webhook_event()` (`supabase/migration_webhook_claim.sql`).
-- Les erreurs Supabase sont assainies avant journalisation
-  (`sanitizeError`, `src/lib/utils/server.ts`) pour ne pas consigner les
-  en-têtes `Authorization` (clé service role) dans les logs.
-- RLS deny-by-default sur `rate_limits`, `webhook_events`, `beta_*` ;
-  `organizations.plan` verrouillé par trigger + révocation de colonne.
+### 1. Tourner la clé service role (30 secondes, c'est toi seul)
+
+Dashboard Supabase → Project Settings → API Keys → **service_role** →
+Révoquer / Regenerate.
+
+Puis remplacer `SUPABASE_SERVICE_ROLE_KEY` dans les variables Vercel
+(Production + Preview) et redéployer. `.env.local` en local.
+
+Tant que cette étape n'est pas faite, ne lance pas la purge.
+
+### 2. Purger l'historique
+
+```bash
+./scripts/purge-secrets.sh --check    # relire la liste des clés visées
+./scripts/purge-secrets.sh --purge    # réécrit et force-push
+```
+
+Après : fermer les pull requests ouvertes sur GitHub (elles sont orphelines) et
+supprimer tous les clones locaux pour recloner. Un `git pull` ne rattrape pas
+une réécriture d'historique.
+
+`git-filter-repo` est nécessaire : `pip3 install git-filter-repo`.
+
+## Ce qui reste en place entre-temps
+
+- **Gitleaks en CI** (`.github/workflows/ci.yml`) : toute nouvelle fuite fait
+  échouer le build.
+- **Le code ne lit plus aucune clé en dur** : `requireEnv()` échoue bruyamment
+  si une variable manque, au lieu de retomber sur une valeur codée.
+- **Sanctuarisation** : anon et service role ne sont jamais imprimées dans les
+  messages d'erreur (`sanitizeError`, `src/lib/utils/server.ts`).
+
+## Si la clé a déjà fuité
+
+Une clé service role est un passe-partout : elle contourne la RLS, elle est
+donc aussi puissante que l'accès à toutes les données de tous les clients.
+Si tu penses qu'elle a été lue par quelqu'un — pas seulement écrite par erreur
+— la rotation ne suffit plus : il faut auditer les ventes, les dettes et les
+contacts clients, puis prévenir les personnes concernées.
