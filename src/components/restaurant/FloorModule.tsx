@@ -44,9 +44,21 @@ interface OrderLine {
   product_id: string;
   quantity: number;
   unit_price: number;
+  /** Supplément du modificateur choisi, figé à l'insertion. */
+  extra_price: number;
+  modifier: string | null;
   note: string | null;
   status: 'new' | 'sent' | 'served';
   name?: string;
+}
+
+/** Option de carte : « bien cuit », « double portion », « sans piment ». */
+interface Modifier {
+  id: string;
+  product_id: string;
+  name: string;
+  extra_price: number;
+  is_required: boolean;
 }
 
 const STATUT_LIBELLE = {
@@ -82,6 +94,13 @@ export function FloorModule({ products }: { products: Product[] }) {
   const [busy, setBusy] = useState(false);
   const [newTableName, setNewTableName] = useState('');
 
+  // Carte des options : chargée pour le plat sélectionné, pas pour tout le
+  // catalogue. Un restaurant de 200 plats ne doit pas envoyer 200 lignes de
+  // modificateurs pour en afficher trois.
+  const [modifiers, setModifiers] = useState<Modifier[]>([]);
+  const [modSelection, setModSelection] = useState('');
+  const [platChoisi, setPlatChoisi] = useState<Product | null>(null);
+
   // Le client Supabase n'est typé sur aucun schéma : les noms de colonnes ne
   // sont pas vérifiés. Une petite surface typée vaut mieux que des `any`.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -116,6 +135,22 @@ export function FloorModule({ products }: { products: Product[] }) {
       }))
     );
   }, [db]);
+
+  // Options du plat sélectionné. Un restaurant de 200 plats n'envoie pas 200
+  // lignes de modificateurs pour en proposer trois : on charge à la demande.
+  useEffect(() => {
+    const plat = platChoisi;
+    const t = setTimeout(async () => {
+      if (!plat) { setModifiers([]); return; }
+      const { data } = await db
+        .from('product_modifiers')
+        .select('id, product_id, name, extra_price, is_required')
+        .eq('product_id', plat.id)
+        .order('name');
+      setModifiers((data ?? []) as Modifier[]);
+    }, 0);
+    return () => clearTimeout(t);
+  }, [platChoisi, db]);
 
   // Les effets encapsulent l'appel async plutôt que d'appeler loadTables()
 // directement : setLoading(true) serait alors un setState synchrone dans un
@@ -184,8 +219,17 @@ export function FloorModule({ products }: { products: Product[] }) {
 
   const addLine = async (product: Product) => {
     if (!orderId) return;
-    const n = lireMontant(qty) ?? 1;
+    // Un champ quantité vide vaut 1 — le serveur tape rarement la quantité.
+    // lireMontant('') rend 0 (zéro est une quantité valide ailleurs), donc le
+    // cas du champ vide doit être traité avant l'appel.
+    const n = qty.trim() === '' ? 1 : lireMontant(qty) ?? 1;
     if (n <= 0) return;
+    // Un modificateur choisi (« double portion ») porte son supplément dans
+    // extra_price. La colonne est renseignée à l'insertion : la modifier
+    // ensuite laisserait un supplément fantôme, et le total affiché par la vue
+    // de la salle (qui additionne quantity × unit_price) divergerait de
+    // l'addition réellement encaissée.
+    const mod = modifiers.find((m) => m.id === modSelection) ?? null;
     setBusy(true);
     setError('');
     const { error: err } = await db.from('restaurant_order_items').insert({
@@ -194,12 +238,16 @@ export function FloorModule({ products }: { products: Product[] }) {
       quantity: n,
       // Prix convenu : comme au POS, le patron négocie à la table.
       unit_price: product.price_sell,
+      extra_price: mod?.extra_price ?? 0,
+      modifier: mod?.name ?? null,
       note: note.trim() || null,
     });
     setBusy(false);
     if (err) { setError(err.message); return; }
     setQty('');
     setNote('');
+    setModSelection('');
+    setPlatChoisi(null);
     await Promise.all([loadLines(orderId), loadTables()]);
   };
 
@@ -267,7 +315,17 @@ export function FloorModule({ products }: { products: Product[] }) {
       .slice(0, 12);
   }, [products, search]);
 
-  const totalLignes = lines.reduce((n, l) => n + Number(l.quantity) * Number(l.unit_price), 0);
+  // Le supplément des modificateurs compte dans le total affiché : c'est le
+// montant que la table va payer. La commande ne le contient pas encore tant que
+// la ligne n'est pas enregistrée — d'où le double endroit où il est compté
+  // (ligne et total), qui doivent rester d'accord.
+  // Le supplément des modificateurs compte dans le total affiché : c'est le
+  // montant que la table va payer. Il est figé à l'insertion de la ligne, donc
+  // les deux endroits qui l'additionnent (ligne et total) restent d'accord.
+  const totalLignes = lines.reduce(
+    (n, l) => n + Number(l.quantity) * (Number(l.unit_price) + Number(l.extra_price ?? 0)),
+    0
+  );
 
   // ── Clôture ────────────────────────────────────────────────
   // Fractionner ne multiplie PAS les ventes : trois convives à 12 000 F font
@@ -276,8 +334,11 @@ export function FloorModule({ products }: { products: Product[] }) {
   const [splitCount, setSplitCount] = useState(1);
   const [splitOpen, setSplitOpen] = useState(false);
   const [payment, setPayment] = useState<'cash' | 'momo'>('cash');
+  // Pourboire laissé sur la table. Il est enregistré mais HORS du chiffre
+  // d'affaires : c'est une manne, pas une recette.
+  const [tip, setTip] = useState(0);
   const [closing, setClosing] = useState(false);
-  const [closed, setClosed] = useState<{ total: number; paid: number; invoice: string | null; saleId: string; perShare: number } | null>(null);
+  const [closed, setClosed] = useState<{ total: number; paid: number; tip: number; invoice: string | null; saleId: string; perShare: number } | null>(null);
   // Le caissier encaisse en salle mais ne solde pas : la clôture écrit dans
   // sales, c'est la vente du patron. Le patron peut, lui.
   const peutEncaisser = !isEmployee || canManageProducts;
@@ -292,21 +353,31 @@ export function FloorModule({ products }: { products: Product[] }) {
       p_order_id: orderId,
       p_payment_method: payment,
       p_split_count: splitCount,
+      p_tip: tip,
       // Une addition à crédit exige un numéro : close_table_order() le refuse
-      // sans, sinon la dette ne serait rattachable à personne. Le Sprint 16
-      // ouvrira le crédit depuis cet écran ; ici on ne l'expose pas.
+      // sans, sinon la dette ne serait rattachable à personne. L'écran ne
+      // l'expose pas encore — c'est une brique du Sprint 16.
       p_client_phone: null,
     });
     setClosing(false);
     if (err) { setError(err.message); return; }
-    const r = data as { total_amount: number; amount_paid: number; invoice_number: string | null; sale_id: string; per_share: number };
+    const r = data as {
+      total_amount: number;
+      amount_paid: number;
+      tip?: number;
+      invoice_number: string | null;
+      sale_id: string;
+      per_share: number;
+    };
     setClosed({
       total: Number(r.total_amount),
       paid: Number(r.amount_paid),
+      tip: Number(r.tip ?? 0),
       invoice: r.invoice_number ?? null,
       saleId: r.sale_id,
       perShare: Number(r.per_share),
     });
+    setTip(0);
     // La commande disparaît du plan : la table redevient libre.
     setOrderId(null);
     setOuverte(null);
@@ -380,6 +451,7 @@ export function FloorModule({ products }: { products: Product[] }) {
               {formatCFA(closed.total)}
               {closed.invoice ? ` · facture ${closed.invoice}` : ''}
               {closed.perShare !== closed.total ? ` · ${formatCFA(closed.perShare)} par part` : ''}
+              {closed.tip > 0 ? ` · pourboire ${formatCFA(closed.tip)} (hors CA)` : ''}
             </p>
             <button
               onClick={() => setClosed(null)}
@@ -500,11 +572,18 @@ export function FloorModule({ products }: { products: Product[] }) {
                     <div className="flex-1 min-w-0">
                       <div className="text-sm text-slate-800 truncate">
                         {formatQty(l.quantity)} × {l.name}
+                        {l.modifier && (
+                          <span className="ml-1 text-xs text-indigo-600">({l.modifier})</span>
+                        )}
                       </div>
                       {l.note && <div className="text-xs text-amber-700 truncate">{l.note}</div>}
                     </div>
                     <span className="text-sm font-medium text-slate-700 whitespace-nowrap">
-                      {formatCFA(Number(l.quantity) * Number(l.unit_price))}
+                      {/* Le supplément entre dans le montant de la ligne : c'est
+                          ce que close_table_order() additionne. */}
+                      {formatCFA(
+                        Number(l.quantity) * (Number(l.unit_price) + Number(l.extra_price ?? 0))
+                      )}
                     </span>
                     <button
                       onClick={() => removeLine(l)}
@@ -586,6 +665,26 @@ export function FloorModule({ products }: { products: Product[] }) {
                   </div>
                 )}
 
+                {/* Pourboire : laissé sur la table, hors application. On le note
+                    pour le savoir, sans l'ajouter au chiffre d'affaires — sinon
+                    les rapports Gateway mensuels surestimeraient le CA. */}
+                <div className="flex items-center gap-2">
+                  <label htmlFor="tip" className="text-xs font-medium text-slate-600 shrink-0">
+                    Pourboire
+                  </label>
+                  <Input
+                    id="tip"
+                    value={tip}
+                    onChange={(e) => setTip(Math.max(0, lireMontant(e.target.value) ?? 0))}
+                    placeholder="0"
+                    inputMode="decimal"
+                    className="w-24"
+                  />
+                  <span className="text-xs text-slate-500">
+                    {tip > 0 ? `total ${formatCFA(totalLignes + tip)}` : 'laisser en espèces'}
+                  </span>
+                </div>
+
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="flex rounded-lg border border-slate-200 overflow-hidden">
                     {(['cash', 'momo'] as const).map((m) => (
@@ -653,14 +752,80 @@ export function FloorModule({ products }: { products: Product[] }) {
                   {resultats.map((p) => (
                     <button
                       key={p.id}
-                      onClick={() => addLine(p)}
+                      // Un premier clic sélectionne le plat et charge ses
+                      // options ; un second l'ajoute. Ajouter d'emblée
+                      // donnerait une ligne sans cuisson — le serveur
+                      // corrigerait à la main, et le ticket cuisine serait faux.
+                      onClick={() => {
+                        if (platChoisi?.id === p.id) { void addLine(p); return; }
+                        setPlatChoisi(p);
+                        setModSelection('');
+                      }}
                       disabled={busy}
-                      className="rounded-lg border border-slate-200 px-2 py-2 text-left hover:border-indigo-300 hover:bg-indigo-50/40 disabled:opacity-60"
+                      aria-pressed={platChoisi?.id === p.id}
+                      className={`rounded-lg border px-2 py-2 text-left disabled:opacity-60 ${
+                        platChoisi?.id === p.id
+                          ? 'border-indigo-400 bg-indigo-50'
+                          : 'border-slate-200 hover:border-indigo-300 hover:bg-indigo-50/40'
+                      }`}
                     >
                       <span className="block text-xs font-medium text-slate-800 truncate">{p.name}</span>
                       <span className="block text-xs text-indigo-600">{formatCFA(p.price_sell)}</span>
                     </button>
                   ))}
+                </div>
+              )}
+
+              {/* Options du plat sélectionné, puis validation */}
+              {platChoisi && (
+                <div className="rounded-lg border border-indigo-200 bg-indigo-50/40 p-3 space-y-2">
+                  <p className="text-xs font-medium text-slate-700">
+                    {platChoisi.name}
+                  </p>
+
+                  {modifiers.length === 0 ? (
+                    <p className="text-xs text-slate-500">
+                      Aucune option pour ce plat.
+                    </p>
+                  ) : (
+                    <div className="flex flex-wrap gap-1.5">
+                      {modifiers.map((m) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => setModSelection(m.id)}
+                          aria-pressed={modSelection === m.id}
+                          className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                            modSelection === m.id
+                              ? 'border-indigo-500 bg-indigo-600 text-white'
+                              : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-300'
+                          }`}
+                        >
+                          {m.name}
+                          {Number(m.extra_price) > 0 && ` +${formatCFA(m.extra_price)}`}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-2">
+                    <Button
+                      onClick={() => addLine(platChoisi)}
+                      disabled={busy}
+                      className="bg-indigo-600 hover:bg-indigo-700 gap-2"
+                    >
+                      {busy
+                        ? <Loader2 className="h-4 w-4 animate-spin" />
+                        : <Plus className="h-4 w-4" />}
+                      Ajouter à la commande
+                    </Button>
+                    <button
+                      onClick={() => { setPlatChoisi(null); setModSelection(''); }}
+                      className="text-xs text-slate-500 hover:text-slate-700 underline"
+                    >
+                      Annuler
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

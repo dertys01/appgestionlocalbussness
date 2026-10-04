@@ -27,6 +27,7 @@ const ORDER = [
   'migration_restaurant_tables.sql',
   'migration_table_checkout.sql',
   'migration_recipes.sql',
+  'migration_restaurant_finitions.sql',
 ];
 
 let failed = 0;

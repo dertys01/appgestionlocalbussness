@@ -10,9 +10,14 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
  * Sprint 14 écrira dans `sales`.
  */
 
-const { salle, inserts, lignesCommande } = vi.hoisted(() => {
+const { salle, inserts, lignesCommande, modificateurs } = vi.hoisted(() => {
   const inserts: Array<Record<string, unknown>> = [];
-  return { salle: [] as unknown[], inserts, lignesCommande: [] as unknown[] };
+  return {
+    salle: [] as unknown[],
+    inserts,
+    lignesCommande: [] as unknown[],
+    modificateurs: [] as unknown[],
+  };
 });
 
 // Le plan de salle vient de la vue restaurant_floor, qui répond déjà au tri :
@@ -45,12 +50,17 @@ const supabase = {
       ? chaine(salle)
       : table === 'restaurant_order_items'
         ? chaine(lignesCommande)
-        : chaine({ id: 'x' }),
+        : table === 'product_modifiers'
+          ? chaine(modificateurs)
+          : chaine({ id: 'x' }),
   rpc: vi.fn(async (fn: string) => {
     rpcResultats.push(fn);
     if (fn === 'close_table_order') {
       return {
-        data: { total_amount: 9200, amount_paid: 9200, invoice_number: 'FAC-2026-00042', sale_id: 'v-1', per_share: 4600 },
+        data: {
+          total_amount: 9200, amount_paid: 9200, tip: 2000,
+          invoice_number: 'FAC-2026-00042', sale_id: 'v-1', per_share: 4600,
+        },
         error: null,
       };
     }
@@ -105,11 +115,18 @@ function definirCommande(...ls: unknown[]) {
   lignesCommande.push(...ls);
 }
 
+function definirModificateurs(...ms: unknown[]) {
+  modificateurs.length = 0;
+  modificateurs.push(...ms);
+}
+
 const plat = {
   id: 'l1',
   product_id: 'p1',
   quantity: 2,
   unit_price: 4500,
+  extra_price: 0,
+  modifier: null,
   note: null,
   status: 'new',
   product: { name: 'Poulet braisé' },
@@ -174,6 +191,63 @@ describe('FloorModule — la salle', () => {
     expect(inserts[0].owner_id).toBe('org-1');
     // L'unicité vient de l'index partiel en base ; le client n'écrit qu'une fois.
     expect(screen.getByText(/Fermer le panneau/i)).toBeInTheDocument();
+  });
+
+  it('propose les options du plat avant de l\'ajouter', async () => {
+    definirSalle(table({ order_id: 'cmd-9', status: 'open' }));
+    definirCommande();
+    definirModificateurs(
+      { id: 'm1', product_id: 'p1', name: 'Bien cuit', extra_price: 0, is_required: true },
+      { id: 'm2', product_id: 'p1', name: 'Double portion', extra_price: 1500, is_required: false },
+    );
+    render(<FloorModule products={produits} />);
+
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Table 1'));
+    await waitFor(() => expect(screen.getByText(/Fermer le panneau/i)).toBeInTheDocument());
+
+    // Premier clic : sélection, PAS d'insertion. Ajouter d'emblée donnerait une
+    // ligne sans cuisson, que le serveur corrigerait à la main.
+    // La tuile du plat : nom + prix dans un même bouton. Le libellé accessible
+// est le nom seul (le prix est dans un span sans rôle), d'où un sélecteur
+// par texte plutôt que par rôle.
+fireEvent.click(screen.getAllByText('Poulet braisé')[0]);
+
+    await waitFor(() => expect(screen.getByText('Bien cuit')).toBeInTheDocument());
+    expect(screen.getByText('Double portion +1 500 F')).toBeInTheDocument();
+    // Aucune ligne de commande écrite : inserts ne contient pour l'instant que
+    // l'ouverture de la table.
+    expect(inserts.filter((i) => 'product_id' in i)).toHaveLength(0);
+
+    fireEvent.click(screen.getByText('Double portion +1 500 F'));
+    fireEvent.click(screen.getByRole('button', { name: /Ajouter à la commande/i }));
+
+    // Le filtre est relu dans waitFor : une liste calculée une fois ne verrait pas
+    // l'écriture qui arrive après.
+    await waitFor(() => {
+      expect(inserts.filter((i) => 'product_id' in i)).toHaveLength(1);
+    });
+    const ligne = inserts.find((i) => 'product_id' in i)!;
+    expect(ligne.modifier).toBe('Double portion');
+    expect(ligne.extra_price).toBe(1500);
+  });
+
+  it('enregistre le pourboire sans le confondre avec l\'addition', async () => {
+    definirSalle(table({ order_id: 'cmd-9', status: 'open' }));
+    definirCommande(plat);
+    render(<FloorModule products={produits} />);
+
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Table 1'));
+    await waitFor(() => expect(screen.getAllByText(/Poulet braisé/).length).toBeGreaterThan(1));
+
+    fireEvent.change(screen.getByLabelText(/Pourboire/i), { target: { value: '2000' } });
+    fireEvent.click(screen.getByRole('button', { name: /Encaisser 9\s?000 F/ }));
+
+    await waitFor(() => expect(screen.getByText(/Addition encaissée/i)).toBeInTheDocument());
+    // 2 000 de pourboire ne changent pas le prix affiché de l'addition.
+    expect(screen.getByText(/pourboire 2 000 F \(hors CA\)/)).toBeInTheDocument();
+    expect(rpcResultats).toContain('close_table_order');
   });
 
   it('partage l\'addition sans multiplier les ventes', async () => {

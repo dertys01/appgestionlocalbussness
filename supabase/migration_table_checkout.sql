@@ -42,7 +42,14 @@ ALTER TABLE restaurant_order_items
 -- Une vue, pas une table : le ticket est une LECTURE de la commande au moment
 -- où la cuisine l'imprime. Le stocker dupliquerait l'état et pourrait diverger
 -- de la commande — exactement ce que le stock figé à la vente évite pour le coût.
-CREATE OR REPLACE VIEW restaurant_kitchen_ticket
+--
+-- DROP avant CREATE : cette vue est REPRISE plus tard par
+-- migration_restaurant_finitions.sql, qui y ajoute la colonne `modifier`. Un
+-- CREATE OR REPLACE ne peut pas retirer une colonne — « cannot drop columns
+-- from view » — et le harnais rejoue ce fichier sur une base déjà corrigée.
+DROP VIEW IF EXISTS restaurant_kitchen_ticket;
+
+CREATE VIEW restaurant_kitchen_ticket
 WITH (security_invoker = true)
 AS
 SELECT
@@ -250,6 +257,15 @@ $$;
 
 REVOKE ALL ON FUNCTION close_table_order(uuid, text, numeric, int, text, text) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION close_table_order(uuid, text, numeric, int, text, text) TO authenticated;
+
+-- La version à 7 arguments de migration_restaurant_finitions.sql est retirée
+-- avant ce CREATE : les deux signatures coexistant, un appel à 4 arguments
+-- devient ambigu (« function close_table_order(unknown, unknown, unknown,
+-- integer) is not unique ») et AUCUN ne s'exécute. Ce DROP est la contrepartie
+-- de celui que fait migration_restaurant_finitions.sql sur la version à
+-- 6 arguments — les deux migrations se nettoient donc mutuellement, dans
+-- l'ordre, quelle que soit la base sur laquelle le harnais repart.
+DROP FUNCTION IF EXISTS close_table_order(uuid, text, numeric, int, text, text, numeric);
 
 COMMENT ON FUNCTION close_table_order(uuid, text, numeric, int, text, text) IS
   'Solde une addition de table : transforme les lignes en vente via create_sale(), '

@@ -28,6 +28,24 @@ export interface Product {
 }
 
 /**
+ * Option d'un plat : « bien cuit », « double portion », « sans piment ».
+ *
+ * `extra_price` est un supplément, jamais un prix : un modificateur gratuite
+ * existe (« bien cuit »), et un prix complet ferait double emploi avec
+ * `Product.price_sell`. Restaurant uniquement.
+ */
+export interface ProductModifier {
+  id: string;
+  owner_id: string;
+  product_id: string;
+  name: string;
+  extra_price: number;
+  /** true = le serveur doit en choisir un (cuisson), false = au choix (sauce). */
+  is_required: boolean;
+  created_at: string;
+}
+
+/**
  * Fournisseur : d'où vient la marchandise. Ne porte aucun montant d'achat ni
  * aucune échéance — ce n'est pas une comptabilité fournisseurs, et le relevé
  * de prix papier suffit dans l'informel.

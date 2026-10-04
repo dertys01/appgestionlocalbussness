@@ -61,6 +61,8 @@ const ORDER = [
   'migration_table_checkout.sql',
   // Recettes et coût de matière : le KPI d'un restaurant.
   'migration_recipes.sql',
+  // Modificateurs, plat du jour, pourboire, réservations.
+  'migration_restaurant_finitions.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -3297,6 +3299,152 @@ check('25i. une vente sans ingrédient suffisant est refusée', pasStock);
   await canRead('25m. un autre restaurant ne voit pas la recette',
     `SELECT count(*) FROM recipe_ingredients WHERE dish_id = '${RJ}'`, false, PATRON);
 }
+
+// ─── 26. Restaurant : modificateurs, pourboire, réservations ──
+// Les finitions qui font la différence entre « une caisse qui gère des plats »
+// et « une caisse de restaurant ». Trois règles y comptent : le modificateur
+// entre dans le prix mais pas dans la consommation d'ingrédients, le pourboire
+// n'entre PAS dans le chiffre d'affaires, et la carte se modifie côté patron
+// seulement.
+console.log('\n▸ Restaurant — finitions');
+
+// Le jeton courant est celui du dernier canWrite/canRead — un autre acteur. On
+// se replace sur le patron du restaurant : sinon get_business_owner_id() résout
+// un autre tenant et « commande introuvable » ferait échouer la section pour
+// une raison de fixture.
+await q(`SELECT set_config('request.jwt.claim.sub', '${RESTO}', false)`);
+
+const MOD1 = 'ffffffff-0000-0000-0000-000000000001';
+const MOD2 = 'ffffffff-0000-0000-0000-000000000002';
+await q(`INSERT INTO auth.users (id, email) VALUES ('${PATRON}', 'patron4@test.ci') ON CONFLICT DO NOTHING`);
+await q(`INSERT INTO product_modifiers (id, owner_id, product_id, name, extra_price) VALUES
+  ('${MOD1}', '${RESTO}', '${RJ}', 'Bien cuit', 0),
+  ('${MOD2}', '${RESTO}', '${RJ}', 'Double portion', 1500)`);
+
+// 26a. Un supplément négatif est refusé : « sans lactose » ne rapporte pas.
+let negMod = false;
+try {
+  await q(`INSERT INTO product_modifiers (owner_id, product_id, name, extra_price)
+    VALUES ('${RESTO}', '${RJ}', 'Remboursé', -100)`);
+} catch { negMod = true; }
+check('26a. un modificateur à prix négatif est refusé', negMod);
+
+// 26b. Le modificateur ENTRE dans le prix facturé : deux doubles portions
+// coûtent 2 × (4 500 + 1 500) = 12 000.
+const OMB = 'cccccccc-0000-0000-0000-0000000000b1';
+await q(`INSERT INTO restaurant_orders (id, owner_id, opened_by)
+  VALUES ('${OMB}', '${RESTO}', '${RESTO}')`);
+await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price, extra_price, modifier, note)
+  VALUES ('${OMB}', '${RJ}', 2, 4500, 1500, 'Double portion', NULL)`);
+const rizAvantMod = await stock(RR);
+{
+  const res = (await q(`SELECT close_table_order('${OMB}', 'cash')`)).rows[0].close_table_order;
+  check('26b. le supplément du modificateur entre dans l\'addition',
+    Number(res.total_amount) === 12000, `total ${res.total_amount}, attendu 12 000`);
+
+  // 26c. Le modificateur ne change QUE le prix : la recette consomme toujours
+  // la quantité, pas le supplément.
+  const rizApres = await stock(RR);
+  check('26c. le modificateur ne modifie pas la consommation d\'ingrédients',
+    Math.abs((rizAvantMod - rizApres) - 0.6) < 0.001,
+    `consommé ${(rizAvantMod - rizApres).toFixed(2)} kg, attendu 0,6`);
+}
+
+// 26d. Le ticket de cuisine montre le modificateur, TOUJOURS sans prix.
+{
+  const colonnes = (await q(`
+    SELECT string_agg(column_name, ',' ORDER BY column_name) AS c
+      FROM information_schema.columns
+     WHERE table_name = 'restaurant_kitchen_ticket'`)).rows[0].c;
+  check('26d. le ticket de cuisine porte le modificateur',
+    colonnes.includes('modifier'), `colonnes : ${colonnes}`);
+  check('26e. et toujours aucun prix', !colonnes.includes('price'), `colonnes : ${colonnes}`);
+}
+
+// 26f. Le pourboire est HORS du chiffre d'affaires : c'est une manne, pas une
+// recette. 36 000 + 5 000 de pourboire = 36 000 de vente, 41 000 pour le client.
+const OMT = 'cccccccc-0000-0000-0000-0000000000b2';
+await q(`INSERT INTO restaurant_orders (id, owner_id, opened_by)
+  VALUES ('${OMT}', '${RESTO}', '${RESTO}')`);
+await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price)
+  VALUES ('${OMT}', '${RJ}', 8, 4500)`);
+{
+  const avant = await count(`SELECT count(*) FROM sales WHERE user_id='${RESTO}'`);
+  const res = (await q(`SELECT close_table_order('${OMT}', 'cash', NULL, 1, NULL, NULL, 5000)`)).rows[0].close_table_order;
+  check('26f. le pourboire n\'entre pas dans le total de la vente',
+    Number(res.total_amount) === 36000, `total ${res.total_amount}`);
+  check('26g. il est reporté à part',
+    Number(res.tip) === 5000 && Number(res.total_with_tip) === 41000,
+    `pourboire ${res.tip}, avec ${res.total_with_tip}`);
+
+  const vente = (await q(`SELECT total_amount FROM sales
+    WHERE id = (SELECT sale_id FROM restaurant_orders WHERE id='${OMT}')`)).rows[0];
+  check('26h. et la vente en base vaut bien 36 000', Number(vente.total_amount) === 36000,
+    `vente ${vente.total_amount}`);
+  const apres = await count(`SELECT count(*) FROM sales WHERE user_id='${RESTO}'`);
+  check('26h2. une seule vente écrite', apres === avant + 1, `${apres} ventes`);
+}
+
+// 26i. Un pourboire négatif est refusé.
+let tipNeg = false;
+try {
+  const OMT2 = 'cccccccc-0000-0000-0000-0000000000b3';
+  await q(`INSERT INTO restaurant_orders (id, owner_id, opened_by) VALUES ('${OMT2}', '${RESTO}', '${RESTO}')`);
+  await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price)
+    VALUES ('${OMT2}', '${RJ}', 1, 4500)`);
+  await q(`SELECT close_table_order('${OMT2}', 'cash', NULL, 1, NULL, NULL, -500)`);
+} catch { tipNeg = true; }
+check('26i. un pourboire négatif est refusé', tipNeg);
+
+// 26j. La version à 6 arguments a disparu : PostgREST résout par nombre
+// d'arguments, une fonction surchargée créerait une ambiguïté silencieuse.
+{
+  const n = await count(`SELECT count(*) FROM pg_proc
+    WHERE proname = 'close_table_order' AND pronargs = 6`);
+  check('26j. close_table_order n\'existe plus qu\'en 7 arguments', n === 0, `${n} signature(s)`);
+}
+
+// 26k. Un caissier ne réécrit pas la carte.
+await canWrite('26k. un caissier n\'ajoute pas de modificateur',
+  `INSERT INTO product_modifiers (owner_id, product_id, name, extra_price)
+   VALUES ('${RESTO}', '${RJ}', 'Sans piment', 0)`, false, SERVEUR);
+
+// 26l. Le patron, lui, peut.
+await canWrite('26l. le patron modifie la carte',
+  `INSERT INTO product_modifiers (owner_id, product_id, name, extra_price)
+   VALUES ('${RESTO}', '${RJ}', 'Sans piment', 0)`, true, RESTO);
+
+// 26m. Le plat du jour est un drapeau, pas une planification.
+await canWrite('26m. le patron bascule un plat du jour',
+  `UPDATE products SET is_daily_special = true WHERE id = '${RJ}'`, true, RESTO);
+{
+  const v = (await q(`SELECT is_daily_special FROM products WHERE id='${RJ}'`)).rows[0];
+  check('26n. le drapeau est bien posé', v.is_daily_special === true);
+}
+
+// 26o. Réservation : taille positive obligatoire.
+let taille = false;
+try {
+  await q(`INSERT INTO restaurant_reservations (owner_id, customer_name, slot_at, party_size)
+    VALUES ('${RESTO}', 'M. Zinsou', now(), 0)`);
+} catch { taille = true; }
+check('26o. une réservation sans place est refusée', taille);
+
+await q(`INSERT INTO restaurant_reservations (owner_id, customer_name, slot_at, party_size, phone)
+  VALUES ('${RESTO}', 'M. Zinsou', now() + interval '3 hours', 4, '+229 97 00 00 00')`);
+{
+  const n = await count(`SELECT count(*) FROM restaurant_reservations WHERE owner_id='${RESTO}'`);
+  check('26p. une réservation se prend', n === 1, `${n} réservation(s)`);
+}
+
+// 26q. Un caissier réserve au téléphone (écriture permise)...
+await canWrite('26q. un caissier peut prendre une réservation',
+  `INSERT INTO restaurant_reservations (owner_id, customer_name, slot_at, party_size)
+   VALUES ('${RESTO}', 'M. Sossa', now() + interval '5 hours', 2)`, true, SERVEUR);
+
+// ...mais il ne voit pas les réservations d'un autre restaurant.
+await canRead('26r. un autre restaurant ne voit pas les réservations',
+  `SELECT count(*) FROM restaurant_reservations WHERE owner_id='${RESTO}'`, false, PATRON);
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
 process.exit(failures ? 1 : 0);
