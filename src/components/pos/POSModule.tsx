@@ -120,6 +120,19 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
    */
   const [plusVendus, setPlusVendus] = useState<Record<string, number>>({});
   const rechercheRef = useRef<HTMLInputElement>(null);
+  // Vue « liste » par défaut : avec des centaines de références, la grille de
+  // cartes étalait le catalogue sur des heures de scroll. La grille reste
+  // accessible et le choix est mémorisé.
+  const [vue, setVue] = useState<'liste' | 'grille'>(() => {
+    try { return localStorage.getItem('pos:vue') === 'grille' ? 'grille' : 'liste'; } catch { return 'liste'; }
+  });
+  const basculerVue = () => {
+    setVue((v) => {
+      const n = v === 'liste' ? 'grille' : 'liste';
+      try { localStorage.setItem('pos:vue', n); } catch { /* stockage plein/privé */ }
+      return n;
+    });
+  };
   const [visibleCount, setVisibleCount] = useState(PRODUCT_PAGE_SIZE);
   // Une recherche remet la tranche au début : sans cela, taper « Nokia » après
   // avoir déroulé 400 produits affiche une grille vide alors qu'il y en a 3.
@@ -724,8 +737,61 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           {visibleProducts.length < filtered.length && (
             <span>affichage par tranches</span>
           )}
+          <button
+            type="button"
+            onClick={basculerVue}
+            className="ml-auto rounded-lg border border-slate-200 px-2 py-1 text-slate-500 hover:border-indigo-300 hover:text-indigo-600 transition-colors"
+            aria-label={vue === 'liste' ? 'Passer en vue grille' : 'Passer en vue liste'}
+          >
+            {vue === 'liste' ? 'Vue grille' : 'Vue liste'}
+          </button>
         </div>
 
+        {vue === 'liste' ? (
+          <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white">
+            {visibleProducts.map((p) => {
+              const inCart = cart.find((i) => i.product.id === p.id);
+              return (
+                <button
+                  key={p.id}
+                  onClick={() => addToCart(p)}
+                  className="w-full flex items-center gap-3 px-3 py-2.5 text-left hover:bg-indigo-50/40 active:bg-indigo-50 transition-colors"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="font-medium text-slate-800 text-sm truncate">{p.name}</div>
+                    <div className="text-xs text-slate-500 truncate">
+                      {p.category ?? '—'} · Stock : {formatQty(p.stock_qty)} {p.unit ?? 'pce'}
+                    </div>
+                  </div>
+                  <div className="font-semibold text-indigo-600 text-sm whitespace-nowrap">
+                    {formatCFA(p.price_sell)}
+                  </div>
+                  {inCart && (
+                    <span className="h-5 min-w-5 px-1 rounded-full bg-indigo-600 text-white text-xs flex items-center justify-center font-bold">
+                      {inCart.quantity}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+
+            {filtered.length === 0 && (
+              <div className="p-6">
+                {search.trim() ? (
+                  <div className="text-center text-sm text-slate-500">
+                    Aucun produit ne correspond à « {search.trim()} »
+                  </div>
+                ) : (
+                  <EmptyState
+                    icon={PackageX}
+                    title="Aucun produit disponible"
+                    hint="Ajoutez d’abord vos produits depuis l’onglet Stock : ils apparaîtront ici pour la caisse."
+                  />
+                )}
+              </div>
+            )}
+          </div>
+        ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
           {visibleProducts.map((p) => {
             const inCart = cart.find((i) => i.product.id === p.id);
@@ -768,6 +834,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
             </div>
           )}
         </div>
+        )}
 
         {/* Pagination par tranches plutôt que rendu de 1 000 cartes : le DOM
             devient inutilisable sur un téléphone, et une caissière doit
