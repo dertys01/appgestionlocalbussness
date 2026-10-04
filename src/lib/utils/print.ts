@@ -1,4 +1,5 @@
 import type { CartItem, Organization } from '@/types';
+import { formatQty } from '@/lib/utils/currency';
 
 interface PrintData {
   items: CartItem[];
@@ -60,7 +61,7 @@ export function printReceipt(data: PrintData) {
           ? `<br><span style="color:#b45309">remise ${escapeHtml(fmtCFA(remise))}/u</span>`
           : '') +
         `</td>`,
-      `<td style="text-align:center">${escapeHtml(i.quantity)}</td>`,
+      `<td style="text-align:center">${escapeHtml(formatQty(i.quantity))}</td>`,
       `<td style="text-align:right">${escapeHtml(fmtCFA(prix))}</td>`,
       `<td style="text-align:right">${escapeHtml(fmtCFA(prix * i.quantity))}</td>`,
       `</tr>`,

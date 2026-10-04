@@ -144,7 +144,18 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
   // et sans ce champ il n'avait aucun moyen d'être enregistré.
   const [advance, setAdvance] = useState('');
   const [loading, setLoading] = useState(false);
+  /**
+   * Message rouge de l'encaissement refusé (« Stock insuffisant… »). Il était
+   * posé à l'échec et jamais effacé : le caissier corrigeait son panier, la
+   * vente passait, et le message restait — il expliquait alors un refus qui
+   * n'avait plus lieu d'être.
+   * Il suit donc tout ce qui décrit la vente : changer une quantité, un prix,
+   * un moyen de paiement ou un champ client rend l'avertissement caduc.
+   */
   const [checkoutError, setCheckoutError] = useState('');
+  useEffect(() => {
+    setCheckoutError('');
+  }, [cart, paymentMethod, clientName, clientPhone, advance, amountGiven]);
   const [receipt, setReceipt] = useState<ReceiptState | null>(null);
   /**
    * Sur mobile, le panier est un panneau plein écran plutôt qu'une colonne
@@ -785,7 +796,10 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                   </div>
                   {inCart && (
                     <span className="h-5 min-w-5 px-1 rounded-full bg-indigo-600 text-white text-xs flex items-center justify-center font-bold">
-                      {inCart.quantity}
+                      {/* formatQty : la pastille affichait « 2.5 » à côté d'un
+                          stock écrit « 48,4 pce ». Deux écritures de la même
+                          quantité dans le même écran. */}
+                      {formatQty(inCart.quantity)}
                     </span>
                   )}
                 </button>
@@ -819,8 +833,8 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                 className="group relative text-left rounded-xl border border-slate-200 bg-white p-3 shadow-sm hover:border-indigo-400 hover:shadow-md transition-all active:scale-95"
               >
                 {inCart && (
-                  <span className="absolute -top-2 -right-2 h-5 w-5 rounded-full bg-indigo-600 text-white text-xs flex items-center justify-center font-bold">
-                    {inCart.quantity}
+                  <span className="absolute -top-2 -right-2 h-5 min-w-5 px-1 rounded-full bg-indigo-600 text-white text-xs flex items-center justify-center font-bold">
+                    {formatQty(inCart.quantity)}
                   </span>
                 )}
                 <div className="text-xs text-slate-500 mb-1">{p.category ?? '—'}</div>
@@ -937,11 +951,17 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                           s'atteint pas avec des boutons +/-. Le champ reste
                           numérique pour le clavier mobile, et l'unité du
                           produit s'affiche à côté. */}
+                      {/* type="text" et non "number" : un champ number REJETTE la virgule —
+                        il vide la saisie au lieu de la prendre. Or « 2,5 kg »
+                        est ce qu'un client dit, et ce qu'un clavier béninois
+                        produit. inputMode="decimal" garde le pavé numérique du
+                        téléphone ; le retour arrière du navigateur fonctionne
+                        sur un text comme sur un number. Le filtrage reste fait
+                        par setLineQty, qui refuse tout ce qui n'est pas un
+                        nombre positif. */}
                       <input
-                        type="number"
+                        type="text"
                         inputMode="decimal"
-                        step="any"
-                        min="0"
                         value={item.quantity}
                         onChange={(e) => setLineQty(item.product.id, e.target.value)}
                         aria-label={`Quantité pour ${item.product.name}`}
@@ -1176,7 +1196,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
               )}
               <p className="text-[11px] text-slate-500">
                 L&apos;acompte compte au chiffre d&apos;affaires aujourd&apos;hui. Le reste
-                apparaîtra dans l&apos;écran Dettes, et le client sera relance&apos; par
+                apparaîtra dans l&apos;écran Dettes, et le client sera relancé par
                 WhatsApp.
               </p>
             </div>
