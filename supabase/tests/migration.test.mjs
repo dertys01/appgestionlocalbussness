@@ -57,6 +57,8 @@ const ORDER = [
   'migration_domain.sql',
   // Salle et commande ouverte : Sprint 13.
   'migration_restaurant_tables.sql',
+  // Clôture d'addition : la commande entre dans les ventes.
+  'migration_table_checkout.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -2670,11 +2672,14 @@ check('22a. anon ne garde que les deux helpers des policies RLS',
   `${anonFns.length} fonction(s) : ${anonFns.join(', ')}`);
 
 // Ce que le navigateur appelle réellement, relevé par grep sur `.rpc(`.
+// close_table_order et send_order_items font partie du navigateur (Sprint 14) :
+// les oublier ici les laisserait Granted à PERSONNE en production — la migration
+// passe, les tests sont verts, et l'écran « encaisser » échoue en 404.
 const duNavigateur = [
   'create_sale', 'record_credit_sale', 'archive_product', 'get_customer_debts',
   'pay_customer_debt', 'get_sales_summary', 'get_top_products', 'get_cash_flow',
   'get_product_profitability', 'get_units_sold_since', 'seed_expense_categories',
-  'current_org_plan',
+  'current_org_plan', 'close_table_order', 'send_order_items',
 ];
 const privs = (await q(`
   SELECT DISTINCT p.proname
@@ -2685,7 +2690,7 @@ const privs = (await q(`
      AND has_function_privilege('authenticated', p.oid, 'EXECUTE')`)).rows
   .map((r) => r.proname).sort();
 const attendues = [...duNavigateur].sort();
-check('22b. authenticated appelle toujours les 12 fonctions du navigateur',
+check('22b. authenticated appelle toujours les 14 fonctions du navigateur',
   JSON.stringify(privs) === JSON.stringify(attendues),
   `présentes : ${privs.join(', ')}`);
 
@@ -2964,6 +2969,201 @@ try {
     VALUES ('${O2}', '${P1}', 0, 7000)`);
 } catch { refNeg = true; }
 check('23n. une ligne de quantité nulle est refusée', refNeg);
+
+// ─── 24. Restaurant : clôture d'addition ────────────────────
+// Le lien qui manquait : une table servie doit entrer dans le chiffre
+// d'affaires, exactement comme un encaissement au comptoir, et une seule fois.
+console.log('\n▸ Restaurant — clôture d\'addition');
+
+const PS = 'bbbbbbbb-0000-0000-0000-0000000000a1';
+const PS2 = 'bbbbbbbb-0000-0000-0000-0000000000a2';
+await q(`INSERT INTO auth.users (id, email) VALUES ('${PATRON}', 'patron2@test.ci') ON CONFLICT DO NOTHING`);
+await q(`INSERT INTO products (id, user_id, name, price_buy, price_sell, stock_qty, min_stock_level)
+  VALUES ('${PS}', '${RESTO}', 'Poulet braisé', 2000, 4500, 20, 5),
+         ('${PS2}', '${RESTO}', 'Riz parfumé', 400, 1200, 40, 5)`);
+
+const OS = 'cccccccc-0000-0000-0000-0000000000a1';
+await q(`INSERT INTO restaurant_orders (id, owner_id, table_id, customer_name, opened_by)
+  VALUES ('${OS}', '${RESTO}', '${T1}', 'M. Kponou', '${RESTO}')`);
+// Deux plats différents, dont un à prix négocié : la remise se voit sur la ligne
+// correspondante et nowhere ailleurs.
+await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price, note)
+  VALUES ('${OS}', '${PS}', 2, 4000, 'bien cuit'), ('${OS}', '${PS2}', 1, 1200, NULL)`);
+
+const ventesAvant = await count(`SELECT count(*) FROM sales WHERE user_id='${RESTO}'`);
+const stockAvantCloture = await stock(PS);
+
+// 24a. La clôture écrit UNE vente de 9 200 (2 × 4 000 + 1 200), prix convenu
+// compris : c'est le cœur du lien salle → comptabilité.
+{
+  await q(`SELECT set_config('request.jwt.claim.sub', '${RESTO}', false)`);
+  const r = await q(`SELECT close_table_order('${OS}', 'cash', NULL, 1)`);
+  const res = r.rows[0].close_table_order;
+  check('24a. la clôture écrit une vente au total convenu',
+    Number(res.total_amount) === 9200, `total ${res.total_amount}`);
+  check('24b. la commande est rattachée à la vente', !!res.sale_id, res.sale_id ?? 'aucun');
+
+  const ventesApres = await count(`SELECT count(*) FROM sales WHERE user_id='${RESTO}'`);
+  check('24c. exactement une vente de plus', ventesApres === ventesAvant + 1,
+    `${ventesAvant} -> ${ventesApres}`);
+}
+
+// 24d. Le stock ne bouge qu'à la clôture, jamais avant.
+{
+  const apres = await stock(PS);
+  check('24d. le stock est décrémenté à la clôture', apres === stockAvantCloture - 2,
+    `stock ${apres}, attendu ${stockAvantCloture - 2}`);
+}
+
+// 24e. Le prix convenu est conservé dans la ligne de vente, et le catalogue
+// n'a pas bougé : c'est la garantie qu'une remise est traçable.
+{
+  const ligne = (await q(`SELECT unit_price, list_price FROM sale_items
+    WHERE sale_id = (SELECT sale_id FROM restaurant_orders WHERE id='${OS}')
+      AND product_id = '${PS}'`)).rows[0];
+  check('24e. le prix convenu est enregistré (remise traçable)',
+    Number(ligne.unit_price) === 4000 && Number(ligne.list_price) === 4500,
+    `facturé ${ligne.unit_price}, catalogue ${ligne.list_price}`);
+}
+
+// 24f. Double clôture refusée : le total de la table ne peut pas être encaissé
+// deux fois. C'est l'erreur la plus coûteuse du nouveau module.
+{
+  let refuse = false;
+  try {
+    await q(`SELECT close_table_order('${OS}', 'cash')`);
+  } catch {
+    refuse = true;
+  }
+  check('24f. une addition déjà soldée ne peut pas être encaissée deux fois', refuse);
+  const ventes = await count(`SELECT count(*) FROM sales WHERE user_id='${RESTO}'`);
+  check('24f2. et aucune seconde vente n\'a été écrite', ventes === ventesAvant + 1, `${ventes} vente(s)`);
+}
+
+// 24g. Le fractionnement ne multiplie PAS les ventes.
+{
+  const OF = 'cccccccc-0000-0000-0000-0000000000a2';
+  await q(`INSERT INTO restaurant_orders (id, owner_id, table_id, opened_by)
+    VALUES ('${OF}', '${RESTO}', '${T2}', '${RESTO}')`);
+  await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price)
+    VALUES ('${OF}', '${PS}', 3, 4500)`);
+
+  const avant = await count(`SELECT count(*) FROM sales WHERE user_id='${RESTO}'`);
+  const res = (await q(`SELECT close_table_order('${OF}', 'cash', NULL, 4)`)).rows[0].close_table_order;
+  const apres = await count(`SELECT count(*) FROM sales WHERE user_id='${RESTO}'`);
+  check('24g. une addition partagée reste UNE vente', apres === avant + 1, `${apres} vente(s)`);
+  check('24g2. la part de chacun est calculée', Number(res.per_share) === 3375,
+    `part ${res.per_share}`);
+  check('24g3. le total n\'est pas altéré par le fractionnement',
+    Number(res.total_amount) === 13500, `total ${res.total_amount}`);
+}
+
+// 24h. Une commande vide ne peut pas être encaissée : le caissier ne solde pas
+// une table où rien n'a été commandé.
+{
+  const OV = 'cccccccc-0000-0000-0000-0000000000a3';
+  await q(`INSERT INTO restaurant_orders (id, owner_id, opened_by)
+    VALUES ('${OV}', '${RESTO}', '${RESTO}')`);
+  let refuse = false;
+  try {
+    await q(`SELECT close_table_order('${OV}', 'cash')`);
+  } catch { refuse = true; }
+  check('24h. une commande sans plat est refusée à la clôture', refuse);
+}
+
+// 24i. Le moyen de paiement est validé : 'bitcoin' ne solde pas une table.
+const OP = 'cccccccc-0000-0000-0000-0000000000a4';
+await q(`INSERT INTO restaurant_orders (id, owner_id, opened_by)
+  VALUES ('${OP}', '${RESTO}', '${RESTO}')`);
+await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price)
+  VALUES ('${OP}', '${PS}', 1, 4500)`);
+{
+  let refuse = false;
+  try {
+    await q(`SELECT close_table_order('${OP}', 'bitcoin')`);
+  } catch { refuse = true; }
+  check('24i. un moyen de paiement inconnu est refusé', refuse);
+}
+
+// 24j. Un caissier n'encaisse pas l'addition : la clôture écrit dans sales.
+// canWrite mesure des lignes affectées, ce qui n'a pas de sens pour un SELECT :
+// on vérifie donc que l'appel est refusé, et surtout qu'aucune vente n'apparaît.
+{
+  const avant = await count(`SELECT count(*) FROM sales WHERE user_id='${RESTO}'`);
+  let refuse = false;
+  try {
+    await q(`SELECT set_config('request.jwt.claim.sub', '${SERVEUR}', false)`);
+    await e('SET ROLE authenticated');
+    await q(`SELECT close_table_order('${OP}', 'cash')`);
+  } catch {
+    refuse = true;
+  } finally {
+    await e('RESET ROLE');
+    await q(`SELECT set_config('request.jwt.claim.sub', '${RESTO}', false)`);
+  }
+  const apres = await count(`SELECT count(*) FROM sales WHERE user_id='${RESTO}'`);
+  check('24j. un caissier ne solde pas une addition', refuse);
+  check('24j2. et aucune vente n\'est écrite par le caissier', apres === avant,
+    `${avant} -> ${apres} ventes`);
+}
+
+// 24k. Ticket de cuisine : sans prix, et security_invoker.
+{
+  const def = (await q(`
+    SELECT coalesce(c.reloptions::text, '') AS o
+      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relname = 'restaurant_kitchen_ticket'`)).rows[0].o;
+  check('24k. le ticket de cuisine reste en security_invoker',
+    def.includes('security_invoker=true'), `options : ${def || '(aucune)'}`);
+
+  const colonnes = (await q(`
+    SELECT string_agg(column_name, ',' ORDER BY column_name) AS c
+      FROM information_schema.columns
+     WHERE table_name = 'restaurant_kitchen_ticket'`)).rows[0].c;
+  check('24l. le ticket de cuisine ne contient aucun prix',
+    !colonnes.includes('price') && !colonnes.includes('unit_price'), `colonnes : ${colonnes}`);
+
+  // Une commande close disparaît du ticket : plus rien à cuisiner.
+  const lignes = await count(`SELECT count(*) FROM restaurant_kitchen_ticket WHERE order_id='${OS}'`);
+  check('24m. une commande soldée sort du ticket de cuisine', lignes === 0, `${lignes} ligne(s)`);
+}
+
+// 24p. Deux lignes du MÊME plat à des prix différents : le regroupement retient
+// le prix le plus bas. Sans cela, create_sale() refuserait la clôture d'une
+// table parfaitement normale (« un poulet à 4 000 puis un à 4 500 »).
+{
+  const OD = 'cccccccc-0000-0000-0000-0000000000a6';
+  await q(`INSERT INTO restaurant_orders (id, owner_id, opened_by)
+    VALUES ('${OD}', '${RESTO}', '${RESTO}')`);
+  await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price)
+    VALUES ('${OD}', '${PS}', 1, 4500), ('${OD}', '${PS}', 1, 4000)`);
+  const res = (await q(`SELECT close_table_order('${OD}', 'cash')`)).rows[0].close_table_order;
+  check('24p. deux prix pour un même plat retiennent le plus bas',
+    Number(res.total_amount) === 8000, `total ${res.total_amount}`);
+}
+
+// 24n. « C'est parti » : idempotent, et un plat déjà servi n'est pas ré-expédié.
+{
+  const ON2 = 'cccccccc-0000-0000-0000-0000000000a5';
+  await q(`INSERT INTO restaurant_orders (id, owner_id, opened_by)
+    VALUES ('${ON2}', '${RESTO}', '${RESTO}')`);
+  await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price)
+    VALUES ('${ON2}', '${PS}', 2, 4500)`);
+  // Une seule ligne (quantité 2) : c'est le nombre de LIGNES qui passe, pas la
+  // quantité — la cuisine reçoit deux plats, mais une seule ligne à envoyer.
+  const premier = Number((await q(`SELECT send_order_items('${ON2}')`)).rows[0].send_order_items);
+  const second = Number((await q(`SELECT send_order_items('${ON2}')`)).rows[0].send_order_items);
+  check('24n. envoyer en cuisine passe les plats en « envoyé »', premier === 1, `${premier} ligne(s)`);
+  check('24n2. envoyer deux fois ne renvoie rien de plus', second === 0, `${second} ligne(s)`);
+
+  // Une commande close ne se ré-expédie pas : la cuisine a déjà fini.
+  await q(`SELECT close_table_order('${ON2}', 'cash')`);
+  let refuse = false;
+  try {
+    await q(`SELECT send_order_items('${ON2}')`);
+  } catch { refuse = true; }
+  check('24o. une commande soldée ne peut plus partir en cuisine', refuse);
+}
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
 process.exit(failures ? 1 : 0);
