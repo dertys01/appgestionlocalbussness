@@ -1,64 +1,81 @@
 # Sécurité — incident de fuite de clés
 
-## Où on en est
+## Où on en est : clos
 
-**La clé service role est encore valide dans l'historique git.** Elle y est
-depuis les commits antérieurs à `591c2e7` (« hardcode service role key »). Le
-code actuel est propre — aucun secret dans le dernier commit, vérifié par
-Gitleaks en CI à chaque push — mais l'historique, lui, les contient encore.
+Les clés Supabase commitées dans l'historique git ont été **révoquées puis
+purgées**, dans cet ordre. Les deux étapes sont vérifiées, pas déclarées.
 
-Tant que la clé n'est pas tournée, la purge ne sert à rien : réécrire
-l'historique ne révoque pas une clé. L'ordre n'est donc pas négociable.
+### 1. Les clés sont mortes (le geste qui compte)
 
-## Ce qui a été préparé
+Les trois clés trouvées dans l'historique ont été appelées en direct après
+leur révocation :
 
-- La purge est **testée** : simulation sur un clone jetable, 121 commits
-  réécrits, 0 occurrence de clé `service_role` ensuite, arbre du dernier commit
-  inchangé, suite de tests verte.
-- `scripts/purge-secrets.sh` fait le travail, `--check` d'abord (par défaut),
-  `--purge` seulement quand c'est décidé.
-- Le script remplace les **valeurs exactes** trouvées, pas « tout ce qui
-  ressemble à un JWT » : la clé anon est publique par principe, elle sert au
-  navigateur, et l'abraser n'aurait aucun intérêt.
+| Clé | Rôle | Réponse du serveur |
+|---|---|---|
+| `ec8f258f60b9…` | `service_role` | `401 — Legacy API keys are disabled` |
+| `b7564ae9779a…` | `anon` | `401 — Legacy API keys are disabled` |
+| `2c7008007ed5…` | `anon` (périmée) | `401 — Invalid API key` |
 
-## Les deux étapes qui restent — dans cet ordre
+C'est la preuve qui ferme l'incident : une clé révoquée ne se dévalue pas
+« un jour », elle est rejetée maintenant, par le serveur.
 
-### 1. Tourner la clé service role (30 secondes, c'est toi seul)
+### 2. L'historique a été réécrit
 
-Dashboard Supabase → Project Settings → API Keys → **service_role** →
-Révoquer / Regenerate.
+`scripts/purge-secrets.sh --purge` : 123 commits réécrits, remplacement des
+**valeurs exactes** des clés (pas « tout ce qui ressemble à un JWT » — la clé
+anon est publique par principe, elle sert au navigateur, et l'abraser n'aurait
+rien protégé). Force-push effectué.
 
-Puis remplacer `SUPABASE_SERVICE_ROLE_KEY` dans les variables Vercel
-(Production + Preview) et redéployer. `.env.local` en local.
+Contrôles après réécriture : 0 clé entière dans l'historique, arbre du dernier
+commit identique bit pour bit, 178 tests verts, 0 échec du harnais SQL.
 
-Tant que cette étape n'est pas faite, ne lance pas la purge.
+### 3. Ce qui reste — et n'est pas un risque
 
-### 2. Purger l'historique
+GitHub sert encore les anciens objets par leur SHA, et c'est vérifiable :
+l'API renvoie le contenu d'un vieux fichier contenant l'ancienne clé anon. Le
+dépôt n'est plus privately accessible, mais les objets existent jusqu'au
+prochain ramasse-miettes de GitHub.
 
-```bash
-./scripts/purge-secrets.sh --check    # relire la liste des clés visées
-./scripts/purge-secrets.sh --purge    # réécrit et force-push
-```
+Sans importance, maintenant : ces clés sont **révoquées**. Un objet lisible qui
+ne vaut rien n'est pas une fuite.
 
-Après : fermer les pull requests ouvertes sur GitHub (elles sont orphelines) et
-supprimer tous les clones locaux pour recloner. Un `git pull` ne rattrape pas
-une réécriture d'historique.
+Pour les faire disparaître quand même, il faut passer par le support GitHub
+(leur équipe peut forcer un GC sur demande, uniquement pour une fuite de
+secret avérée). À faire seulement si tu veux que le dépôt soit propre sur le
+plan documentaire — pas pour la sécurité.
 
-`git-filter-repo` est nécessaire : `pip3 install git-filter-repo`.
+## Les clés actuelles
 
-## Ce qui reste en place entre-temps
+| Variable | Format | Où |
+|---|---|---|
+| `NEXT_PUBLIC_SUPABASE_URL` | — | inchangée |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | `sb_publishable_…` | Vercel (tous les environnements) + `.env.local` |
+| `SUPABASE_SERVICE_ROLE_KEY` | `sb_secret_…` (`default`) | Vercel (Production) + `.env.local` |
+
+Les clés JWT héritées sont désactivées au niveau du projet
+(*Disable JWT-based API keys*). L'application ne dépend plus d'elles : le
+navigateur utilise la clé publishable, le serveur la secret key.
+
+## Ce qui empêche le retour
 
 - **Gitleaks en CI** (`.github/workflows/ci.yml`) : toute nouvelle fuite fait
   échouer le build.
-- **Le code ne lit plus aucune clé en dur** : `requireEnv()` échoue bruyamment
-  si une variable manque, au lieu de retomber sur une valeur codée.
-- **Sanctuarisation** : anon et service role ne sont jamais imprimées dans les
-  messages d'erreur (`sanitizeError`, `src/lib/utils/server.ts`).
+- **`requireEnv()`** : une variable manquante échoue bruyamment au démarrage,
+  au lieu de retomber sur une valeur codée en dur. C'est ce qui avait permis à
+  la clé de vivre dans le code.
+- **`sanitizeError()`** : plus aucun en-tête `Authorization` dans les logs.
+- **`.env.local` en `600`** et non versionné.
 
-## Si la clé a déjà fuité
+## Si une clé privileged fuite un jour
 
-Une clé service role est un passe-partout : elle contourne la RLS, elle est
-donc aussi puissante que l'accès à toutes les données de tous les clients.
-Si tu penses qu'elle a été lue par quelqu'un — pas seulement écrite par erreur
-— la rotation ne suffit plus : il faut auditer les ventes, les dettes et les
-contacts clients, puis prévenir les personnes concernées.
+Une clé `service_role` contourne toute la RLS : elle lit les emails de tous les
+comptes, toutes les dettes avec numéros de téléphone, et écrit dans n'importe
+quelle boutique. Le réflexe, dans l'ordre :
+
+1. **Révoquer** sur le dashboard — c'est le geste qui stoppe l'accès, tout le
+   reste est de la propreté.
+2. Migrer vers `sb_secret_…` + désactiver les clés JWT héritées.
+3. Vérifier, **en appelant l'ancienne clé** et en montrant le 401.
+4. Purger l'historique.
+5. Auditer ce qui a pu être lu : ventes, dettes, contacts. Et prévenir les
+   personnes concernées — c'est la partie qu'on oublie toujours.
