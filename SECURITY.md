@@ -1,6 +1,11 @@
 # Sécurité — à faire après incident
 
-## Rotation des clés (TRANCHÉE OUVERTE)
+## Moment de la rotation
+
+**Fin de projet** : ces opérations sont à faire après la stabilisation des
+fonctionnalités — la purge force-pousse et invaliderait le rythme de commits
+en cours. Dès que la prod devient réellement utilisée, la clé doit être tournée
+avant tout le reste.
 
 Les clés Supabase (anon **et service role**) ont été commitées en clair dans
 l'historique git (commits antérieurs à `591c2e7` : « hardcode supabase
