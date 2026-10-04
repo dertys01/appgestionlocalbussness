@@ -1081,6 +1081,8 @@ et encaisser en salle ; le 15 est un gain de pilotage, le 16 du confort.
 
 | Date | Commit | Objet |
 |---|---|---|
+| 04/10/2026 | — | **Sprint 12 — le domaine d'activité** : `organizations.domain`, question à l'inscription, navigation rendue depuis `src/lib/modules.ts`, bascule dans les réglages · tests **122 → 128** |
+| 04/10/2026 | — | Correctifs de sécurité et de robustesse issus de l'audit : webhook Stripe atomique (`claim_webhook_event`), jetons d'invitation hachés (sha256), validation zod des API, verrous de stock, Sentry client, CI GitHub Actions + Gitleaks · migrations **22 → 26** |
 | 03/10/2026 | — | Recette **prod** du Sprint 11 — barre de catégories, + vendus, reprise de vente, recherche tolérante |
 | 03/10/2026 | `14df2b3` | POS — proposition 3 : reprendre la dernière vente (fusion, jamais écrasement) ; unités et non lignes au compteur |
 | 03/10/2026 | `40bcf87` | POS — propositions 1 et 2 : recherche tolérante, catégories, + vendus sur 30 jours |

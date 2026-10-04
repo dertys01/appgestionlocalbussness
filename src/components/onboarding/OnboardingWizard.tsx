@@ -1,23 +1,33 @@
 'use client';
 
 import { useState } from 'react';
-import { Package, Users, CheckCircle, Loader2, ArrowRight } from 'lucide-react';
+import { Package, Users, CheckCircle, Loader2, ArrowRight, Store, UtensilsCrossed } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { logActivity } from '@/lib/utils/activity';
+import { normalizeDomain, DOMAIN_LABELS, DOMAIN_DESCRIPTIONS, type Domain } from '@/lib/modules';
 
 interface OnboardingWizardProps {
   onComplete: () => void;
 }
 
-type Step = 'welcome' | 'first-product' | 'invite' | 'done';
+type Step = 'domain' | 'welcome' | 'first-product' | 'invite' | 'done';
 
 export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   const { supabase, user, ownerId, org, refreshOrg } = useSupabase();
-  const [step, setStep] = useState<Step>('welcome');
+  const [step, setStep] = useState<Step>('domain');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  // Le domaine décide des modules affichés (src/lib/modules.ts). La question
+  // vient AVANT la configuration : c'est elle qui change l'interface, la
+  // découvrir après avoir créé dix produits serait une fausse information.
+  const currentDomain = normalizeDomain(org?.domain);
+  const [domain, setDomain] = useState<Domain>(currentDomain);
+  // Un maquis n'est pas une boutique : deux mots d'écart, et l'écran ne parle
+  // plus du mauvais métier à celui qui le lit.
+  const etablissement = domain === 'restaurant' ? 'votre établissement' : 'votre boutique';
 
   // Produit
   const [productName, setProductName] = useState('');
@@ -35,6 +45,23 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
       .update({ onboarding_done: true } as Record<string, unknown>)
       .eq('id', ownerId!);
     await refreshOrg();
+  };
+
+  // Le domaine s'écrit comme le reste de l'onboarding : le patron est le seul
+  // à tenir la ligne sur organizations (RLS), et c'est le seul écran qui
+  // l'ait sous les yeux.
+  const handleDomain = async (d: Domain) => {
+    setLoading(true);
+    setError('');
+    const { error: err } = await supabase
+      .from('organizations')
+      .update({ domain: d } as Record<string, unknown>)
+      .eq('id', ownerId!);
+    setLoading(false);
+    if (err) { setError(err.message); return; }
+    setDomain(d);
+    await refreshOrg();
+    setStep('welcome');
   };
 
   const handleAddProduct = async (e: React.FormEvent) => {
@@ -74,6 +101,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
   };
 
   const steps = [
+    { id: 'domain', label: 'Activité' },
     { id: 'welcome', label: 'Bienvenue' },
     { id: 'first-product', label: 'Produit' },
     { id: 'invite', label: 'Équipe' },
@@ -103,6 +131,49 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         </div>
 
         <div className="bg-white rounded-2xl shadow-lg p-8 space-y-6">
+          {/* ── DOMAINE ── */}
+          {step === 'domain' && (
+            <div className="space-y-5">
+              <div className="text-center">
+                <h2 className="text-xl font-bold text-slate-800">Quelle est votre activité&nbsp;?</h2>
+                <p className="text-sm text-slate-500 mt-2">
+                  L&apos;interface s&apos;adapte à votre métier. Vous pourrez changer d&apos;activité
+                  plus tard dans les réglages, sans rien perdre.
+                </p>
+              </div>
+
+              <div className="grid gap-3">
+                {(['retail', 'restaurant'] as const).map((d) => {
+                  const Icon = d === 'retail' ? Store : UtensilsCrossed;
+                  const actif = domain === d;
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => handleDomain(d)}
+                      disabled={loading}
+                      aria-pressed={actif}
+                      className={`flex items-start gap-3 rounded-xl border-2 p-4 text-left transition-colors disabled:opacity-60 ${
+                        actif ? 'border-indigo-500 bg-indigo-50' : 'border-slate-200 hover:border-indigo-300'
+                      }`}
+                    >
+                      <Icon className={`h-6 w-6 shrink-0 mt-0.5 ${actif ? 'text-indigo-600' : 'text-slate-400'}`} />
+                      <span>
+                        <span className="block text-sm font-semibold text-slate-800">
+                          {DOMAIN_LABELS[d]}
+                        </span>
+                        <span className="block text-xs text-slate-500 mt-0.5">
+                          {DOMAIN_DESCRIPTIONS[d]}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              {error && <p className="text-red-600 text-sm text-center">{error}</p>}
+            </div>
+          )}
+
           {/* ── WELCOME ── */}
           {step === 'welcome' && (
             <div className="text-center space-y-4">
@@ -112,10 +183,10 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
               <div>
                 <h2 className="text-xl font-bold text-slate-800">
                   Bienvenue sur GestionLocal,<br />
-                  <span className="text-indigo-600">{org?.name ?? 'votre boutique'}</span> !
+                  <span className="text-indigo-600">{org?.name ?? etablissement}</span> !
                 </h2>
                 <p className="text-slate-500 text-sm mt-2">
-                  Configurons votre espace en 2 minutes. Vous pouvez passer chaque étape si vous préférez.
+                  Configurons {etablissement} en 2 minutes. Vous pouvez passer chaque étape si vous préférez.
                 </p>
               </div>
               <div className="grid grid-cols-2 gap-3 text-left pt-2">
@@ -216,7 +287,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
               <div>
                 <h2 className="text-xl font-bold text-slate-800">Tout est prêt !</h2>
                 <p className="text-sm text-slate-500 mt-2">
-                  Votre boutique <strong>{org?.name}</strong> est configurée.
+                  Votre {domain === 'restaurant' ? 'établissement' : 'boutique'} <strong>{org?.name}</strong> est configuré.
                   Commencez à enregistrer vos ventes.
                 </p>
               </div>

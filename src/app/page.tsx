@@ -34,6 +34,7 @@ import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { useProducts } from '@/lib/hooks/useProducts';
 import { isFeatureAllowed } from '@/lib/utils/plans';
 import type { NavItem, Product, ReportView, Tab } from '@/types';
+import { getEnabledModules, fallbackTab } from '@/lib/modules';
 
 export default function HomePage() {
   const { supabase, user, loading, isEmployee, canManageProducts, org, plan, orgError } = useSupabase();
@@ -129,7 +130,11 @@ export default function HomePage() {
     return orgError ? <OrgLoadFailed error={orgError} /> : <OrgSetupRequired />;
   }
 
-  const NAV_ITEMS: NavItem[] = [
+  // TOUTES les entrées possibles, dans l'ordre d'affichage. La navigation
+  // n'en garde que celles du domaine (getEnabledModules) : un onglet d'un
+  // autre domaine n'est pas masqué, il n'est pas rendu. Le filtrage ici, et
+  // non dans Sidebar, pour que le filtre soit testable sans rendu.
+  const ALL_NAV_ITEMS: NavItem[] = [
     { key: 'dashboard', label: 'Accueil',    icon: LayoutDashboard, locked: false },
     { key: 'pos',       label: 'Vente',      icon: ShoppingCart,    locked: false },
     { key: 'inventory', label: 'Stock',      icon: Package,         locked: false },
@@ -139,6 +144,16 @@ export default function HomePage() {
     { key: 'forecast',  label: 'Prévisions', icon: Brain,           locked: !isFeatureAllowed(plan, 'forecast') },
     { key: 'team',      label: 'Équipe',     icon: Users,           locked: false },
   ];
+
+  const modulesActifs = getEnabledModules(org?.domain);
+  const NAV_ITEMS = ALL_NAV_ITEMS.filter((i) => modulesActifs.includes(i.key));
+
+  // Onglet demandé hors domaine (lien, onglet mémorisé d'une autre activité) :
+  // on retombe sur le premier module du domaine plutôt que d'afficher un
+  // écran qui ne fait pas partie de l'application de ce client.
+  if (!modulesActifs.includes(tab) && modulesActifs.length > 0) {
+    setTab(fallbackTab(org?.domain));
+  }
 
   return (
     <div className="min-h-screen flex">
