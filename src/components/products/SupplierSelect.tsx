@@ -12,6 +12,9 @@ interface SupplierSelectProps {
   value: string | null;
   onChange: (id: string | null) => void;
   disabled?: boolean;
+  /** Relié au <label> du formulaire appelant : sans lui, le sélecteur est
+   *  annoncé « combobox » sans nom par un lecteur d'écran. */
+  id?: string;
 }
 
 /**
@@ -22,7 +25,7 @@ interface SupplierSelectProps {
  * faire quitter le formulaire pour créer la fiche le ferait abandonner la
  * saisie ; la création se fait donc ici, en une ligne.
  */
-export function SupplierSelect({ value, onChange, disabled }: SupplierSelectProps) {
+export function SupplierSelect({ value, onChange, disabled, id }: SupplierSelectProps) {
   const { supabase, ownerId, canManageProducts } = useSupabase();
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(true);
@@ -90,6 +93,7 @@ export function SupplierSelect({ value, onChange, disabled }: SupplierSelectProp
       <div className="flex gap-2 items-start">
         <div className="flex-1 min-w-0">
           <select
+            id={id}
             value={value ?? ''}
             disabled={disabled || loading}
             onChange={(e) => onChange(e.target.value || null)}
@@ -123,6 +127,8 @@ export function SupplierSelect({ value, onChange, disabled }: SupplierSelectProp
       {creating && (
         <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-2.5 space-y-2">
           <Input
+            id={id ? `${id}-nouveau` : undefined}
+            aria-label="Nom du nouveau fournisseur"
             autoFocus
             value={newName}
             onChange={(e) => setNewName(e.target.value)}

@@ -19,6 +19,21 @@
 ALTER TABLE organizations
   ADD COLUMN IF NOT EXISTS domain text NOT NULL DEFAULT 'retail';
 
+-- ⚠ LE GRANT EST INDISPENSABLE, et c'est un piège que cette migration
+--   s'infligeait elle-même.
+--
+--   migration_security.sql a verrouillé organizations en accordant les droits
+--   COLONNE par colonne (plan en SELECT seul, pour qu'un client ne puisse pas
+--   écrire `plan = 'pro'`). Dès qu'il existe des droits de colonne, PostgreSQL
+--   n'accorde plus rien au niveau TABLE : une colonne ajoutée ensuite par
+--   ADD COLUMN naît donc SANS droit d'écriture, même pour le patron.
+--
+--   Résultat en recette du 04/10/2026 : l'écran « Quelle est votre activité ? »
+--   répondait « permission denied for table organizations » et l'inscription
+--   restait bloquée. Le test SQL ne le voyait pas — le harnais tourne en
+--   postgres, qui contourne les privilèges.
+GRANT UPDATE (domain) ON organizations TO authenticated;
+
 DO $$
 BEGIN
   IF NOT EXISTS (

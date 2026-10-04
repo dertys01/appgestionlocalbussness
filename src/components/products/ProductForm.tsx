@@ -176,8 +176,11 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
         <form onSubmit={handleSubmit} className="p-5 space-y-4">
           {/* Nom */}
           <div className="space-y-1">
-            <label className="text-sm font-medium text-slate-700">Nom du produit *</label>
+            <label htmlFor="pf-nom" className="text-sm font-medium text-slate-700">
+              Nom du produit *
+            </label>
             <Input
+              id="pf-nom"
               value={form.name}
               onChange={(e) => set('name', e.target.value)}
               placeholder="Ex: Samsung Galaxy A05"
@@ -187,8 +190,11 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
 
           {/* SKU */}
           <div className="space-y-1">
-            <label className="text-sm font-medium text-slate-700">SKU / Code-barres</label>
+            <label htmlFor="pf-sku" className="text-sm font-medium text-slate-700">
+              SKU / Code-barres
+            </label>
             <Input
+              id="pf-sku"
               value={form.sku}
               onChange={(e) => set('sku', e.target.value)}
               placeholder="Ex: SM-A055F"
@@ -198,11 +204,12 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
 
           {/* Catégorie */}
           <div className="space-y-1">
-            <label className="text-sm font-medium text-slate-700">
+            <label htmlFor="pf-categorie" className="text-sm font-medium text-slate-700">
               Catégorie
               <span className="text-slate-500 font-normal ml-1">(existante ou nouvelle)</span>
             </label>
             <input
+              id="pf-categorie"
               list="categories-list"
               value={form.category}
               onChange={(e) => set('category', e.target.value)}
@@ -236,11 +243,12 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
 
           {/* Fournisseur */}
           <div className="space-y-1">
-            <label className="text-sm font-medium text-slate-700">
+            <label htmlFor="pf-fournisseur" className="text-sm font-medium text-slate-700">
               Fournisseur
               <span className="text-slate-500 font-normal ml-1">(facultatif)</span>
             </label>
             <SupplierSelect
+              id="pf-fournisseur"
               value={form.supplier_id}
               onChange={(id) => set('supplier_id', id)}
             />
@@ -249,8 +257,11 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
           {/* Prix */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-sm font-medium text-slate-700">Prix achat (F)</label>
+              <label htmlFor="pf-prix-achat" className="text-sm font-medium text-slate-700">
+                Prix achat (F)
+              </label>
               <Input
+                id="pf-prix-achat"
                 type="number"
                 value={form.price_buy}
                 onChange={(e) => set('price_buy', e.target.value)}
@@ -259,8 +270,11 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
               />
             </div>
             <div className="space-y-1">
-              <label className="text-sm font-medium text-slate-700">Prix vente (F) *</label>
+              <label htmlFor="pf-prix-vente" className="text-sm font-medium text-slate-700">
+                Prix vente (F) *
+              </label>
               <Input
+                id="pf-prix-vente"
                 type="number"
                 value={form.price_sell}
                 onChange={(e) => set('price_sell', e.target.value)}
@@ -301,10 +315,11 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
           {/* Stock */}
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">
-              <label className="text-sm font-medium text-slate-700">
+              <label htmlFor="pf-stock" className="text-sm font-medium text-slate-700">
                 Stock initial{form.unit !== 'pce' && ` (${form.unit})`}
               </label>
               <Input
+                id="pf-stock"
                 type="number"
                 inputMode="decimal"
                 step="any"
@@ -315,8 +330,11 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
               />
             </div>
             <div className="space-y-1">
-              <label className="text-sm font-medium text-slate-700">Stock min. alerte</label>
+              <label htmlFor="pf-seuil" className="text-sm font-medium text-slate-700">
+                Stock min. alerte
+              </label>
               <Input
+                id="pf-seuil"
                 type="number"
                 inputMode="decimal"
                 step="any"

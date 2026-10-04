@@ -46,7 +46,8 @@ export const DOMAIN_LABELS: Record<Domain, string> = {
 
 export const DOMAIN_DESCRIPTIONS: Record<Domain, string> = {
   retail: 'Caisse comptoir, stock, ventes, dettes et rapports.',
-  restaurant: 'Caisse comptoir, stock, ventes, dettes et rapports — et bientôt salle, tables et cuisine.',
+  restaurant:
+    'Caisse comptoir, stock, ventes et rapports — plus la salle, les tables, le ticket cuisine et les recettes.',
 };
 
 /** Domaine inconnu (colonne absente, valeur exotique) → commerce. */

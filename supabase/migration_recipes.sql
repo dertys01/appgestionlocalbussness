@@ -337,7 +337,13 @@ GRANT EXECUTE ON FUNCTION add_recipe_ingredient(uuid, uuid, numeric) TO authenti
 -- Le coût de recette et le prix de vente sur une seule ligne. C'est ce que
 -- l'écran Recettes affiche, et ce qui distingue un restaurant d'un commerce :
 -- le coût vient de la recette, pas d'un prix d'achat posé à la main.
-CREATE OR REPLACE VIEW recipe_costs
+-- DROP puis CREATE : la colonne `stock_qty` est insérée ENTRE price_sell et
+-- unit_cost, et PostgreSQL refuse de réordonner les colonnes d'une vue
+-- existante (« cannot change name of view column unit_cost to stock_qty »).
+-- La vue ne porte aucun état : la recréer est sans risque.
+DROP VIEW IF EXISTS recipe_costs;
+
+CREATE VIEW recipe_costs
 WITH (security_invoker = true)
 AS
 SELECT
@@ -346,6 +352,13 @@ SELECT
   p.name,
   p.category,
   p.price_sell,
+  -- stock_qty : la recette sert à deux choses — calculer la marge, et dire au
+  -- patron « cet ingrédient ne suffit pas pour une portion ». Sans le stock,
+  -- l'écran Recettes ne peut pas afficher l'alerte de rupture. La colonne a
+  -- manque à la première version : l'écran affichait « column recipe_costs.
+  -- stock_qty does not exist » puis, pire, un état vide « aucun plat ».
+  p.stock_qty,
+  p.unit,
   product_cost(p.id)                          AS unit_cost,
   round(p.price_sell - product_cost(p.id), 2) AS margin,
   CASE WHEN product_cost(p.id) > 0

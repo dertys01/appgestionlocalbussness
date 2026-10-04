@@ -146,7 +146,7 @@ export function FloorModule({
     setLinesLoading(true);
     const { data, error: err } = await db
       .from('restaurant_order_items')
-      .select('id, product_id, quantity, unit_price, note, status, product:products(name)')
+      .select('id, product_id, quantity, unit_price, extra_price, modifier, note, status, product:products(name)')
       .eq('order_id', id)
       .order('created_at');
     setLinesLoading(false);
@@ -629,7 +629,9 @@ export function FloorModule({
                       <div className="text-sm text-slate-800 truncate">
                         {formatQty(l.quantity)} × {l.name}
                         {l.modifier && (
-                          <span className="ml-1 text-xs text-indigo-600">({l.modifier})</span>
+                          <span className="ml-1 text-xs text-indigo-600">
+                            ({l.modifier})
+                          </span>
                         )}
                       </div>
                       {l.note && <div className="text-xs text-amber-700 truncate">{l.note}</div>}
@@ -708,9 +710,9 @@ export function FloorModule({
                       </div>
                     </div>
                     <p className="text-xs text-slate-500">
-                      {formatCFA(part)} par personne. L&apos;addition reste
-                      {' '}<strong>{formatCFA(totalLignes)}</strong> : une seule vente est écrite,
-                      le partage est pour l&apos;affichage.
+                      {formatCFA(part)} par personne. L&apos;addition reste{' '}
+                      <strong>{formatCFA(totalLignes)}</strong> : une seule vente est
+                      écrite, le partage est pour l&apos;affichage.
                     </p>
                     <button
                       onClick={() => setSplitOpen(false)}

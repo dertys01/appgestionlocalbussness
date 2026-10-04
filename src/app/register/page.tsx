@@ -88,8 +88,11 @@ export default function RegisterPage() {
           <CardContent className="p-6">
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-1">
-                <label className="text-sm font-medium text-slate-700">Email</label>
+                <label htmlFor="reg-email" className="text-sm font-medium text-slate-700">
+                  Email
+                </label>
                 <Input
+                  id="reg-email"
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -99,9 +102,12 @@ export default function RegisterPage() {
                 />
               </div>
               <div className="space-y-1">
-                <label className="text-sm font-medium text-slate-700">Mot de passe</label>
+                <label htmlFor="reg-mdp" className="text-sm font-medium text-slate-700">
+                  Mot de passe
+                </label>
                 <div className="relative">
                   <Input
+                    id="reg-mdp"
                     type={showPwd ? 'text' : 'password'}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
@@ -120,8 +126,11 @@ export default function RegisterPage() {
                 </div>
               </div>
               <div className="space-y-1">
-                <label className="text-sm font-medium text-slate-700">Nom de votre boutique</label>
+                <label htmlFor="reg-boutique" className="text-sm font-medium text-slate-700">
+                  Nom de votre boutique
+                </label>
                 <Input
+                  id="reg-boutique"
                   value={orgName}
                   onChange={(e) => setOrgName(e.target.value)}
                   required

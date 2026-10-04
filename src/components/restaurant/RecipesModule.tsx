@@ -8,7 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { EmptyState } from '@/components/ui/empty-state';
-import { formatCFA } from '@/lib/utils/currency';
+import { formatCFA, formatQty } from '@/lib/utils/currency';
 import { lireMontant } from '@/lib/utils/nombres';
 
 /**
@@ -80,7 +80,11 @@ export function RecipesModule() {
   const chargerLignes = useCallback(async (platId: string) => {
     const { data, error: err } = await client
       .from('recipe_ingredients')
-      .select('ingredient_id, quantity, ingredient:products(name, unit, stock_qty, price_buy)')
+      // La relation est nommée EXPLICITEMENT : recipe_ingredients porte deux
+      // clés étrangères vers products (le plat et l'ingrédient), et PostgREST
+      // refuse de deviner (« more than one relationship was found »). Le nom
+      // de la contrainte est donc écrit en clair — il fait partie du schéma.
+      .select('ingredient_id, quantity, ingredient:products!recipe_ingredients_ingredient_id_fkey(name, unit, stock_qty, price_buy)')
       .eq('dish_id', platId);
     if (err) { setError(err.message); return; }
     setLignes(
@@ -218,7 +222,10 @@ export function RecipesModule() {
       )}
 
       {/* Choix du plat */}
-      {plats.length === 0 && !loading ? (
+      {/* L'état vide ne s'affiche QUE si le catalogue est réellement vide. Avec une
+      erreur de chargement, il affichait « aucun plat à composer » — un message
+      qui contredit la réalité et masque la panne. */}
+      {plats.length === 0 && !loading && !error ? (
         <EmptyState
           icon={ChefHat}
           title="Aucun plat à composer"
@@ -299,7 +306,7 @@ export function RecipesModule() {
                       <div className="flex-1 min-w-0">
                         <div className="text-sm text-slate-800 truncate">{l.name}</div>
                         <div className="text-xs text-slate-500">
-                          {l.quantity} {l.unit} pour 1 portion · stock{' '}
+                          {formatQty(l.quantity)} {l.unit} pour 1 portion · stock{' '}
                           {Number(l.stock_qty.toFixed(3))} {l.unit}
                         </div>
                       </div>

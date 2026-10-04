@@ -89,6 +89,16 @@ CREATE TABLE IF NOT EXISTS restaurant_order_items (
   CONSTRAINT restaurant_order_items_note_len CHECK (note IS NULL OR length(note) <= 300)
 );
 
+-- Le supplément du modificateur est POSÉ ICI, pas dans
+-- migration_restaurant_finitions.sql : la vue restaurant_floor, définie plus
+-- bas dans ce fichier, l'additionne. Le créer plus loin ferait échouer ce
+-- fichier lui-même sur une base neuve (« column r.extra_price does not exist »),
+-- et avec lui toutes les migrations suivantes.
+ALTER TABLE restaurant_order_items
+  ADD COLUMN IF NOT EXISTS modifier text;
+ALTER TABLE restaurant_order_items
+  ADD COLUMN IF NOT EXISTS extra_price numeric(12,2) NOT NULL DEFAULT 0;
+
 CREATE INDEX IF NOT EXISTS idx_restaurant_order_items_order
   ON restaurant_order_items(order_id, status);
 
@@ -227,8 +237,12 @@ SELECT
   o.customer_name,
   o.opened_at,
   o.amount_paid,
+  -- Le supplément du modificateur compte dans le total de la table : c'est le
+  -- montant que la table va payer. Sans lui, la tuile affichait 9 000 F pour
+  -- une addition de 12 000 F — et l'encaissement aurait porté sur 12 000.
   COALESCE(
-    (SELECT sum(i.quantity * i.unit_price) FROM restaurant_order_items i WHERE i.order_id = o.id),
+    (SELECT sum(i.quantity * (i.unit_price + i.extra_price))
+       FROM restaurant_order_items i WHERE i.order_id = o.id),
     0
   ) AS order_total
 FROM restaurant_tables t
