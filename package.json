@@ -9,9 +9,10 @@
     "lint": "eslint",
     "test:db": "node supabase/tests/migration.test.mjs supabase",
     "test:db:existing": "node supabase/tests/migration-on-existing.test.mjs",
+    "test:audit": "node supabase/tests/audit.test.mjs supabase",
     "test:period": "node --experimental-strip-types tests/period.test.mts",
     "test:ui": "vitest run",
-    "test": "npm run test:db && npm run test:db:existing && npm run test:period && npm run test:plan && npm run test:rl && npm run test:wa && npm run test:ui",
+    "test": "npm run test:db && npm run test:db:existing && npm run test:audit && npm run test:period && npm run test:plan && npm run test:rl && npm run test:wa && npm run test:ui",
     "test:plan": "node --experimental-strip-types --test tests/plan-errors.test.mts",
     "test:rl": "node --experimental-strip-types --test tests/rate-limit.test.mts",
     "test:wa": "node --experimental-strip-types --import ./tests/ts-hooks.mjs --test tests/whatsapp-credit.test.mts"
