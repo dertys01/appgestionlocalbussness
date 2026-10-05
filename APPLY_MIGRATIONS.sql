@@ -2,26 +2,36 @@
 --  GESTIONLOCAL — SCHÉMA COMPLET
 --  À coller dans : Supabase Dashboard → SQL Editor → New query → Run
 --
---  Les 22 migrations concaténées, dans l'ordre d'application. Ce
---  fichier est pratique pour partir d'une base vide ; sur une base existante,
---  préfère la migration concernée seule.
+--  Les 31 migrations concaténées (plus schema.sql), dans l'ordre
+--  d'application — le même ordre que le harnais supabase/tests/.
+--  Ce fichier est pratique pour partir d'une base vide ; sur une base
+--  existante, préfère la migration concernée seule.
 --
---  ⚠ Ordre obligatoire. migration_team.sql avant migration_saas.sql (la policy
---    « Employé lit l'org de son patron » référence business_members) ;
+--  ⚠ Ordre obligatoire. migration_team.sql avant migration_saas.sql (la
+--    policy « Employé lit l'org de son patron » référence business_members) ;
 --    migration_profitability.sql après migration_sales_rpc.sql (create_sale()
 --    écrit sale_items.unit_cost) ; migration_profitability_fix.sql après
 --    migration_profitability.sql.
---    migration_security.sql DOIT fermer la série : elle pose le verrou de
---    organizations.plan, le RLS de rate_limits, l'index unique de
---    subscriptions et les policies de business_members. Placée avant, elle
---    serait annulée par les migrations suivantes.
+--    migration_security.sql DOIT fermer la série des migrations de sécurité :
+--    elle pose le verrou de organizations.plan, le RLS de rate_limits,
+--    l'index unique de subscriptions et les policies de business_members.
+--    migration_ca_caisse.sql vient EN DERNIER : elle aligne
+--    get_sales_summary() sur la base de caisse (SUM(amount_received)).
 --
 --  Rejouable : peut être exécuté plusieurs fois sans effet de bord.
 -- ============================================================================
 
 
 -- ============================================================
+--  ⬇ schema.sql
+-- ============================================================
+
+-- ============================================================
 -- SCHEMA MVP AppGestionLocalBusiness
+-- ============================================================
+-- ⚠️ HISTORIQUE — ne plus exécuter seul. L'état courant du schéma est défini
+-- par l'ordre complet : schema.sql → … → migration_roles.sql →
+-- migration_security.sql (c'est migration_security.sql qui fait foi).
 -- ============================================================
 
 -- Extension UUID
@@ -128,7 +138,7 @@ BEGIN
   NEW.updated_at = NOW();
   RETURN NEW;
 END;
-$$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql SET search_path = public;
 
 -- DROP préalable : sans lui, la seconde exécution échoue en 42710
 -- « trigger already exists » et interrompt le script en cours de route.
@@ -143,9 +153,15 @@ CREATE TRIGGER products_updated_at
 -- INSERT INTO products (user_id, name, sku, price_buy, price_sell, stock_qty, min_stock_level, category)
 -- VALUES (auth.uid(), 'Samsung Galaxy A05', 'SM-A055F', 55000, 72000, 8, 3, 'smartphones');
 
+-- ============================================================
+--  ⬇ migration_team.sql
+-- ============================================================
 
 -- ============================================================
 -- MIGRATION : Équipe & Journal d'activité
+-- ============================================================
+-- ⚠️ HISTORIQUE — ses policies FOR ALL ont été remplacées par migration_roles.sql
+-- puis migration_security.sql. Ne plus exécuter seul.
 -- ============================================================
 
 -- Table membres de l'équipe
@@ -243,6 +259,9 @@ CREATE POLICY "user_stock_logs" ON stock_logs
   USING (user_id = get_business_owner_id())
   WITH CHECK (user_id = get_business_owner_id());
 
+-- ============================================================
+--  ⬇ migration_saas.sql
+-- ============================================================
 
 -- ============================================================
 -- MIGRATION SaaS — GestionLocal
@@ -266,7 +285,7 @@ CREATE TABLE IF NOT EXISTS organizations (
 
 -- Trigger updated_at
 CREATE OR REPLACE FUNCTION update_org_timestamp()
-RETURNS TRIGGER LANGUAGE plpgsql AS $$
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path = public AS $$
 BEGIN NEW.updated_at = now(); RETURN NEW; END; $$;
 
 DROP TRIGGER IF EXISTS organizations_updated_at ON organizations;
@@ -343,6 +362,9 @@ WHERE NOT EXISTS (
   SELECT 1 FROM organizations WHERE id = u.id
 );
 
+-- ============================================================
+--  ⬇ migration_plan_limits.sql
+-- ============================================================
 
 -- ============================================================
 -- MIGRATION PLAN LIMITS — GestionLocal
@@ -351,7 +373,7 @@ WHERE NOT EXISTS (
 -- ============================================================
 
 CREATE OR REPLACE FUNCTION check_product_limit()
-RETURNS TRIGGER LANGUAGE plpgsql AS $$
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path = public AS $$
 DECLARE
   org_plan text;
   product_count int;
@@ -382,6 +404,9 @@ CREATE TRIGGER enforce_product_limit
   BEFORE INSERT ON products
   FOR EACH ROW EXECUTE FUNCTION check_product_limit();
 
+-- ============================================================
+--  ⬇ migration_invoices.sql
+-- ============================================================
 
 -- ============================================================
 -- MIGRATION INVOICES — GestionLocal
@@ -396,6 +421,9 @@ ALTER TABLE organizations ADD COLUMN IF NOT EXISTS invoice_counter integer NOT N
 -- Nom du client optionnel sur une vente (pour facture normalisée)
 ALTER TABLE sales ADD COLUMN IF NOT EXISTS client_name text;
 
+-- ============================================================
+--  ⬇ migration_webhook_logs.sql
+-- ============================================================
 
 -- ============================================================
 -- MIGRATION WEBHOOK LOGS — GestionLocal
@@ -416,6 +444,9 @@ CREATE TABLE IF NOT EXISTS webhook_events (
 ALTER TABLE webhook_events ENABLE ROW LEVEL SECURITY;
 -- Pas de lecture publique : accessible uniquement via service role key
 
+-- ============================================================
+--  ⬇ migration_indexes.sql
+-- ============================================================
 
 -- ============================================================
 -- MIGRATION INDEXES — GestionLocal
@@ -441,6 +472,9 @@ CREATE INDEX IF NOT EXISTS idx_stock_logs_product_id ON stock_logs(product_id);
 CREATE INDEX IF NOT EXISTS idx_activity_logs_owner_id   ON activity_logs(business_owner_id);
 CREATE INDEX IF NOT EXISTS idx_activity_logs_created_at ON activity_logs(created_at DESC);
 
+-- ============================================================
+--  ⬇ migration_sales_rpc.sql
+-- ============================================================
 
 -- ============================================================
 -- MIGRATION VENTE TRANSACTIONNELLE — GestionLocal
@@ -729,6 +763,9 @@ COMMENT ON FUNCTION create_sale(jsonb, text, text, text) IS
   'Enregistre une vente de façon atomique : lignes, décrément de stock et journal. '
   'Lève une exception si le stock est insuffisant — dans ce cas rien n''est écrit.';
 
+-- ============================================================
+--  ⬇ migration_roles.sql
+-- ============================================================
 
 -- ============================================================
 -- MIGRATION RÔLES & MULTI-TENANT — GestionLocal
@@ -862,6 +899,9 @@ CREATE POLICY "Patron crée son org" ON organizations
     AND NOT EXISTS (SELECT 1 FROM business_members WHERE member_id = auth.uid())
   );
 
+-- ============================================================
+--  ⬇ migration_plan_gate.sql
+-- ============================================================
 
 -- ============================================================
 -- VERROU DE PLAN CÔTÉ SERVEUR
@@ -1086,6 +1126,9 @@ COMMENT ON FUNCTION get_units_sold_since(integer) IS
   'Remplace la lecture ligne à ligne de sale_items : le client ne reçoit plus '
   'l''historique complet. Exige le plan pro (fonctionnalité forecast).';
 
+-- ============================================================
+--  ⬇ migration_price_override.sql
+-- ============================================================
 
 -- ============================================================
 -- PRIX NÉGOCIÉ — create_sale() ignorait le prix convenu
@@ -1345,6 +1388,9 @@ COMMENT ON FUNCTION create_sale(jsonb, text, text, text) IS
   'sale_items.list_price pour que la remise reste traçable. Deux prix '
   'différents pour le même article sont refusés.';
 
+-- ============================================================
+--  ⬇ migration_weighted_sales.sql
+-- ============================================================
 
 -- ============================================================
 -- VENTE AU POIDS — quantités fractionnaires
@@ -1401,6 +1447,13 @@ ALTER TABLE products ADD COLUMN IF NOT EXISTS unit text NOT NULL DEFAULT 'pce';
 --   le script s'interrompt avant les migrations suivantes.
 --
 DROP VIEW IF EXISTS products_with_supplier;
+
+-- Les vues du module restaurant dépendent elles aussi de products : recipe_costs
+-- et restaurant_menu_today lisent son stock et son prix. Sans ce DROP, le même
+-- ALTER échoue en 0A000 sur une base où ces vues existent déjà — c'est-à-dire
+-- sur toute base ayant déjà reçu les sprints 15 et 17, c'est-à-dire la nôtre.
+DROP VIEW IF EXISTS recipe_costs;
+DROP VIEW IF EXISTS restaurant_menu_today;
 
 -- ⚠ Le type n'est changé QUE si la colonne est encore entière : le refaire
 --   échoue en 0A000 pour la même raison.
@@ -1517,7 +1570,13 @@ DECLARE
   v_price      numeric(12,2);     -- prix réellement facturé
   v_cost       numeric(12,2);
   v_stock      numeric(12,3);
+  -- Quantité totale demandée pour un produit, toutes lignes confondues : c'est
+  -- elle qu'on compare au stock, pas la quantité d'une ligne prise isolément.
+  v_demande    numeric(12,3);
   v_qty        numeric(12,3);
+  -- Le produit est-il un plat (produit avec recette) ? Un plat ne se stocke pas :
+  -- ni contrôle, ni décrément — voir la boucle plus bas.
+  v_est_plat   boolean;
   v_total      numeric(12,2) := 0;
   v_discount   numeric(12,2) := 0;
   v_at_loss    int := 0;
@@ -1574,49 +1633,74 @@ BEGIN
     RAISE EXCEPTION 'Ligne de panier invalide' USING ERRCODE = '22023';
   END IF;
 
-  -- ── Agréger par produit ──
-  IF EXISTS (
-    SELECT 1 FROM (
-      SELECT (e->>'product_id')::uuid AS product_id
-        FROM jsonb_array_elements(p_items) AS e
-       WHERE e ? 'unit_price'
-       GROUP BY 1
-      HAVING count(DISTINCT e->>'unit_price') > 1
-    ) AS conflit
-  ) THEN
-    RAISE EXCEPTION 'Deux prix différents pour le même article : regroupez la ligne'
-      USING ERRCODE = '22023';
-  END IF;
-
-  SELECT array_agg(product_id ORDER BY product_id),
-         array_agg(quantity   ORDER BY product_id),
-         array_agg(unit_price ORDER BY product_id)
+  -- ── Agréger par (produit, prix) ──
+  --
+  -- L'agrégation se fait par produit ET par prix convenu, pas par produit seul.
+  -- La version d'avant gardait MIN(unit_price) et REFUSAIT deux prix pour un même
+  -- article — refus qui protégeait d'une sous-facturation, puisque le MIN perdait
+  -- la différence. Mais le restaurant a le cas légitime : le même plat commandé
+  -- deux fois avec deux options (une double portion, puis « bien cuit »). Cette
+  -- ligne doit survivre à son prix.
+  --
+  -- Deux lignes au MÊME prix fusionnent toujours : 2 × « bien cuit » redeviennent
+  -- une ligne de quantité 2, ce qui est le panier du comptoir.
+  SELECT array_agg(product_id ORDER BY product_id, coalesce(unit_price, -1)),
+         array_agg(quantity   ORDER BY product_id, coalesce(unit_price, -1)),
+         array_agg(unit_price ORDER BY product_id, coalesce(unit_price, -1))
     INTO v_ids, v_qtys, v_agreed
     FROM (
       SELECT (e->>'product_id')::uuid AS product_id,
              -- SUM conserve le fractionnaire : 1,2 + 0,8 = 2,0 et non 1.
              SUM((replace(e->>'quantity', ',', '.'))::numeric)::numeric(12,3) AS quantity,
-             MIN((e->>'unit_price')::numeric) AS unit_price
+             (e->>'unit_price')::numeric AS unit_price
         FROM jsonb_array_elements(p_items) AS e
-       GROUP BY 1
+       GROUP BY 1, 3
     ) AS aggregated;
 
   -- ── Verrouiller les lignes produits et valider le stock ──
+  --
+  -- Le contrôle porte sur la quantité TOTALE par produit, pas sur chaque ligne :
+  -- deux lignes du même produit verrouillent la même rangée, et vérifier 1 puis 1
+  -- laisserait passer 2 sur un stock de 1 — l'erreur n'apparaîtrait qu'ensuite,
+  -- en contrainte CHECK, avec un message que personne ne sait traduire.
+  --
+  -- UN PRODUIT QUI A UNE RECETTE EST UN PLAT, et la règle est différente : sa
+  -- disponibilité vient de ses INGRÉDIENTS, pas de son propre stock. C'est ce
+  -- que migration_recipes.sql dit depuis le début — « un plat se cuisine, il ne
+  -- se stocke pas » — et create_sale() le contredisait : un plat à 0 (sa valeur
+  -- naturelle) était refusé à la vente avec « Stock insuffisant pour « Riz gras »
+  -- (disponible : 0, demandé : 1) », alors que ses ingrédients étaient là. Aucun
+  -- plat du catalogue d'exemple n'était donc servable, et le blocage venait de
+  -- la caisse, pas de la cuisine.
+  --
+  -- Le contrôle et le décrément sont donc sautés pour un plat ; c'est le
+  -- déclencheur sale_items_consume_recipe qui refuse, ingredients vides, avec
+  -- le bon message (« Stock insuffisant pour l'ingrédient « Riz blanc » »).
   FOR v_i IN 1 .. COALESCE(array_length(v_ids, 1), 0) LOOP
     SELECT p.name, p.price_sell, COALESCE(p.price_buy, 0), p.stock_qty
       INTO v_name, v_list, v_cost, v_stock
       FROM products p
      WHERE p.id = v_ids[v_i]
        AND p.user_id = v_owner
-       FOR UPDATE;
+     FOR UPDATE;
 
     IF NOT FOUND THEN
       RAISE EXCEPTION 'Produit introuvable : %', v_ids[v_i] USING ERRCODE = 'P0002';
     END IF;
 
-    IF v_stock < v_qtys[v_i] THEN
-      RAISE EXCEPTION 'Stock insuffisant pour « % » (disponible : %, demandé : %)',
-        v_name, v_stock, v_qtys[v_i] USING ERRCODE = '23514';
+    v_est_plat := EXISTS (
+      SELECT 1 FROM recipe_ingredients ri WHERE ri.dish_id = v_ids[v_i]
+    );
+
+    IF NOT v_est_plat THEN
+      SELECT COALESCE(SUM(u.q), 0) INTO v_demande
+        FROM unnest(v_qtys) WITH ORDINALITY AS u(q, n)
+       WHERE u.n >= v_i AND v_ids[u.n] = v_ids[v_i];
+
+      IF v_stock < v_demande THEN
+        RAISE EXCEPTION 'Stock insuffisant pour « % » (disponible : %, demandé : %)',
+          v_name, v_stock, v_demande USING ERRCODE = '23514';
+      END IF;
     END IF;
 
     v_price := COALESCE(v_agreed[v_i], v_list);
@@ -1690,15 +1774,25 @@ BEGIN
       v_price, v_price * v_qty, v_cost, v_list
     );
 
-    UPDATE products SET stock_qty = stock_qty - v_qty WHERE id = v_ids[v_i];
+    -- Un plat ne se stocke pas : on ne lui retire pas de quantité, et on
+    -- n'écrit pas de mouvement de stock pour lui. Ce qui sort du stock, ce sont
+    -- ses INGRÉDIENTS — et c'est le déclencheur sale_items_consume_recipe qui
+    -- s'en charge, avec le contrôle qui va avec.
+    --
+    -- Sans ce IF, la ligne « Riz gras × 1 » essayait de passer son stock de 0 à
+    -- −1 : la contrainte products_stock_qty_non_negative rejetait toute la
+    -- vente, avec une erreur que personne ne sait traduire.
+    IF NOT EXISTS (SELECT 1 FROM recipe_ingredients ri WHERE ri.dish_id = v_ids[v_i]) THEN
+      UPDATE products SET stock_qty = stock_qty - v_qty WHERE id = v_ids[v_i];
 
-    INSERT INTO stock_logs (
-      user_id, product_id, product_name, movement_type,
-      quantity_change, stock_before, stock_after, reference_id
-    ) VALUES (
-      v_owner, v_ids[v_i], v_name, 'sale',
-      -v_qty, v_stock, v_stock - v_qty, v_sale_id
-    );
+      INSERT INTO stock_logs (
+        user_id, product_id, product_name, movement_type,
+        quantity_change, stock_before, stock_after, reference_id
+      ) VALUES (
+        v_owner, v_ids[v_i], v_name, 'sale',
+        -v_qty, v_stock, v_stock - v_qty, v_sale_id
+      );
+    END IF;
   END LOOP;
 
   RETURN jsonb_build_object(
@@ -1719,6 +1813,9 @@ COMMENT ON COLUMN products.unit IS
   'la quantité reste un nombre dans cette unité. Un produit vendu en sachet et '
   'au kilo doit être deux produits.';
 
+-- ============================================================
+--  ⬇ migration_credit.sql
+-- ============================================================
 
 -- ============================================================
 -- CRÉDIT CLIENT — le carnet de dette
@@ -1871,6 +1968,9 @@ CREATE POLICY "payments_delete" ON credit_payments
 CREATE INDEX IF NOT EXISTS idx_credit_payments_debt ON credit_payments(debt_id, day DESC);
 CREATE INDEX IF NOT EXISTS idx_credit_payments_user ON credit_payments(user_id, day DESC);
 
+-- ============================================================
+--  ⬇ migration_partial_payment.sql
+-- ============================================================
 
 -- ============================================================
 -- ACOMPTE — le client paie une partie, reste devoir l'autre
@@ -2038,6 +2138,7 @@ ALTER TABLE sales ADD CONSTRAINT sales_amount_received_sane
 CREATE OR REPLACE FUNCTION fill_amount_received()
 RETURNS trigger
 LANGUAGE plpgsql
+SET search_path = public
 AS $$
 BEGIN
   -- Vente à crédit : la valeur par défaut 0 est la bonne. Ne rien faire, et
@@ -2068,6 +2169,9 @@ CREATE TRIGGER sales_fill_amount_received
   FOR EACH ROW
   EXECUTE FUNCTION fill_amount_received();
 
+-- ============================================================
+--  ⬇ migration_profitability.sql
+-- ============================================================
 
 -- ============================================================
 -- MIGRATION PRODUITS ARCHIVÉS + MARGE — GestionLocal
@@ -2158,7 +2262,7 @@ UPDATE sale_items si
 
 -- Empêche de modifier un coût après coup (traçabilité comptable).
 CREATE OR REPLACE FUNCTION freeze_sale_item_cost()
-RETURNS TRIGGER LANGUAGE plpgsql AS $$
+RETURNS TRIGGER LANGUAGE plpgsql SET search_path = public AS $$
 BEGIN
   IF OLD.unit_cost IS DISTINCT FROM NEW.unit_cost
      AND OLD.sale_id IS NOT NULL THEN
@@ -2321,6 +2425,9 @@ REVOKE ALL ON FUNCTION get_product_profitability() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION get_product_profitability() TO authenticated;
 GRANT EXECUTE ON FUNCTION get_product_profitability() TO service_role;
 
+-- ============================================================
+--  ⬇ migration_expenses.sql
+-- ============================================================
 
 -- ============================================================
 -- MIGRATION DÉPENSES — GestionLocal
@@ -2458,6 +2565,13 @@ CREATE INDEX IF NOT EXISTS idx_expenses_user_category ON expenses(user_id, categ
 -- ─── 3. Résultat journalier ────────────────────────────────
 -- SECURITY INVOKER : l'isolation vient de la RLS de sales et expenses.
 -- Aucune règle de tenancy dupliquée.
+-- get_cash_flow() est redéfinie plus loin, avec un type de retour différent :
+-- PostgreSQL refuse « cannot change return type of existing function » sur un
+-- CREATE OR REPLACE. Le DROP rend ce fichier rejouable sur une base qui porte
+-- déjà la version corrigée de la section 8 de migration_security.sql — version
+-- que le harnais rétablit en fin de rejouabilité.
+DROP FUNCTION IF EXISTS get_cash_flow(date, date);
+
 CREATE OR REPLACE FUNCTION get_cash_flow(p_from date, p_to date)
 RETURNS TABLE (
   day          date,
@@ -2543,6 +2657,9 @@ GRANT EXECUTE ON FUNCTION get_cash_flow(date, date) TO service_role;
 -- pas laisser deux fonctions au même nom.
 DROP FUNCTION IF EXISTS seed_expense_categories(uuid);
 
+-- ============================================================
+--  ⬇ migration_invitations.sql
+-- ============================================================
 
 -- ============================================================
 -- MIGRATION INVITATIONS — GestionLocal
@@ -2715,6 +2832,9 @@ $$;
 REVOKE ALL ON FUNCTION purge_accepted_invitations(int) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION purge_accepted_invitations(int) TO service_role;
 
+-- ============================================================
+--  ⬇ migration_profitability_fix.sql
+-- ============================================================
 
 -- ============================================================
 -- CORRECTIF MARGE — create_sale() ne figeait pas le coût
@@ -2795,6 +2915,9 @@ CREATE TRIGGER sale_items_freeze_cost
 --          count(*) AS total
 --     FROM sale_items;
 
+-- ============================================================
+--  ⬇ migration_suppliers.sql
+-- ============================================================
 
 -- ============================================================
 -- MIGRATION FOURNISSEURS — GestionLocal
@@ -2984,6 +3107,9 @@ GRANT SELECT ON products_with_supplier TO service_role;
 --   SELECT count(*) AS triggers
 --     FROM pg_trigger WHERE tgname = 'suppliers_updated_at';
 
+-- ============================================================
+--  ⬇ migration_credit_fns.sql
+-- ============================================================
 
 -- ============================================================
 -- CRÉDIT CLIENT — fonctions
@@ -3011,6 +3137,7 @@ CREATE OR REPLACE FUNCTION normalize_phone(p_phone text)
 RETURNS text
 LANGUAGE plpgsql
 IMMUTABLE
+SET search_path = public
 AS $$
 DECLARE
   v_digits text;
@@ -3445,6 +3572,9 @@ COMMENT ON FUNCTION pay_customer_debt(uuid, numeric, text, text) IS
   'chiffre d''affaires encaissé dès le jour même. Le surplus reste au crédit du '
   'client : il n''est ni perdu ni compté en recette.';
 
+-- ============================================================
+--  ⬇ migration_beta_program.sql
+-- ============================================================
 
 -- ============================================================
 -- PROGRAMME BÊTA — 10 comptes en accès complet
@@ -3779,6 +3909,9 @@ GRANT EXECUTE ON FUNCTION close_beta_program()   TO service_role;
 GRANT EXECUTE ON FUNCTION set_beta_slots(int)    TO service_role;
 GRANT EXECUTE ON FUNCTION revoke_all_beta()      TO service_role;
 
+-- ============================================================
+--  ⬇ migration_sales_summary.sql
+-- ============================================================
 
 -- ============================================================
 -- MIGRATION : Synthèse des ventes
@@ -3917,6 +4050,9 @@ GRANT EXECUTE ON FUNCTION get_top_products(date, date, text, int) TO service_rol
 -- malgré des REVOKE écrits partout dans les migrations. Vérifié en base le
 -- 03/10/2026.
 
+-- ============================================================
+--  ⬇ migration_security.sql
+-- ============================================================
 
 -- ============================================================
 -- MIGRATION : Durcissement sécurité
@@ -4274,3 +4410,2271 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 
 GRANT EXECUTE ON FUNCTION get_business_owner_id() TO anon;
 GRANT EXECUTE ON FUNCTION can_manage_products()   TO anon;
+
+-- ─── 8. get_cash_flow() : le résultat net déduit le coût des ventes ──────
+--
+-- L'écran « Charges » affichait « Résultat net = CA − charges ». Le calcul
+-- tient entre les chiffres montrés — et il est faux. Il oublie ce que la
+-- marchandise a coûté. Relevé en production sur 30 jours :
+--
+--     chiffre d'affaires                     1 349 400 F
+--     coût des marchandises vendues            953 756 F   ← absent
+--     charges de structure                     188 200 F
+--     résultat affiché                       1 161 200 F   (86,1 %)
+--     résultat réel                            207 444 F   (15,4 %)
+--
+-- L'écart est exactement le coût d'achat : le commerçant paraissait 5,6 fois
+-- plus riche qu'il n'était. Un taux de marge nette de 86 % n'existe dans aucun
+-- commerce de détail — 15 % est la marque d'une boutique saine. « CA − charges »
+-- n'est ni le résultat net ni la marge brute : il lui manque le CMV.
+--
+-- Le coût vient de sale_items.unit_cost, figé à la vente par
+-- freeze_sale_item_cost() : l'historique ne bouge pas quand le prix d'achat est
+-- corrigé aujourd'hui. Il est proratisé sur amount_received / total_amount,
+-- exactement comme le CA — une vente à crédit ne doit débiter que la part
+-- encaissée, sinon ventes et coûts ne seraient pas sur la même base et le
+-- résultat fausserait dans les deux sens.
+--
+-- Une colonne s'ajoute, rien ne se supprime : le client lit les champs par leur
+-- nom, un champ de plus est donc sans effet sur le code antérieur.
+--
+-- DROP puis CREATE, et non CREATE OR REPLACE : PostgreSQL refuse de changer le
+-- type de retour d'une fonction existante (« cannot change return type of
+-- existing function »). Rejouable : le IF EXISTS et le GRANT en fin de section.
+
+DROP FUNCTION IF EXISTS get_cash_flow(date, date);
+
+CREATE FUNCTION get_cash_flow(p_from date, p_to date)
+RETURNS TABLE (
+  day          date,
+  revenue      numeric,
+  cogs         numeric,
+  expenses     numeric,
+  net          numeric,
+  transactions bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+AS $$
+  WITH bounds AS (
+    -- Fuseau de l'organisation, avec repli sur celui du pays si absent.
+    SELECT COALESCE(
+             (SELECT o.timezone FROM organizations o
+               WHERE o.id = get_business_owner_id()),
+             'Africa/Porto-Novo'
+           ) AS tz
+  ),
+  sales_by_day AS (
+    SELECT
+      (s.created_at AT TIME ZONE (SELECT tz FROM bounds))::date AS d,
+      -- Base de caisse, sans exception : le chiffre d'affaires est ce qui est
+      -- réellement rentré, et amount_received est la seule colonne qui le sait.
+      -- Une vente espèces vaut son prix, une vente à crédit vaut son acompte.
+      SUM(s.amount_received) AS rev,
+      COUNT(*)               AS tx
+    FROM sales s
+    WHERE (s.created_at AT TIME ZONE (SELECT tz FROM bounds))::date
+          BETWEEN p_from AND p_to
+    GROUP BY 1
+  ),
+  -- Le même prorata que le CA, appliqué au coût figé à la vente. Les deux
+  -- colonnes sortent donc sur une base identique, ce qui est la condition pour
+  -- qu'une soustraction ait un sens.
+  items_by_day AS (
+    SELECT
+      (s.created_at AT TIME ZONE (SELECT tz FROM bounds))::date AS d,
+      SUM(si.unit_cost * si.quantity * CASE
+             WHEN s.total_amount > 0 THEN s.amount_received / s.total_amount
+             ELSE 0
+           END) AS cost
+    FROM sales s
+    JOIN sale_items si ON si.sale_id = s.id
+    WHERE si.unit_cost IS NOT NULL
+      AND (s.created_at AT TIME ZONE (SELECT tz FROM bounds))::date
+          BETWEEN p_from AND p_to
+    GROUP BY 1
+  ),
+  expenses_by_day AS (
+    SELECT x.day AS d, SUM(x.amount) AS spent
+    FROM expenses x
+    WHERE x.day BETWEEN p_from AND p_to
+    GROUP BY 1
+  ),
+  -- Journées vues par au moins un des deux flux. Un jour sans vente mais avec
+  -- charge doit apparaître : c'est ce que faisait le FULL OUTER JOIN. Une
+  -- UNION de jours puis trois LEFT JOIN donne le même résultat sans que la
+  -- couverture dépendre de l'ordre des jointures, et le garde de plan reste
+  -- atteint dès qu'une ligne existe — comme avant.
+  jours AS (
+    SELECT d FROM sales_by_day
+    UNION
+    SELECT d FROM expenses_by_day
+  )
+  SELECT
+    j.d                                              AS day,
+    COALESCE(s.rev, 0)                               AS revenue,
+    COALESCE(i.cost, 0)                              AS cogs,
+    COALESCE(x.spent, 0)                             AS expenses,
+    COALESCE(s.rev, 0) - COALESCE(i.cost, 0)
+      - COALESCE(x.spent, 0)                         AS net,
+    COALESCE(s.tx, 0)                                AS transactions
+  FROM jours j
+  LEFT JOIN sales_by_day    s ON s.d = j.d
+  LEFT JOIN items_by_day    i ON i.d = j.d
+  LEFT JOIN expenses_by_day x ON x.d = j.d
+  -- VERROU DE PLAN. Même raison que get_product_profitability() : l'appel RPC
+  -- contourne le cadenas du menu. Ici, ce que le client gratuit lirait est le
+  -- résultat net par jour — exactement ce qui se trouve au bas de la page
+  -- « Charges », la ligne que le plan vend.
+  -- require_feature est VOLATILE : elle ne peut être ni écartée ni mise en
+  -- cache par le planificateur. Aucune ligne = aucun chiffre divulgué.
+  WHERE (SELECT true FROM require_feature('reports'))
+  ORDER BY 1;
+$$;
+
+COMMENT ON FUNCTION get_cash_flow(date, date) IS
+  'Résultat journalier : CA − coût des marchandises vendues − charges. '
+  'Le CMV provient de sale_items.unit_cost figé à la vente, proraté sur '
+  'amount_received comme le CA. L''isolation vient de la RLS de sales et '
+  'expenses (SECURITY INVOKER). Repli sur Africa/Porto-Novo si la timezone '
+  'de l''organisation est absente.';
+
+REVOKE ALL ON FUNCTION get_cash_flow(date, date) FROM PUBLIC;
+GRANT  EXECUTE ON FUNCTION get_cash_flow(date, date) TO authenticated;
+GRANT  EXECUTE ON FUNCTION get_cash_flow(date, date) TO service_role;
+
+-- ============================================================
+--  ⬇ migration_webhook_claim.sql
+-- ============================================================
+
+-- ============================================================
+-- MIGRATION WEBHOOK CLAIM — GestionLocal
+-- A exécuter dans Supabase SQL Editor, après migration_webhook_logs.sql
+--
+-- Idempotence du webhook Stripe : la lecture puis l'upsert de webhook_events
+-- n'étaient pas atomiques. Deux livraisons concurrentes du même event_id
+-- pouvaient toutes deux lire status <> 'processed' et retraiter l'événement
+-- (double upsert d'abonnement, double changement de plan). claim_webhook_event
+-- sérialise la prise en charge : un seul appelant gagne le droit de traiter.
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION claim_webhook_event(
+  p_event_id text,
+  p_event_type text,
+  p_org_id text
+) RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  claimed boolean;
+BEGIN
+  WITH upserted AS (
+    INSERT INTO webhook_events (event_id, event_type, org_id, status)
+    VALUES (p_event_id, p_event_type, p_org_id, 'processing')
+    ON CONFLICT (event_id) DO UPDATE
+      SET status = 'processing', error = NULL
+      -- 'received' : tentative précédente interrompue avant le traitement.
+      -- 'error'    : Stripe rejoue justement celui-là.
+      -- 'processing' et 'processed' ne se reclaiment jamais : un appelant
+      -- concurrent ou un événement déjà traité est court-circuité.
+      WHERE webhook_events.status IN ('received', 'error')
+    RETURNING 1
+  )
+  SELECT EXISTS(SELECT 1 FROM upserted) INTO claimed;
+  RETURN claimed;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION claim_webhook_event(text, text, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION claim_webhook_event(text, text, text) TO service_role;
+
+-- ============================================================
+--  ⬇ migration_fk_indexes.sql
+-- ============================================================
+
+-- ============================================================
+-- MIGRATION : index couvrant les clés étrangères
+-- A exécuter dans Supabase SQL Editor
+--
+-- L'advisor Supabase signale deux FK sans index couvrant : sale_items.product_id
+-- et stock_logs.user_id. Sans eux, une jointure ou une suppression en cascade
+-- fait un seq scan de la table à chaque requête.
+-- ============================================================
+
+CREATE INDEX IF NOT EXISTS idx_sale_items_product_id ON sale_items(product_id);
+CREATE INDEX IF NOT EXISTS idx_stock_logs_user_id ON stock_logs(user_id);
+
+-- ============================================================
+--  ⬇ migration_domain.sql
+-- ============================================================
+
+-- ============================================================
+-- MIGRATION DOMAINE — GestionLocal
+-- A exécuter dans Supabase SQL Editor, après migration_security.sql
+--
+-- Un compte, deux domaines : commerce (caisse comptoir) et restauration
+-- (salle, tables, commande ouverte).
+--
+-- Le domaine est un PARAMÈTRE D'AFFICHAGE, jamais un privilège : il ne touche
+-- ni aux RLS, ni aux plans, ni aux limites de produits. Un restaurateur reste
+-- soumis aux mêmes quotas qu'un commerçant — c'est ce qui rend la bascule entre
+-- les deux domaines sans risque.
+--
+-- Les organizations existantes sont en commerce : DEFAULT 'retail' et aucune
+-- valeur forcée, donc le backfill est inutile.
+-- ============================================================
+
+-- La colonne d'abord : la contrainte porte sur elle.
+-- ADD COLUMN IF NOT EXISTS est indispensable, le harnais rejoue ce fichier.
+ALTER TABLE organizations
+  ADD COLUMN IF NOT EXISTS domain text NOT NULL DEFAULT 'retail';
+
+-- ⚠ LE GRANT EST INDISPENSABLE, et c'est un piège que cette migration
+--   s'infligeait elle-même.
+--
+--   migration_security.sql a verrouillé organizations en accordant les droits
+--   COLONNE par colonne (plan en SELECT seul, pour qu'un client ne puisse pas
+--   écrire `plan = 'pro'`). Dès qu'il existe des droits de colonne, PostgreSQL
+--   n'accorde plus rien au niveau TABLE : une colonne ajoutée ensuite par
+--   ADD COLUMN naît donc SANS droit d'écriture, même pour le patron.
+--
+--   Résultat en recette du 04/10/2026 : l'écran « Quelle est votre activité ? »
+--   répondait « permission denied for table organizations » et l'inscription
+--   restait bloquée. Le test SQL ne le voyait pas — le harnais tourne en
+--   postgres, qui contourne les privilèges.
+GRANT UPDATE (domain) ON organizations TO authenticated;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'organizations_domain_check'
+  ) THEN
+    ALTER TABLE organizations
+      ADD CONSTRAINT organizations_domain_check
+      CHECK (domain IN ('retail', 'restaurant'));
+  END IF;
+END;
+$$;
+
+-- Index inutile : le domaine est lu avec la ligne, jamais filtré en masse.
+-- ============================================================
+--  ⬇ migration_restaurant_tables.sql
+-- ============================================================
+
+-- ============================================================
+-- MIGRATION RESTAURATION : TABLES & COMMANDE OUVERTE
+-- À exécuter dans Supabase SQL Editor, après migration_domain.sql
+--
+-- Le service d'un restaurant n'est pas un encaissement : c'est une commande
+-- qui vit, sur une table, avant d'être soldée. On l'ajoute SANS toucher aux
+-- ventes : `sales` reste la seule source de vérité du chiffre d'affaires, et
+-- une table n'est qu'un conteneur de commande.
+--
+-- Découpage :
+--   restaurant_tables  la salle (nom, zone, places, active)
+--   restaurant_orders  une commande ouverte, avec son état d'avancement
+--   restaurant_order_items  les lignes : plat, quantité, prix convenu,
+--                           note cuisine, état (à envoyer / envoyé / servi)
+--
+-- Multi-tenant : tout passe par get_business_owner_id(), comme le reste.
+-- Un employé encaisse en salle : il écrit dans les commandes, il ne décide
+-- ni de la salle (écriture patron + manager uniquement).
+-- ============================================================
+
+-- ─── 1. La salle ───────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS restaurant_tables (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_id    uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  name        text NOT NULL,
+  zone        text NOT NULL DEFAULT 'Salle',
+  seats       int,
+  is_active   boolean NOT NULL DEFAULT true,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT restaurant_tables_name_len CHECK (length(btrim(name)) BETWEEN 1 AND 40)
+);
+
+CREATE INDEX IF NOT EXISTS idx_restaurant_tables_owner
+  ON restaurant_tables(owner_id, name);
+
+-- ─── 2. La commande ─────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS restaurant_orders (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  table_id     uuid REFERENCES restaurant_tables(id) ON DELETE SET NULL,
+  -- null = commande à emporter : elle n'occupe aucune table.
+  customer_name text,
+  status       text NOT NULL DEFAULT 'open'
+                 CHECK (status IN ('open', 'bill_requested', 'closed')),
+  -- Acomptes déjà encaissés sur une table, avant la clôture. L'addition du
+  -- Sprint 14 les déduira du solde : sans cette colonne, un acompte était
+  -- un encaissement invisible dans la commande.
+  amount_paid  numeric(12,2) NOT NULL DEFAULT 0 CHECK (amount_paid >= 0),
+  opened_by    uuid REFERENCES auth.users(id) ON DELETE SET NULL,
+  opened_at    timestamptz NOT NULL DEFAULT now(),
+  closed_at    timestamptz,
+  -- La vente écrite à la clôture : relie la commande au chiffre d'affaires
+  -- sans le dupliquer. `sales.id` est un uuid, la FK tient.
+  sale_id      uuid REFERENCES sales(id) ON DELETE SET NULL,
+
+  CONSTRAINT restaurant_orders_closed_at CHECK (
+    (status = 'closed' AND closed_at IS NOT NULL) OR (status <> 'closed' AND closed_at IS NULL)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS idx_restaurant_orders_open
+  ON restaurant_orders(owner_id, opened_at DESC)
+  WHERE status <> 'closed';
+
+-- Une seule commande ouverte par table. Sans cet index unique, deux serveurs
+-- ouvraient deux tickets sur la même table et l'addition aurait totalisé les
+-- deux — l'erreur la plus coûteuse du métier, et la plus difficile à voir.
+CREATE UNIQUE INDEX IF NOT EXISTS uniq_restaurant_orders_open_table
+  ON restaurant_orders(table_id)
+  WHERE status <> 'closed';
+
+-- ─── 3. Les lignes de commande ──────────────────────────────
+CREATE TABLE IF NOT EXISTS restaurant_order_items (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id    uuid NOT NULL REFERENCES restaurant_orders(id) ON DELETE CASCADE,
+  product_id  uuid NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+  quantity    numeric(12,3) NOT NULL CHECK (quantity > 0),
+  -- Prix convenu comme au POS : le patron de la table négocie.
+  unit_price  numeric(12,2) NOT NULL CHECK (unit_price >= 0),
+  -- Note cuisine : « peu épicé », « sans oignon », « à emporter ». Volontairement
+  -- du texte libre : un serveur tape vite, une liste déroulante l'arrêterait.
+  note        text,
+  -- new = à envoyer en cuisine · sent = parti · served = servi
+  status      text NOT NULL DEFAULT 'new'
+                CHECK (status IN ('new', 'sent', 'served')),
+  created_at  timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT restaurant_order_items_note_len CHECK (note IS NULL OR length(note) <= 300)
+);
+
+-- Le supplément du modificateur est POSÉ ICI, pas dans
+-- migration_restaurant_finitions.sql : la vue restaurant_floor, définie plus
+-- bas dans ce fichier, l'additionne. Le créer plus loin ferait échouer ce
+-- fichier lui-même sur une base neuve (« column r.extra_price does not exist »),
+-- et avec lui toutes les migrations suivantes.
+ALTER TABLE restaurant_order_items
+  ADD COLUMN IF NOT EXISTS modifier text;
+ALTER TABLE restaurant_order_items
+  ADD COLUMN IF NOT EXISTS extra_price numeric(12,2) NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS idx_restaurant_order_items_order
+  ON restaurant_order_items(order_id, status);
+
+-- ─── 4. RLS ─────────────────────────────────────────────────
+-- Pattern du reste du projet : get_business_owner_id() résout le tenant, que
+-- l'appelant soit le patron ou un employé de sa boutique.
+ALTER TABLE restaurant_tables ENABLE ROW LEVEL SECURITY;
+ALTER TABLE restaurant_orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE restaurant_order_items ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "restaurant_tables_read" ON restaurant_tables;
+CREATE POLICY "restaurant_tables_read" ON restaurant_tables
+  FOR SELECT USING (owner_id = get_business_owner_id());
+
+-- Écrire la salle est une décision de patron ou de manager, pas de caissier :
+-- réorganiser les tables pendant le service n'appartient pas à un employé.
+DROP POLICY IF EXISTS "restaurant_tables_write" ON restaurant_tables;
+DROP POLICY IF EXISTS "restaurant_tables_manage" ON restaurant_tables;
+CREATE POLICY "restaurant_tables_manage" ON restaurant_tables
+  FOR ALL
+  USING (
+    owner_id = auth.uid()
+    OR EXISTS (
+      SELECT 1 FROM business_members bm
+      WHERE bm.owner_id = restaurant_tables.owner_id
+        AND bm.member_id = auth.uid()
+        AND bm.role IN ('owner', 'manager')
+    )
+  )
+  WITH CHECK (
+    owner_id = auth.uid()
+    OR EXISTS (
+      SELECT 1 FROM business_members bm
+      WHERE bm.owner_id = restaurant_tables.owner_id
+        AND bm.member_id = auth.uid()
+        AND bm.role IN ('owner', 'manager')
+    )
+  );
+
+-- Un employé encaisse : il ouvre une commande (INSERT) et travaille ses lignes.
+-- Il ne MODIFIE ni ne clôture la commande elle-même.
+--
+-- Deux policies distinctes plutôt qu'un FOR ALL : un FOR ALL donnerait au
+-- caissier l'UPDATE, donc le droit de solder une addition — c'est-à-dire
+-- d'écrire (ou non) la vente du patron.
+DROP POLICY IF EXISTS "restaurant_orders_read" ON restaurant_orders;
+CREATE POLICY "restaurant_orders_read" ON restaurant_orders
+  FOR SELECT USING (owner_id = get_business_owner_id());
+
+DROP POLICY IF EXISTS "restaurant_orders_attach_table" ON restaurant_orders;
+CREATE POLICY "restaurant_orders_attach_table" ON restaurant_orders
+  FOR UPDATE
+  USING (status = 'open' AND table_id IS NULL)
+  WITH CHECK (status = 'open' AND table_id IS NOT NULL);
+
+-- Table_id NULL = commande à emporter, sans table. Chez un maquis, le service à
+-- emporter fait la moitié du chiffre d'affaires : interdire cette ligne
+-- condamnait le serveur à inventer une table, ou à faire encaisser au comptoir.
+-- Aucune limite sur leur nombre : l'index unique ne porte que sur table_id,
+-- qui est NULL ici.
+DROP POLICY IF EXISTS "restaurant_orders_takeaway" ON restaurant_orders;
+CREATE POLICY "restaurant_orders_takeaway" ON restaurant_orders
+  FOR INSERT WITH CHECK (
+    owner_id = get_business_owner_id()
+    AND status = 'open'
+    AND closed_at IS NULL
+  );
+
+-- Clôture et avancement (bill_requested) : patron ou manager seulement.
+DROP POLICY IF EXISTS "restaurant_orders_update" ON restaurant_orders;
+CREATE POLICY "restaurant_orders_update" ON restaurant_orders
+  FOR UPDATE
+  USING (
+    owner_id = auth.uid()
+    OR EXISTS (
+      SELECT 1 FROM business_members bm
+      WHERE bm.owner_id = restaurant_orders.owner_id
+        AND bm.member_id = auth.uid()
+        AND bm.role IN ('owner', 'manager')
+    )
+  )
+  WITH CHECK (
+    owner_id = auth.uid()
+    OR EXISTS (
+      SELECT 1 FROM business_members bm
+      WHERE bm.owner_id = restaurant_orders.owner_id
+        AND bm.member_id = auth.uid()
+        AND bm.role IN ('owner', 'manager')
+    )
+  );
+
+-- Personne ne supprime une commande : elle s'annule en revenant au statut
+-- ouvert ou se clôture. Une suppression laisserait une table occupée sans
+-- commande, et le total du service disparaîtrait sans trace.
+DROP POLICY IF EXISTS "restaurant_orders_no_delete" ON restaurant_orders;
+CREATE POLICY "restaurant_orders_no_delete" ON restaurant_orders
+  FOR DELETE USING (false);
+
+DROP POLICY IF EXISTS "restaurant_order_items_read" ON restaurant_order_items;
+CREATE POLICY "restaurant_order_items_read" ON restaurant_order_items
+  FOR SELECT USING (
+    EXISTS (
+      SELECT 1 FROM restaurant_orders ro
+      WHERE ro.id = restaurant_order_items.order_id
+        AND ro.owner_id = get_business_owner_id()
+    )
+  );
+
+DROP POLICY IF EXISTS "restaurant_order_items_write" ON restaurant_order_items;
+CREATE POLICY "restaurant_order_items_write" ON restaurant_order_items
+  FOR ALL
+  USING (
+    EXISTS (
+      SELECT 1 FROM restaurant_orders ro
+      WHERE ro.id = restaurant_order_items.order_id
+        AND ro.owner_id = get_business_owner_id()
+        AND ro.status <> 'closed'
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM restaurant_orders ro
+      WHERE ro.id = restaurant_order_items.order_id
+        AND ro.owner_id = get_business_owner_id()
+        AND ro.status <> 'closed'
+    )
+  );
+
+-- ─── 5. Vue de la salle ─────────────────────────────────────
+-- Le plan de tables a besoin de l'état sans N requêtes : tables libres /
+-- occupées / addition demandée, et le montant de la commande en cours.
+-- WITH (security_invoker) dès la création et non par ALTER : sur une vue déjà
+-- existante, un ALTER VIEW ... SET ne serait pas rejouable sans DROP.
+CREATE OR REPLACE VIEW restaurant_floor
+WITH (security_invoker = true)
+AS
+SELECT
+  t.id,
+  t.owner_id,
+  t.name,
+  t.zone,
+  t.seats,
+  t.is_active,
+  o.id   AS order_id,
+  o.status,
+  o.customer_name,
+  o.opened_at,
+  o.amount_paid,
+  -- Le supplément du modificateur compte dans le total de la table : c'est le
+  -- montant que la table va payer. Sans lui, la tuile affichait 9 000 F pour
+  -- une addition de 12 000 F — et l'encaissement aurait porté sur 12 000.
+  COALESCE(
+    (SELECT sum(i.quantity * (i.unit_price + i.extra_price))
+       FROM restaurant_order_items i WHERE i.order_id = o.id),
+    0
+  ) AS order_total
+FROM restaurant_tables t
+LEFT JOIN restaurant_orders o
+  ON o.table_id = t.id AND o.status <> 'closed';
+
+COMMENT ON VIEW restaurant_floor IS
+  'Plan des tables avec l''état de la commande en cours et son montant. '
+  'security_invoker : les policies des tables sous-jacentes restent la seule '
+  'source d''autorisation, une vue ne doit jamais les contourner.';
+
+REVOKE ALL ON restaurant_floor FROM anon;
+GRANT SELECT ON restaurant_floor TO authenticated, service_role;
+-- ─── Un nom de table est unique parmi les tables actives ────────────────
+--
+-- Trouvé en recette le 05/10/2026 : rien n'empêchait de créer deux « Table 1 ».
+-- Le plan affichait alors deux tuiles identiques, et surtout le TICKET DE CUISINE
+-- et le REÇU n'imprimaient que « Table 1 » — le plongeur ne savait plus quelle
+-- table les deux portions attendaient.
+--
+-- Le nom est comparé en minuscules et sans espaces aux extrémités : « table 1 »
+-- et « Table 1  » sont la même table, et c'est ce que le serveur tape.
+--
+-- PARTIEL (WHERE is_active) : une table archivée libère son nom. Sans cela, on
+-- ne pourrait plus jamais réutiliser « Table 5 » après avoir démonté la table.
+CREATE UNIQUE INDEX IF NOT EXISTS restaurant_tables_owner_name_uniq
+  ON restaurant_tables (owner_id, lower(btrim(name)))
+  WHERE is_active;
+
+-- ============================================================
+--  ⬇ migration_table_checkout.sql
+-- ============================================================
+
+-- ============================================================
+-- MIGRATION RESTAURATION : CLÔTURE D'ADDITION
+-- À exécuter dans Supabase SQL Editor, après migration_restaurant_tables.sql
+--
+-- Le Sprint 13 a créé la commande qui vit sur sa table. Elle ne vendait rien :
+-- `sales` restait la seule source de vérité du chiffre d'affaires, donc une
+-- table servie n'était dans AUCUN rapport. Ce sprint la relie au comptoir.
+--
+-- close_table_order() fait trois choses dans UNE transaction :
+--   1. transforme les lignes de commande en articles de vente
+--   2. passe par create_sale() — donc décrément de stock, coût figé, prix
+--      convenu, numéro de facture, journal : aucune logique dupliquée
+--   3. clôture la commande et la rattache à la vente écrite
+--
+-- L'addition partagée ne crée pas N ventes. Dans un restaurant, trois
+-- convives à 12 000 F sont UNE vente de 36 000 F : le fractionnement sert à
+-- afficher le compte de chacun, jamais à gonfler le chiffre d'affaires.
+--
+-- Ce que le fractionnement n'est PAS :
+--   - un encaissement en N fois (chaque fois une vente distincte fausserait
+--     les rapports de rentabilité, qui comptent par vente) ;
+--   - un droit de encaisser seulement une part : qui paie pour toute la table ?
+--     La table est soldée quand le TOTAL est réglé.
+-- ============================================================
+
+-- ─── 1. Colonnes de clôture ─────────────────────────────────
+-- part_count : combien de parts l'addition est répartie en (1 = table entière).
+ALTER TABLE restaurant_orders
+  ADD COLUMN IF NOT EXISTS split_count int NOT NULL DEFAULT 1
+  CHECK (split_count BETWEEN 1 AND 20);
+
+ALTER TABLE restaurant_orders
+  ADD COLUMN IF NOT EXISTS payment_method text
+  CHECK (payment_method IS NULL OR payment_method IN ('cash', 'momo', 'credit'));
+
+-- Le ticket de cuisine s'imprime à la commande, pas à la clôture : la cuisine
+-- a déjà cuisine quand l'addition arrive. On note donc ce qui est parti.
+ALTER TABLE restaurant_order_items
+  ADD COLUMN IF NOT EXISTS sent_at timestamptz;
+
+-- ─── 2. Ticket de cuisine ───────────────────────────────────
+-- Une vue, pas une table : le ticket est une LECTURE de la commande au moment
+-- où la cuisine l'imprime. Le stocker dupliquerait l'état et pourrait diverger
+-- de la commande — exactement ce que le stock figé à la vente évite pour le coût.
+--
+-- DROP avant CREATE : cette vue est REPRISE plus tard par
+-- migration_restaurant_finitions.sql, qui y ajoute la colonne `modifier`. Un
+-- CREATE OR REPLACE ne peut pas retirer une colonne — « cannot drop columns
+-- from view » — et le harnais rejoue ce fichier sur une base déjà corrigée.
+DROP VIEW IF EXISTS restaurant_kitchen_ticket;
+
+CREATE VIEW restaurant_kitchen_ticket
+WITH (security_invoker = true)
+AS
+SELECT
+  ro.id            AS order_id,
+  t.name           AS table_name,
+  t.zone           AS zone,
+  ro.opened_at,
+  i.id             AS item_id,
+  p.name           AS product_name,
+  i.quantity,
+  i.note,
+  i.status,
+  i.created_at
+FROM restaurant_orders ro
+LEFT JOIN restaurant_tables t ON t.id = ro.table_id
+JOIN restaurant_order_items i ON i.order_id = ro.id
+JOIN products p ON p.id = i.product_id
+-- Une commande close n'a plus de cuisine à faire : son ticket est clos.
+WHERE ro.status <> 'closed';
+
+COMMENT ON VIEW restaurant_kitchen_ticket IS
+  'Ticket de cuisine : les plats d''une commande, SANS PRIX. Une cuisine ne '
+  'connaît pas les tarifs. security_invoker : les policies des tables '
+  'sous-jacentes restent la seule autorisation.';
+
+REVOKE ALL ON restaurant_kitchen_ticket FROM anon;
+GRANT SELECT ON restaurant_kitchen_ticket TO authenticated, service_role;
+
+-- ─── 3. Clôture ─────────────────────────────────────────────
+CREATE OR REPLACE FUNCTION close_table_order(
+  p_order_id      uuid,
+  p_payment_method text,
+  p_amount_paid   numeric(12,2) DEFAULT NULL,
+  p_split_count   int          DEFAULT 1,
+  p_client_phone  text         DEFAULT NULL,
+  p_note          text         DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_owner    uuid;
+  v_order    restaurant_orders%ROWTYPE;
+  v_items    jsonb;
+  v_sale     jsonb;
+  v_sale_id  uuid;
+  v_total    numeric(12,2);
+  v_paid     numeric(12,2);
+BEGIN
+  v_owner := get_business_owner_id();
+  IF v_owner IS NULL THEN
+    RAISE EXCEPTION 'Non authentifié' USING ERRCODE = '28000';
+  END IF;
+
+  -- ── Le rôle, explicitement ──
+  -- SECURITY DEFINER s'exécute avec les droits du propriétaire de la fonction :
+  -- les policies de restaurant_orders sont donc IGNORÉES. Sans ce contrôle, un
+  -- simple caissier du tenant pourrait appeler la fonction et solder une
+  -- addition, c'est-à-dire écrire la vente du patron. La policy de mise à jour
+  -- ne protège plus rien ici — c'est la fonction qui protège.
+  -- Le patron n'est PAS membre de sa propre boutique : il n'a pas de ligne dans
+  -- business_members. Le test doit donc accepter le propriétaire lui-même, ou un
+  -- membre de rôle owner/manager.
+  IF v_owner <> auth.uid()
+     AND NOT EXISTS (
+       SELECT 1 FROM business_members bm
+        WHERE bm.member_id = auth.uid()
+          AND bm.owner_id = v_owner
+          AND bm.role IN ('owner', 'manager')
+     ) THEN
+    RAISE EXCEPTION 'Seul le patron ou un manager peut encaisser une addition'
+      USING ERRCODE = '42501';
+  END IF;
+
+  -- ── Verrouiller la commande ──
+  -- FOR UPDATE sérialise deux clôtures simultanées de la même table : sans lui,
+  -- les deux écrivent une vente et le total de l'addition est doublé.
+  SELECT * INTO v_order
+    FROM restaurant_orders
+   WHERE id = p_order_id
+     AND owner_id = v_owner
+     FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Commande introuvable' USING ERRCODE = 'P0002';
+  END IF;
+
+  IF v_order.status = 'closed' THEN
+    RAISE EXCEPTION 'Cette addition est déjà soldée' USING ERRCODE = '22023';
+  END IF;
+
+  IF p_payment_method IS NULL
+     OR p_payment_method NOT IN ('cash', 'momo', 'credit') THEN
+    RAISE EXCEPTION 'Moyen de paiement invalide : %', p_payment_method USING ERRCODE = '22023';
+  END IF;
+
+  IF p_split_count IS NULL OR p_split_count < 1 OR p_split_count > 20 THEN
+    RAISE EXCEPTION 'Nombre de parts invalide' USING ERRCODE = '22023';
+  END IF;
+
+  -- ── La commande doit avoir des plats ──
+  IF NOT EXISTS (SELECT 1 FROM restaurant_order_items WHERE order_id = p_order_id) THEN
+    RAISE EXCEPTION 'Aucun plat à encaisser sur cette table' USING ERRCODE = '22023';
+  END IF;
+
+  -- ── Les lignes deviennent des articles de vente ──
+  -- create_sale() refuse deux prix différents pour le même article — c'est
+  -- justifié au comptoir, où deux lignes du même produit ne peuvent être que
+  -- la même commande. Sur une table, c'est différent : le patron négocie, et
+  -- « un poulet à 4 000 puis un autre à 4 500 » est une chose réelle. On
+  -- regroupe donc par produit et on retient le prix le plus bas : c'est la
+  -- remise que la table a obtenue, appliquée à toutes les lignes de ce plat.
+  --
+  -- Le total est recalculé à partir de ce regroupement, jamais à partir d'une
+  -- somme de lignes : les deux doivent coïncider, sinon la facture et l'écran
+  -- montreraient deux montants différents.
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+           'product_id', a.product_id,
+           'quantity',   a.quantity,
+           'unit_price', a.unit_price
+         )), '[]'::jsonb),
+         coalesce(sum(a.quantity * a.unit_price), 0)
+    INTO v_items, v_total
+    FROM (
+      SELECT i.product_id,
+             sum(i.quantity)::numeric(12,3)            AS quantity,
+             min(i.unit_price)::numeric(12,2)          AS unit_price
+        FROM restaurant_order_items i
+       WHERE i.order_id = p_order_id
+       GROUP BY i.product_id
+    ) AS a;
+
+  -- ── Encaissement ──
+  -- create_sale() fait le travail lourd : atomicité, stock, coût figé, numéro
+  -- de facture, journal. On l'appelle, on ne le réécrit pas.
+  IF p_payment_method = 'credit' THEN
+    -- Vente à crédit : elle passe par record_credit_sale(), qui rattache le
+    -- client et gère l'acompte. Sans elle, create_sale('credit') refuse (le
+    -- garde-fou credit.internal) et la dette n'existerait pas.
+    IF btrim(COALESCE(p_client_phone, '')) = '' THEN
+      RAISE EXCEPTION 'Un numéro est requis pour une addition à crédit' USING ERRCODE = '22023';
+    END IF;
+
+    v_sale := record_credit_sale(
+      v_items,
+      COALESCE(NULLIF(btrim(v_order.customer_name), ''), 'Client table'),
+      p_client_phone,
+      COALESCE(p_note, format('Table %s', COALESCE((SELECT name FROM restaurant_tables WHERE id = v_order.table_id), 'à emporter'))),
+      COALESCE(v_order.amount_paid, 0) + COALESCE(p_amount_paid, 0)
+    );
+  ELSE
+    v_sale := create_sale(
+      v_items,
+      p_payment_method,
+      NULLIF(btrim(COALESCE(v_order.customer_name, '')), ''),
+      COALESCE(p_note, format('Table %s', COALESCE((SELECT name FROM restaurant_tables WHERE id = v_order.table_id), 'à emporter')))
+    );
+  END IF;
+
+  v_sale_id := (v_sale->>'id')::uuid;
+
+  -- ── Ce qui a été réellement encaissé ──
+  -- Une addition espèces est soldée en totalité ; un acompte a pu être versé
+  -- avant (amount_paid) et le reste est donné maintenant. Le crédit déduit ce
+  -- qu'il a reçu, on ne fait donc qu'y ajouter ce qui est versé ici.
+  IF p_payment_method = 'credit' THEN
+    v_paid := COALESCE(v_order.amount_paid, 0) + COALESCE(p_amount_paid, 0);
+    IF v_paid > v_total THEN
+      RAISE EXCEPTION
+        'Le montant versé (% F) dépasse l''addition (% F)', v_paid, v_total
+        USING ERRCODE = '22023';
+    END IF;
+  ELSE
+    v_paid := v_total + COALESCE(p_amount_paid, 0);
+  END IF;
+
+  -- ── Clôture ──
+  -- status, closed_at et sale_id ensemble : la contrainte de
+  -- migration_restaurant_tables.sql l'exige, et sale_id relie la commande à la
+  -- vente sans la dupliquer.
+  UPDATE restaurant_orders
+     SET status = 'closed',
+         closed_at = now(),
+         sale_id = v_sale_id,
+         split_count = p_split_count,
+         payment_method = p_payment_method,
+         amount_paid = v_paid
+   WHERE id = p_order_id;
+
+  RETURN jsonb_build_object(
+    'sale_id',        v_sale_id,
+    'invoice_number', v_sale->>'invoice_number',
+    'total_amount',   v_total,
+    'amount_paid',    v_paid,
+    'split_count',    p_split_count,
+    -- Le compte de chaque part, arrondi au franc. Le reste éventuel porte sur
+    -- la dernière part : une addition de 100 F en 3 ne peut pas donner
+    -- 33,33 × 3 = 99,99 et perdre 1 F sans que personne ne sache où il est passé.
+    'per_share',      round(v_total / p_split_count, 2)
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION close_table_order(uuid, text, numeric, int, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION close_table_order(uuid, text, numeric, int, text, text) TO authenticated;
+
+-- La version à 7 arguments de migration_restaurant_finitions.sql est retirée
+-- avant ce CREATE : les deux signatures coexistant, un appel à 4 arguments
+-- devient ambigu (« function close_table_order(unknown, unknown, unknown,
+-- integer) is not unique ») et AUCUN ne s'exécute. Ce DROP est la contrepartie
+-- de celui que fait migration_restaurant_finitions.sql sur la version à
+-- 6 arguments — les deux migrations se nettoient donc mutuellement, dans
+-- l'ordre, quelle que soit la base sur laquelle le harnais repart.
+DROP FUNCTION IF EXISTS close_table_order(uuid, text, numeric, int, text, text, numeric);
+
+COMMENT ON FUNCTION close_table_order(uuid, text, numeric, int, text, text) IS
+  'Solde une addition de table : transforme les lignes en vente via create_sale(), '
+  'puis clôture la commande. Le fractionnement ne multiplie PAS les ventes — trois '
+  'convives à 12 000 F font une vente de 36 000 F, répartie en 3 parts pour '
+  'l''affichage seulement.';
+
+-- ─── 4. Marquer « parti en cuisine » ────────────────────────
+-- Un service en salle doit pouvoir dire « c'est parti » sans passer par
+-- l'interface : c'est une action de terrain, elle se fait d'un geste.
+-- La ligne doit être 'new' : on ne ré-expédie pas un plat déjà servi, et on ne
+-- touche pas une commande close.
+CREATE OR REPLACE FUNCTION send_order_items(p_order_id uuid)
+RETURNS int
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_owner uuid;
+  v_sent  int;
+BEGIN
+  v_owner := get_business_owner_id();
+  IF v_owner IS NULL THEN
+    RAISE EXCEPTION 'Non authentifié' USING ERRCODE = '28000';
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM restaurant_orders
+     WHERE id = p_order_id AND owner_id = v_owner AND status <> 'closed'
+  ) THEN
+    RAISE EXCEPTION 'Commande introuvable ou déjà soldée' USING ERRCODE = 'P0002';
+  END IF;
+
+  UPDATE restaurant_order_items
+     SET status = 'sent', sent_at = now()
+   WHERE order_id = p_order_id
+     AND status = 'new';
+
+  GET DIAGNOSTICS v_sent = ROW_COUNT;
+  RETURN v_sent;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION send_order_items(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION send_order_items(uuid) TO authenticated;
+-- ============================================================
+--  ⬇ migration_recipes.sql
+-- ============================================================
+
+-- ============================================================
+-- MIGRATION RESTAURATION : RECETTES ET COÛT DE MATIÈRE
+-- À exécuter dans Supabase SQL Editor, après migration_table_checkout.sql
+--
+-- LE PROBLÈME
+--   L'application ne vend que des produits finis. « Poulet braisé » est un
+--   produit à 4 500 F, et sa marge affichée est 4 500 − prix_achat. Or un
+--   patron ne rachète pas de « poulet braisé » : il rachète du poulet, du riz,
+--   de l'huile. Sans recette, sa rentabilité est une fiction — et c'est
+--   précisément le KPI d'un restaurant.
+--
+-- CE QUE CELA CHANGE
+--   Un produit peut avoir une RECETTE : une liste d'ingrédients, avec la
+--   quantité nécessaire pour UNE portion. Le coût d'un plat devient la somme
+--   des coûts de ses ingrédients, et il part de là pour chaque ingredient :
+--
+--     Riz blanc (recette : 300 g riz, 1 c. huile)
+--       └─ Poulet braisé (recette : 150 g riz, 1 c. huile, 200 g poulet)
+--
+--   Le riz des deux est additionné : vendre un poulet consomme ce que les
+--   deux plats demandent. Une recette peut donc contenir un autre plat.
+--
+-- MISE EN ŒUVRE — deux déclencheurs, pas une réécriture de create_sale()
+--   1. sale_items_set_unit_cost   AVANT INSERT : le coût figé de la ligne est
+--      le coût de la RECETTE quand le produit en a une, sinon le prix
+--      d'achat. `unit_cost` étant figé à la vente, la rentabilité historique
+--      reste vraie même si la recette change demain — c'est le principe déjà
+--      posé par migration_profitability.sql, appliquée au plat.
+--   2. sale_items_consume_ingredients APRÈS INSERT : les stocks
+--      d'ingrédients sont décrémentés, et le journal écrit.
+--
+--   Pourquoi un déclencheur et non une nouvelle create_sale() ? Réécrire cette
+--   fonction — 150 lignes, le cœur de la caisse — pour y ajouter deux lignes
+--   serait le moyen le plus sûr de la casser. Le déclencheur s'exécute DANS la
+--   transaction de la vente : s'il lève, tout est annulé, vente comprise. On
+--   obtient l'atomicité recherchée sans toucher au chemin critique.
+--
+-- ⚠ CE QUE CELA NE FAIT PAS
+--   Le stock d'un PLAT n'est pas décrémenté par la recette : un plat se
+--   cuisine, il ne se stocke pas. C'est aussi pour cela que create_sale()
+--   (migration_weighted_sales.sql) NE CONTRÔLE PAS et NE DÉCRÉMENTE PAS le
+--   stock d'un produit qui a une recette : sa disponibilité vient d'ici, et son
+--   propre stock n'est qu'un champ libre pour un patron qui veut suivre ses
+--   plats en portions.
+--
+--   Ces deux règles ont d'abord été écrites séparément, et create_sale()
+--   contredisait celle-ci : un plat à 0 — sa valeur naturelle — était refusé à
+--   la vente. Trouvé en recette navigateur le 05/10/2026, sur un maquis neuf.
+-- ============================================================
+
+-- ─── 1. Les recettes ───────────────────────────────────────
+CREATE TABLE IF NOT EXISTS recipe_ingredients (
+  dish_id       uuid NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  ingredient_id uuid NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+  -- Quantité d'ingrédient pour UNE portion du plat.
+  quantity      numeric(12,3) NOT NULL CHECK (quantity > 0),
+  created_at    timestamptz NOT NULL DEFAULT now(),
+
+  PRIMARY KEY (dish_id, ingredient_id),
+  -- Un plat ne peut pas être son propre ingrédient, direct ou indirect :
+  -- « poulet braisé composé de poulet braisé » créerait une boucle infinie
+  -- dans le calcul de coût. La détection du cycle DIRECT est ici ; celle des
+  -- cycles INDIRECTS est faite par add_recipe_ingredient(), qui refuse une
+  -- fermeture de boucle — une contrainte SQL ne peut pas remonter l'arbre.
+  CONSTRAINT recipe_ingredients_no_self CHECK (dish_id <> ingredient_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_dish
+  ON recipe_ingredients(dish_id);
+CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_ingredient
+  ON recipe_ingredients(ingredient_id);
+
+-- ─── 2. RLS ─────────────────────────────────────────────────
+ALTER TABLE recipe_ingredients ENABLE ROW LEVEL SECURITY;
+
+-- Lecture : tout membre du tenant voit les recettes. C'est nécessaire au
+-- calcul de coût affiché dans les rapports.
+DROP POLICY IF EXISTS "recipes_read" ON recipe_ingredients;
+CREATE POLICY "recipes_read" ON recipe_ingredients
+  FOR SELECT USING (
+    get_business_owner_id() IN (
+      SELECT p.user_id FROM products p WHERE p.id = recipe_ingredients.dish_id
+    )
+  );
+
+-- Écriture : patron ou manager, comme la salle. Un caissier peut vendre un
+-- plat, il ne réécrit pas la carte.
+DROP POLICY IF EXISTS "recipes_write" ON recipe_ingredients;
+CREATE POLICY "recipes_write" ON recipe_ingredients
+  FOR ALL
+  USING (
+    EXISTS (
+      SELECT 1 FROM products p
+       WHERE p.id = recipe_ingredients.dish_id
+         AND p.user_id = get_business_owner_id()
+         AND can_manage_products()
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM products p
+       WHERE p.id = recipe_ingredients.dish_id
+         AND p.user_id = get_business_owner_id()
+         AND can_manage_products()
+    )
+  );
+
+-- ─── 3. Le coût d'un produit ────────────────────────────────
+-- Récursif : un plat peut contenir un plat. La profondeur est bornée à 10
+-- niveaux — au-delà, c'est une erreur de saisie, pas une recette.
+--
+-- SECURITY INVOKER : elle ne fait que lire products et recipe_ingredients,
+-- dont les policies garantissent l'isolation. Une fonction SECURITY DEFINER
+-- ici laisserait un restaurant lire les coûts d'un autre.
+CREATE OR REPLACE FUNCTION product_cost(
+  p_product_id uuid,
+  p_depth      int DEFAULT 0
+)
+RETURNS numeric(12,2)
+LANGUAGE plpgsql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+AS $$
+DECLARE
+  v_cost   numeric(12,2);
+  v_direct numeric(12,2);
+BEGIN
+  IF p_depth > 10 THEN
+    -- Plutôt qu'une erreur, on s'arrête : une recette circulaire ne doit pas
+    -- rendre la page Rentabilité inutilisable. Le coût renvoie alors 0 pour le
+    -- niveau fautif, ce qui signale un problème sans bloquer la vente.
+    RETURN 0;
+  END IF;
+
+  SELECT COALESCE(sum(r.quantity * product_cost(r.ingredient_id, p_depth + 1)), 0)
+    INTO v_direct
+    FROM recipe_ingredients r
+   WHERE r.dish_id = p_product_id;
+
+  IF v_direct > 0 THEN
+    RETURN round(v_direct, 2);
+  END IF;
+
+  SELECT COALESCE(price_buy, 0) INTO v_cost FROM products WHERE id = p_product_id;
+  RETURN round(COALESCE(v_cost, 0), 2);
+END;
+$$;
+
+REVOKE ALL ON FUNCTION product_cost(uuid, int) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION product_cost(uuid, int) TO authenticated, service_role;
+
+COMMENT ON FUNCTION product_cost(uuid, int) IS
+  'Coût de revient d''une portion : somme des ingrédients (récursif) si le '
+  'produit a une recette, sinon son prix d''achat. Profondeur bornée à 10 pour '
+  'qu''une recette circulaire ne boucle pas.';
+
+-- ─── 4. Coût figé sur la ligne de vente ─────────────────────
+-- AVANT INSERT : remplace le prix d'achat par le coût de recette quand le
+-- produit en a une. Sans ce déclencheur, la marge d'un plat resterait
+-- 4 500 − prix_achat, c'est-à-dire exactement le problème qu'on voulait
+-- résoudre.
+CREATE OR REPLACE FUNCTION sale_items_set_unit_cost()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public
+AS $$
+DECLARE
+  v_recette numeric(12,2);
+BEGIN
+  IF NEW.unit_cost IS NULL THEN
+    RETURN NEW;
+  END IF;
+
+  SELECT product_cost(NEW.product_id) INTO v_recette;
+
+  -- Un produit SANS recette rend price_buy : on ne touche à rien, c'est déjà
+  -- ce que create_sale() a posé. Sans ce test, une vente de 0 F se verrait
+  -- attribuer un coût arbitraire.
+  IF v_recette > 0 THEN
+    NEW.unit_cost := v_recette;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS sale_items_apply_recipe_cost ON sale_items;
+CREATE TRIGGER sale_items_apply_recipe_cost
+  BEFORE INSERT ON sale_items
+  FOR EACH ROW EXECUTE FUNCTION sale_items_set_unit_cost();
+
+-- ─── 5. Décrément des ingrédients ───────────────────────────
+-- APRÈS INSERT : chaque ingrédient de la recette part, et le journal est
+-- écrit. Le trigger lève si un ingrédient manque — ce qui annule TOUTE la
+-- vente, ligne d'en-tête comprise : commander 5 plats dont il manque le poulet
+-- doit échouer, pas créer une vente sans plat.
+--
+-- Le même ingrédient peut apparaître dans deux plats vendus sur la même vente :
+-- chaque déclencheur le décrémente. L'ordre n'a pas d'importance, l'addition
+-- est commutative, et le verrou de ligne de chaque produit sérialise les
+-- écritures concurrentes.
+CREATE OR REPLACE FUNCTION sale_items_consume_ingredients()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+SECURITY INVOKER
+SET search_path = public
+AS $$
+DECLARE
+  v_row     record;
+  v_stock   numeric(12,3);
+  v_nom     text;
+  v_qte     numeric(12,3);
+BEGIN
+  FOR v_row IN
+    SELECT ri.ingredient_id, ri.quantity * NEW.quantity AS needed
+      FROM recipe_ingredients ri
+     WHERE ri.dish_id = NEW.product_id
+  LOOP
+    SELECT p.stock_qty, p.name INTO v_stock, v_nom
+      FROM products p
+     WHERE p.id = v_row.ingredient_id
+       -- RLS filtre ici : un ingrédient d'un autre restaurant est invisible et
+       -- ne sera donc jamais décrémenté. C'est le comportement voulu.
+       AND p.user_id = get_business_owner_id()
+     FOR UPDATE;
+
+    IF NOT FOUND THEN
+      CONTINUE;
+    END IF;
+
+    v_qte := v_row.needed;
+
+    IF v_stock < v_qte THEN
+      RAISE EXCEPTION 'Stock insuffisant pour l''ingrédient « % » (disponible : %, nécessaire : %)',
+        v_nom, v_stock, v_qte USING ERRCODE = '23514';
+    END IF;
+
+    UPDATE products SET stock_qty = stock_qty - v_qte WHERE id = v_row.ingredient_id;
+
+    INSERT INTO stock_logs (
+      user_id, product_id, product_name, movement_type,
+      quantity_change, stock_before, stock_after, reference_id
+    )
+    SELECT p.user_id, p.id, p.name, 'sale', -v_qte, v_stock, v_stock - v_qte, NEW.sale_id
+      FROM products p
+     WHERE p.id = v_row.ingredient_id;
+
+  END LOOP;
+
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS sale_items_consume_recipe ON sale_items;
+CREATE TRIGGER sale_items_consume_recipe
+  AFTER INSERT ON sale_items
+  FOR EACH ROW EXECUTE FUNCTION sale_items_consume_ingredients();
+
+-- ─── 6. Écriture de recette, avec refus des cycles ──────────
+-- Le client ne peut pas écrire directement : il doit passer par cette
+-- fonction. Elle refuse l'ajout qui fermerait une boucle
+-- (« poulet braisé » composé de « riz blanc » qui contient déjà le poulet
+-- braisé), ce que la contrainte CHECK ne peut pas voir.
+CREATE OR REPLACE FUNCTION add_recipe_ingredient(
+  p_dish_id       uuid,
+  p_ingredient_id uuid,
+  p_quantity      numeric(12,3)
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_owner uuid;
+BEGIN
+  v_owner := get_business_owner_id();
+  IF v_owner IS NULL THEN
+    RAISE EXCEPTION 'Non authentifié' USING ERRCODE = '28000';
+  END IF;
+
+  IF NOT can_manage_products() THEN
+    RAISE EXCEPTION 'Seul le patron ou un manager peut modifier une recette'
+      USING ERRCODE = '42501';
+  END IF;
+
+  IF p_quantity IS NULL OR p_quantity <= 0 THEN
+    RAISE EXCEPTION 'Quantité d''ingrédient invalide' USING ERRCODE = '22023';
+  END IF;
+
+  -- Les deux produits doivent exister ET être du tenant : un ingrédient d'un
+  -- autre restaurant ne serait jamais décrémenté (RLS), et la marge mentirait.
+  IF NOT EXISTS (SELECT 1 FROM products WHERE id = p_dish_id AND user_id = v_owner) THEN
+    RAISE EXCEPTION 'Plat introuvable' USING ERRCODE = 'P0002';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM products WHERE id = p_ingredient_id AND user_id = v_owner) THEN
+    RAISE EXCEPTION 'Ingrédient introuvable' USING ERRCODE = 'P0002';
+  END IF;
+
+  -- Cycle direct.
+  IF p_dish_id = p_ingredient_id THEN
+    RAISE EXCEPTION 'Un plat ne peut pas être son propre ingrédient' USING ERRCODE = '22023';
+  END IF;
+
+  -- Cycle indirect : l'ingrédient proposé CONTIENT-il déjà le plat ?
+  -- Exemple : « poulet sauté » (plat) contient « poulet braisé ». Si on
+  -- voulait ajouter « poulet braisé » à la recette de « poulet braisé » avec
+  -- « poulet sauté » comme ingrédient, la boucle serait
+  -- braisé → sauté → braisé.
+  --
+  -- On descend donc de l'ingrédient vers SES ingrédients (dish_id = a.id),
+  -- et non l'inverse : remonter trouverait qui utilise l'ingrédient, ce qui
+  -- répond à une autre question et laisse passer le cycle réel.
+  IF EXISTS (
+    WITH RECURSIVE arbre(id, prof) AS (
+      SELECT p_ingredient_id, 0
+      UNION ALL
+      SELECT ri.ingredient_id, a.prof + 1
+        FROM recipe_ingredients ri
+        JOIN arbre a ON ri.dish_id = a.id
+       WHERE a.prof < 10
+    )
+    SELECT 1 FROM arbre WHERE id = p_dish_id
+  ) THEN
+    RAISE EXCEPTION 'Cet ingrédient contient déjà ce plat : la recette formerait un cercle'
+      USING ERRCODE = '22023';
+  END IF;
+
+  INSERT INTO recipe_ingredients (dish_id, ingredient_id, quantity)
+  VALUES (p_dish_id, p_ingredient_id, p_quantity)
+  ON CONFLICT (dish_id, ingredient_id)
+  DO UPDATE SET quantity = EXCLUDED.quantity;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION add_recipe_ingredient(uuid, uuid, numeric) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION add_recipe_ingredient(uuid, uuid, numeric) TO authenticated;
+
+-- ─── 7. Vue : marge par plat ────────────────────────────────
+-- Le coût de recette et le prix de vente sur une seule ligne. C'est ce que
+-- l'écran Recettes affiche, et ce qui distingue un restaurant d'un commerce :
+-- le coût vient de la recette, pas d'un prix d'achat posé à la main.
+-- DROP puis CREATE : la colonne `stock_qty` est insérée ENTRE price_sell et
+-- unit_cost, et PostgreSQL refuse de réordonner les colonnes d'une vue
+-- existante (« cannot change name of view column unit_cost to stock_qty »).
+-- La vue ne porte aucun état : la recréer est sans risque.
+DROP VIEW IF EXISTS recipe_costs;
+
+CREATE VIEW recipe_costs
+WITH (security_invoker = true)
+AS
+SELECT
+  p.id,
+  p.user_id,
+  p.name,
+  p.category,
+  p.price_sell,
+  -- stock_qty : la recette sert à deux choses — calculer la marge, et dire au
+  -- patron « cet ingrédient ne suffit pas pour une portion ». Sans le stock,
+  -- l'écran Recettes ne peut pas afficher l'alerte de rupture. La colonne a
+  -- manque à la première version : l'écran affichait « column recipe_costs.
+  -- stock_qty does not exist » puis, pire, un état vide « aucun plat ».
+  p.stock_qty,
+  p.unit,
+  product_cost(p.id)                          AS unit_cost,
+  round(p.price_sell - product_cost(p.id), 2) AS margin,
+  CASE WHEN product_cost(p.id) > 0
+       THEN round(100 * (p.price_sell - product_cost(p.id)) / p.price_sell, 1)
+       ELSE NULL END                          AS margin_pct,
+  (SELECT count(*) FROM recipe_ingredients r WHERE r.dish_id = p.id) AS ingredient_count
+FROM products p
+WHERE p.is_active;
+
+COMMENT ON VIEW recipe_costs IS
+  'Coût de revient et marge par produit. Le coût vient de la recette quand elle '
+  'existe, du prix d''achat sinon. security_invoker : l''isolation reste celle '
+  'des policies de products et recipe_ingredients.';
+
+REVOKE ALL ON recipe_costs FROM anon;
+GRANT SELECT ON recipe_costs TO authenticated, service_role;
+-- ============================================================
+--  ⬇ migration_restaurant_finitions.sql
+-- ============================================================
+
+-- ============================================================
+-- MIGRATION RESTAURATION : MODIFICATEURS, PLATS DU JOUR, POURBOIRE
+-- À exécuter dans Supabase SQL Editor, après migration_recipes.sql
+--
+-- Sprint 16 — les finitions qui font la différence entre « une caisse qui
+-- gère des plats » et « une caisse de restaurant ».
+--
+-- 1. MODIFICATEURS
+--    « Poulet braisé », c'est trois plats différents : bien cuit, à point,
+--    saignant. Sans option, le serveur note sur un ticket papier et le prix
+--    facturé ne correspond pas à ce qui a été servi. Un modificateur porte
+--    donc un NOM et un supplément — la cuisson ne coûte pas plus cher, mais
+--    « double portion » ou « avec fromage » si.
+--
+-- 2. PLATS DU JOUR
+--    Un restaurant ne sert pas la même carte tous les jours. Un plat absent de
+--    l'offre du jour doit disparaître de la liste de commande : le garder
+--    visible, c'est proposer un plat qu'on ne cuisine pas. `is_daily_special`
+--    est un drapeau simple — pas une planification par jour de la semaine, qui
+--    serait une vraie gestion de carte et mérite son propre écran.
+--
+-- 3. POURBOIRE
+--    Au Bénin, le pourboire se laisse en espèces sur la table et n'arrive
+--    jamais dans la caisse. Il n'est ni une recette ni un coût : c'est une
+--    manne, encaissée hors application. On le note pour le savoir, sans
+--    l'ajouter au chiffre d'affaires — sinon les rapports mensuels
+--    surestimeraient le CA, et le patron paierait ses fees sur une recette
+--    qu'il n'a pas eue.
+--
+-- Le ticket de cuisine garde son prix : une cuisine ne connaît pas les tarifs.
+-- Les modificateurs y apparaissent en toutes lettres, par contre — « bien
+-- cuit » sans prix est précisément l'information utile.
+-- ============================================================
+
+-- ─── 1. Modificateurs ──────────────────────────────────────
+CREATE TABLE IF NOT EXISTS product_modifiers (
+  id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_id    uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  product_id  uuid NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+  name        text NOT NULL,
+  -- Supplément facturé, jamais négatif : « sans lactose » ne rapporte pas.
+  extra_price numeric(12,2) NOT NULL DEFAULT 0 CHECK (extra_price >= 0),
+  -- Un modificateur peut être obligatoire (cuisson) ou au choix (sauce). Une
+  -- cuisson obligatoire refusée à la commande bloquerait la vente : c'est le
+  -- rôle du serveur, pas d'une contrainte SQL.
+  is_required boolean NOT NULL DEFAULT false,
+  created_at  timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT product_modifiers_name_len CHECK (length(btrim(name)) BETWEEN 1 AND 60)
+);
+
+CREATE INDEX IF NOT EXISTS idx_product_modifiers_product
+  ON product_modifiers(product_id);
+
+ALTER TABLE product_modifiers ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "modifiers_read" ON product_modifiers;
+CREATE POLICY "modifiers_read" ON product_modifiers
+  FOR SELECT USING (owner_id = get_business_owner_id());
+
+-- Écrire la carte : patron ou manager, comme les recettes et la salle.
+DROP POLICY IF EXISTS "modifiers_write" ON product_modifiers;
+CREATE POLICY "modifiers_write" ON product_modifiers
+  FOR ALL
+  USING (
+    owner_id = get_business_owner_id() AND can_manage_products()
+  )
+  WITH CHECK (
+    owner_id = get_business_owner_id() AND can_manage_products()
+  );
+
+-- ─── 2. Choix du client sur une ligne de commande ───────────
+ALTER TABLE restaurant_order_items
+  ADD COLUMN IF NOT EXISTS modifier text;
+
+ALTER TABLE restaurant_order_items
+  ADD COLUMN IF NOT EXISTS extra_price numeric(12,2) NOT NULL DEFAULT 0;
+
+-- ADD COLUMN IF NOT EXISTS est sans effet sur une colonne EXISTANTE : le CHECK
+-- voyage avec elle. On garde donc les contraintes dans des blocs IF EXISTS,
+-- séparés — c'est la seule forme rejouable ici, un ADD CONSTRAINT n'ayant pas
+-- d'équivalent idempotent.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'restaurant_order_items_extra_price_check'
+  ) THEN
+    ALTER TABLE restaurant_order_items
+      ADD CONSTRAINT restaurant_order_items_extra_price_check CHECK (extra_price >= 0);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'restaurant_order_items_modifier_len'
+  ) THEN
+    ALTER TABLE restaurant_order_items
+      ADD CONSTRAINT restaurant_order_items_modifier_len
+      CHECK (modifier IS NULL OR length(modifier) <= 120);
+  END IF;
+END;
+$$;
+
+-- ─── 3. Plat du jour ────────────────────────────────────────
+ALTER TABLE products
+  ADD COLUMN IF NOT EXISTS is_daily_special boolean NOT NULL DEFAULT false;
+
+-- ─── 4. Pourboire ───────────────────────────────────────────
+ALTER TABLE restaurant_orders
+  ADD COLUMN IF NOT EXISTS tip numeric(12,2) NOT NULL DEFAULT 0 CHECK (tip >= 0);
+
+-- ─── 5. Le ticket de cuisine, avec les modificateurs ────────
+-- DROP puis CREATE, et non CREATE OR REPLACE : la nouvelle colonne `modifier`
+-- est insérée AU MILIEU de la liste (après `note`), et PostgreSQL refuse de
+-- renommer une colonne existante — « cannot change name of view column status
+-- to modifier ». C'est la seule raison du DROP ; la vue ne porte aucun état.
+DROP VIEW IF EXISTS restaurant_kitchen_ticket;
+
+CREATE VIEW restaurant_kitchen_ticket
+WITH (security_invoker = true)
+AS
+SELECT
+  ro.id            AS order_id,
+  t.name           AS table_name,
+  t.zone           AS zone,
+  ro.opened_at,
+  i.id             AS item_id,
+  p.name           AS product_name,
+  i.quantity,
+  i.note,
+  i.modifier,
+  i.status,
+  i.created_at
+FROM restaurant_orders ro
+LEFT JOIN restaurant_tables t ON t.id = ro.table_id
+JOIN restaurant_order_items i ON i.order_id = ro.id
+JOIN products p ON p.id = i.product_id
+WHERE ro.status <> 'closed';
+
+REVOKE ALL ON restaurant_kitchen_ticket FROM anon;
+GRANT SELECT ON restaurant_kitchen_ticket TO authenticated, service_role;
+
+COMMENT ON COLUMN restaurant_order_items.modifier IS
+  'Modificateur choisi (cuisson, sauce, portion). Affiché tel quel au ticket de '
+  'cuisine, SANS son prix : une cuisine ne connaît pas les tarifs.';
+
+COMMENT ON COLUMN restaurant_orders.tip IS
+  'Pourboire laissé sur la table. Informatif : il n''entre NI dans le chiffre '
+  'd''affaires NI dans les recettes, c''est une manne encaissée hors application.';
+
+-- ─── 6. Clôture : pourboire et modificateurs ────────────────
+-- Le prix unitaire d'une ligne devient prix + supplément : c'est ce qui est
+-- réellement servi. Le modificateur ne change que le prix, pas le stock
+-- décrémenté — un supplément de fromage consomme le fromage, mais ce lien
+-- ingredients n'est pas modélisé ici (les recettes le couvrent déjà).
+CREATE OR REPLACE FUNCTION close_table_order(
+  p_order_id       uuid,
+  p_payment_method text,
+  p_amount_paid    numeric(12,2) DEFAULT NULL,
+  p_split_count    int          DEFAULT 1,
+  p_client_phone   text         DEFAULT NULL,
+  p_note           text         DEFAULT NULL,
+  p_tip            numeric(12,2) DEFAULT 0
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_owner   uuid;
+  v_order   restaurant_orders%ROWTYPE;
+  v_items   jsonb;
+  v_sale    jsonb;
+  v_sale_id uuid;
+  v_total   numeric(12,2);
+  v_paid    numeric(12,2);
+  v_tip     numeric(12,2);
+  v_table   text;
+BEGIN
+  v_owner := get_business_owner_id();
+  IF v_owner IS NULL THEN
+    RAISE EXCEPTION 'Non authentifié' USING ERRCODE = '28000';
+  END IF;
+
+  -- SECURITY DEFINER ignore les policies : le rôle se vérifie ici.
+  --
+  -- L'ADMINISTRATION de la salle est réservée au patron et aux managers — pas
+  -- question de donner ce pouvoir à un caissier.
+  --
+  -- L'ENCAISSEMENT, en revanche, est ouvert à quiconque est dans l'équipe. La
+  -- règle était ici plus stricte que sur la caisse, et c'était une incohérence
+  -- coûteuse : create_sale() n'examine pas le rôle — un caissier encaisse au
+  -- comptoir tous les jours — alors qu'il ne pouvait pas solder une table dont
+  -- il venait de servir les plats. Dans un maquis, le personnel est employé :
+  -- il ramasse l'argent, et il ne pouvait pas l'écrire. Le patron devait solder
+  -- une addition après l'autre, ce qui est exactement le mode de
+  -- fonctionnement que le logiciel était censé supprimer.
+  --
+  -- Ce que la vente reste patronale dans TOUS les cas : ci-dessous,
+  -- create_sale() écrit la vente avec user_id = v_owner, jamais avec
+  -- l'identifiant de celui qui appuie sur le bouton. Ouvrir l'encaissement au
+  -- caissier ne déplace donc ni le chiffre d'affaires, ni le crédit de la vente,
+  -- ni les commissions éventuelles. Il lui donne seulement le geste qu'il
+  -- fait déjà au comptoir.
+  --
+  -- Le montant facturé est lu dans les LIGNES DE COMMANDE, jamais reçu du
+  -- client : un caissier ne peut pas faire encaisser 100 F en appelant la
+  -- fonction, le montant à payer est celui qui était affiché à l'écran.
+  IF v_owner <> auth.uid()
+     AND NOT EXISTS (
+       SELECT 1 FROM business_members bm
+        WHERE bm.member_id = auth.uid()
+          AND bm.owner_id = v_owner
+     ) THEN
+    RAISE EXCEPTION 'Seul le patron, un manager ou un membre de l''équipe peut encaisser cette addition'
+      USING ERRCODE = '42501';
+  END IF;
+
+  SELECT * INTO v_order
+    FROM restaurant_orders
+   WHERE id = p_order_id AND owner_id = v_owner
+   FOR UPDATE;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Commande introuvable' USING ERRCODE = 'P0002';
+  END IF;
+  IF v_order.status = 'closed' THEN
+    RAISE EXCEPTION 'Cette addition est déjà soldée' USING ERRCODE = '22023';
+  END IF;
+  IF p_payment_method IS NULL OR p_payment_method NOT IN ('cash','momo','credit') THEN
+    RAISE EXCEPTION 'Moyen de paiement invalide : %', p_payment_method USING ERRCODE = '22023';
+  END IF;
+  IF p_split_count IS NULL OR p_split_count < 1 OR p_split_count > 20 THEN
+    RAISE EXCEPTION 'Nombre de parts invalide' USING ERRCODE = '22023';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM restaurant_order_items WHERE order_id = p_order_id) THEN
+    RAISE EXCEPTION 'Aucun plat à encaisser sur cette table' USING ERRCODE = '22023';
+  END IF;
+
+  -- Un pourboire négatif ou absurde (10 fois l'addition) est une faute de
+  -- saisie. Le plafond est large mais fini : personne ne laisse 500 000 F
+  -- de pourboire sur une table à 20 000 F.
+  v_tip := round(COALESCE(p_tip, 0), 2);
+  IF v_tip < 0 THEN
+    RAISE EXCEPTION 'Le pourboire ne peut pas être négatif' USING ERRCODE = '22023';
+  END IF;
+
+  SELECT name INTO v_table FROM restaurant_tables WHERE id = v_order.table_id;
+  v_table := COALESCE(v_table, 'à emporter');
+
+  -- Le prix unitaire inclut le supplément du modificateur.
+  --
+  -- Regroupement par (produit, PRIX EFFECTIF), jamais par produit seul.
+  -- L'ancien code faisait min(unit_price + extra_price) par produit : deux
+  -- lignes du MÊME plat avec deux options différentes — une double portion
+  -- puis « bien cuit » — étaient fusionnées, et seul le supplément le moins
+  -- cher survivait. Une table à 10 500 F était encaissée 9 000 F, sans que
+  -- l'écran et le reçu divergent : ils divergeaient du prix affiché.
+  --
+  -- La fusion reste juste quand elle doit l'être : deux lignes du même plat au
+  -- MÊME prix (deux « bien cuit ») redeviennent une ligne de quantité 2, ce que
+  -- create_sale() exige — il refuse deux prix différents pour un même article.
+  SELECT coalesce(jsonb_agg(jsonb_build_object(
+           'product_id', a.product_id, 'quantity', a.quantity, 'unit_price', a.unit_price)), '[]'::jsonb),
+         coalesce(sum(a.quantity * a.unit_price), 0)
+    INTO v_items, v_total
+    FROM (
+      SELECT i.product_id,
+             sum(i.quantity)::numeric(12,3) AS quantity,
+             (i.unit_price + i.extra_price)::numeric(12,2) AS unit_price
+        FROM restaurant_order_items i
+       WHERE i.order_id = p_order_id
+       GROUP BY i.product_id, (i.unit_price + i.extra_price)
+    ) AS a;
+
+  IF p_payment_method = 'credit' THEN
+    IF btrim(COALESCE(p_client_phone, '')) = '' THEN
+      RAISE EXCEPTION 'Un numéro est requis pour une addition à crédit' USING ERRCODE = '22023';
+    END IF;
+    v_sale := record_credit_sale(
+      v_items,
+      COALESCE(NULLIF(btrim(v_order.customer_name), ''), 'Client table'),
+      p_client_phone,
+      COALESCE(p_note, 'Table ' || v_table),
+      COALESCE(v_order.amount_paid, 0) + COALESCE(p_amount_paid, 0)
+    );
+  ELSE
+    v_sale := create_sale(
+      v_items, p_payment_method,
+      NULLIF(btrim(COALESCE(v_order.customer_name, '')), ''),
+      COALESCE(p_note, 'Table ' || v_table)
+    );
+  END IF;
+
+  v_sale_id := (v_sale->>'id')::uuid;
+
+  IF p_payment_method = 'credit' THEN
+    v_paid := COALESCE(v_order.amount_paid, 0) + COALESCE(p_amount_paid, 0);
+    IF v_paid > v_total THEN
+      RAISE EXCEPTION 'Le montant versé (% F) dépasse l''addition (% F)', v_paid, v_total
+        USING ERRCODE = '22023';
+    END IF;
+  ELSE
+    v_paid := v_total;
+  END IF;
+
+  UPDATE restaurant_orders
+     SET status = 'closed', closed_at = now(), sale_id = v_sale_id,
+         split_count = p_split_count, payment_method = p_payment_method,
+         amount_paid = v_paid, tip = v_tip
+   WHERE id = p_order_id;
+
+  -- Le pourboire est HORS du total_amount de la vente : une manne n'est pas
+  -- une recette. Le renvoyer à part permet à l'écran de dire « 36 000 + 5 000
+  -- de pourboire » sans que la caisse ne compte 41 000.
+  RETURN jsonb_build_object(
+    'sale_id',        v_sale_id,
+    'invoice_number', v_sale->>'invoice_number',
+    'total_amount',   v_total,
+    'amount_paid',    v_paid,
+    'tip',            v_tip,
+    'total_with_tip', v_total + v_tip,
+    'split_count',    p_split_count,
+    'per_share',      round(v_total / p_split_count, 2)
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION close_table_order(uuid, text, numeric, int, text, text, numeric) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION close_table_order(uuid, text, numeric, int, text, text, numeric) TO authenticated;
+
+-- La version à 6 arguments reste valide : PostgREST résout par nombre
+-- d'arguments, et un appel ancien ne doit pas casser.
+DROP FUNCTION IF EXISTS close_table_order(uuid, text, numeric, int, text, text);
+
+COMMENT ON FUNCTION close_table_order(uuid, text, numeric, int, text, text, numeric) IS
+  'Solde une addition : les lignes (modificateur inclus) deviennent une vente via '
+  'create_sale(), la commande est close. Le fractionnement n''écrit QU''une vente. '
+  'Le pourboire est enregistré mais HORS du chiffre d''affaires : c''est une '
+  'manne, pas une recette.';
+
+-- ─── 7. Réservations ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS restaurant_reservations (
+  id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  owner_id     uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+  customer_name text NOT NULL,
+  -- Le premier slot sert : « 12h30 » plutôt que « 2026-10-04 12:30 », le patron
+  -- n'a qu'un service par jour à retenir.
+  slot_at      timestamptz NOT NULL,
+  party_size   int NOT NULL DEFAULT 2 CHECK (party_size > 0),
+  phone        text,
+  table_id     uuid REFERENCES restaurant_tables(id) ON DELETE SET NULL,
+  -- confirmed = le patron a appelé · seated = le client est arrivé · done = parti
+  status       text NOT NULL DEFAULT 'pending'
+                 CHECK (status IN ('pending', 'confirmed', 'seated', 'done', 'no_show')),
+  note         text,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+
+  CONSTRAINT restaurant_reservations_name_len CHECK (length(btrim(customer_name)) BETWEEN 1 AND 80)
+);
+
+CREATE INDEX IF NOT EXISTS idx_restaurant_reservations_slot
+  ON restaurant_reservations(owner_id, slot_at)
+  WHERE status NOT IN ('done', 'no_show');
+
+ALTER TABLE restaurant_reservations ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "reservations_read" ON restaurant_reservations;
+CREATE POLICY "reservations_read" ON restaurant_reservations
+  FOR SELECT USING (owner_id = get_business_owner_id());
+
+-- Écrire une réservation n'est pas un acte de gestion : un caissier prend
+-- les réservations au téléphone. Il ne les annule pas pour autant — une
+-- résiliation est une décision du patron.
+DROP POLICY IF EXISTS "reservations_write" ON restaurant_reservations;
+CREATE POLICY "reservations_write" ON restaurant_reservations
+  FOR ALL
+  USING (owner_id = get_business_owner_id())
+  WITH CHECK (owner_id = get_business_owner_id());
+-- ============================================================
+--  ⬇ migration_menu_days.sql
+-- ============================================================
+
+-- ============================================================
+-- MIGRATION RESTAURATION : CARTE PAR JOUR DE LA SEMAINE
+-- À exécuter dans Supabase SQL Editor, après migration_restaurant_finitions.sql
+--
+-- `is_daily_special` (Sprint 16) est un drapeau simple : il dit « servi
+-- aujourd'hui », et rien de plus. Un vrai restaurant ne sert pas le même plat
+-- le mardi et le vendredi — le poisson le vendredi, la viande le samedi, le
+-- poulet braisé tous les jours. Un simple booléen oblige le patron à
+-- modifier la carte chaque matin, ce qu'il ne fera pas : la carte affichée
+-- proposerait des plats qu'on ne cuisine pas.
+--
+-- menu_days : un tableau de jours de semaine, 0 = dimanche … 6 = samedi.
+-- NULL = tous les jours — c'est le cas d'un plat de base, et le défaut, pour
+-- qu'un plat créé depuis Stock (hors module restaurant) reste disponible sans
+-- avoir à le configurer.
+--
+-- Le choix se fait dans l'interface par cases à cocher, jamais par une saisie
+-- de nombres : un patron ne pense pas « 3, 4 et 5 ».
+-- ============================================================
+
+ALTER TABLE products
+  ADD COLUMN IF NOT EXISTS menu_days int[];
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'products_menu_days_valid'
+  ) THEN
+    ALTER TABLE products
+      ADD CONSTRAINT products_menu_days_valid
+      CHECK (menu_days IS NULL OR (
+        cardinality(menu_days) BETWEEN 1 AND 7
+        AND menu_days <@ ARRAY[0, 1, 2, 3, 4, 5, 6]
+      ));
+  END IF;
+END;
+$$;
+
+COMMENT ON COLUMN products.menu_days IS
+  'Jours de service, 0 = dimanche … 6 = samedi. NULL = tous les jours. '
+  'Une carte qui propose un plat non servi est pire qu''une carte courte : '
+  'le client commande ce qu''il voit.';
+
+-- ─── Vue de la carte du jour ─────────────────────────────────
+-- La salle ne liste QUE ce qui se cuisine aujourd'hui. Sans elle, chaque
+-- commande du service passe par un filtre côté navigateur, et une tablesans
+-- filtre — un export, un script, l'écran d'inventaire — proposerait à tort le
+-- plat du mardi le mardi matin.
+CREATE OR REPLACE VIEW restaurant_menu_today
+WITH (security_invoker = true)
+AS
+SELECT
+  p.id,
+  p.user_id,
+  p.name,
+  p.category,
+  p.price_sell,
+  p.stock_qty,
+  p.unit,
+  p.is_daily_special,
+  p.menu_days,
+  -- NULL = tous les jours. extract(dow) donne 0 pour dimanche.
+  (p.menu_days IS NULL
+    OR (extract(dow FROM now())::int) = ANY (p.menu_days)) AS servi_aujourdhui,
+  (SELECT count(*) FROM recipe_ingredients r WHERE r.dish_id = p.id) AS ingredient_count,
+  product_cost(p.id) AS unit_cost
+FROM products p
+WHERE p.is_active;
+
+COMMENT ON VIEW restaurant_menu_today IS
+  'Carte du jour : les plats servis AUJOURD''HUI. security_invoker : '
+  'l''isolation reste celle des policies de products.';
+
+REVOKE ALL ON restaurant_menu_today FROM anon;
+GRANT SELECT ON restaurant_menu_today TO authenticated, service_role;
+-- ============================================================
+--  ⬇ migration_ca_caisse.sql
+-- ============================================================
+
+-- ═══ Base de caisse : une seule définition du chiffre d'affaires ═══
+--
+-- Trouvé en recette navigateur le 04/10/2026 : deux écrans de la même
+-- application, le même jour, la même boutique, deux chiffres d'affaires
+-- différents — 42 300 F sur « Ventes » et « Rapports → Ventes », 34 300 F sur
+-- « Rapports → Rentabilité ». L'écart valait exactement la dette non réglée.
+--
+-- La cause tient en une ligne : get_sales_summary() comptait
+-- SUM(total_amount) — ce qui a été FACTURÉ — là où get_cash_flow() et
+-- get_product_profitability() comptent SUM(amount_received), ce qui est
+-- réellement ENCAISSÉ. Chacune des deux versions était justifiée dans son
+-- fichier, et incompatible avec l'autre.
+--
+-- Ce qui tranche n'est pas une préférence : c'est une phrase que
+-- l'application affiche déjà au commerçant, sur l'écran Dettes —
+--
+--   « Une vente à crédit n'entre pas dans le chiffre d'affaires : elle y
+--     entre quand vous encaissez. Le stock, lui, est sorti dès la vente. »
+--
+-- Deux écrans sur trois contredisaient cette phrase. On aligne le troisième
+-- sur elle. La base de caisse est aussi celle que la rentabilité et le
+-- résultat net utilisaient déjà, et la seule qui ne bouge pas le jour où un
+-- client paye trois semaines plus tard.
+--
+-- Rappel du choix, identique à celui de migration_expenses.sql : un règlement
+-- encaissé aujourd'hui sur une vente d'hier est imputé à la DATE DE LA VENTE.
+-- Rattacher au jour du versement donnerait un résultat net qui bouge un jour
+-- où aucune vente n'a eu lieu — impossible à lire pour un commerçant, et sans
+-- rapport avec ce que sa caisse contient réellement.
+
+
+-- ─── 1. Les versements doivent dire QUELLE vente ils soldent ──────────────
+--
+-- Deuxième volet du même défaut, trouvé dans la même recette. Un règlement
+-- de dette encaissé en espèces n'apparaissait dans AUCUN total : ni « Espèces »
+-- ni « Mobile Money ». Le commerçant qui reçoit 8 000 F en liquide d'un client
+-- voyait son chiffre d'affaires diminuer ce jour-là.
+--
+-- credit_payments ne portait que debt_id : rattacher un règlement à une vente
+-- demandait de rejouer ici la répartition FIFO — un second calcul de la même
+-- règle, qui divergerait à la première évolution de pay_customer_debt(). La
+-- répartition est déjà faite dans cette fonction, vente par vente, à
+-- l'instant où elle a lieu. Il suffisait de l'y écrire.
+--
+-- Une vente peut être soldée par plusieurs versements, et un versement peut
+-- solder plusieurs ventes (les plus anciennes d'abord). D'où une ligne par
+-- couple : amount est la part du règlement qui couvre CETTE vente, pas le
+-- règlement entier.
+--
+-- gesture_id sert à retrouver le geste derrière ces lignes. L'écran Dettes
+-- affiche « 3 ventes, 2 versements » : sans lui, un règlement qui solde trois
+-- ventes d'un coup serait compté trois fois, et l'historique annoncerait au
+-- client plus de passages en caisse qu'il n'en a fait. Une valeur par défaut
+-- aléatoire donne une ligne par geste pour l'historique déjà en base — ce qui
+-- est exact, ces gestes n'ayant jamais été ventilés.
+
+ALTER TABLE credit_payments ADD COLUMN IF NOT EXISTS sale_id uuid
+  REFERENCES sales(id) ON DELETE CASCADE;
+
+ALTER TABLE credit_payments ADD COLUMN IF NOT EXISTS gesture_id uuid
+  NOT NULL DEFAULT gen_random_uuid();
+
+CREATE INDEX IF NOT EXISTS idx_credit_payments_sale ON credit_payments(sale_id)
+  WHERE sale_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_credit_payments_gesture ON credit_payments(gesture_id);
+
+COMMENT ON COLUMN credit_payments.sale_id IS
+  'Vente que ce règlement solde. NULL = acompte à la vente antérieur à cette '
+  'migration, ou versement supérieur à la dette (crédit restant au client). '
+  'C''est ce lien qui permet de répartir un règlement en espèces ou en MoMo sur '
+  'le jour de la vente — sans lui, l''argent reçu d''un client pour solder sa '
+  'dette ne rattachait à aucun total de caisse.';
+
+COMMENT ON COLUMN credit_payments.gesture_id IS
+  'Identifiant du geste de caisse. Plusieurs lignes peuvent partager le même '
+  'gesture quand un règlement solde plusieurs ventes : c''est un versement, '
+  'ventilé. L''écran Dettes compte les DISTINCT gesture_id pour ne pas '
+  'annoncer au client plus de versements qu''il n''en a faits.';
+
+
+-- ─── 2. La synthèse, en base de caisse ────────────────────────────────────
+--
+-- Le type de retour ne change pas : CREATE OR REPLACE suffit, et les deux
+-- appelants (Historique des ventes, Rapports) n'ont rien à modifier.
+--
+-- Les versements sont agrégés par vente AVANT la jointure, jamais dans une
+-- sous-requête corrélée : sales.id n'est ni groupé ni agrégé, et Postgres
+-- refuserait la requête. Un LEFT JOIN sur un CTE déjà réduit à une ligne par
+-- vente donne le même résultat, sans dépendre du nombre de règlements.
+
+CREATE OR REPLACE FUNCTION get_sales_summary(
+  p_from date,
+  p_to   date,
+  p_tz   text DEFAULT 'UTC'
+)
+RETURNS TABLE (
+  day     date,
+  revenue numeric,
+  cash    numeric,
+  momo    numeric,
+  tx      bigint
+)
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+AS $$
+  WITH bornes AS (
+    SELECT (p_from::timestamp AT TIME ZONE p_tz) AS debut,
+           ((p_to + 1)::timestamp AT TIME ZONE p_tz) AS fin
+  ),
+  ventes AS (
+    SELECT s.id,
+           (s.created_at AT TIME ZONE p_tz)::date AS jour,
+           s.amount_received,
+           s.payment_method
+      FROM sales s, bornes b
+     WHERE s.created_at >= b.debut
+       AND s.created_at <  b.fin
+  ),
+  -- Une ligne par vente, pas par règlement : sans cela un client qui solde
+  -- trois dettes en un geste compterait ses versements trois fois dans le
+  -- chiffre d'affaires.
+  reglements AS (
+    SELECT cp.sale_id,
+           COALESCE(SUM(cp.amount) FILTER (WHERE cp.method = 'cash'), 0) AS cash,
+           COALESCE(SUM(cp.amount) FILTER (WHERE cp.method = 'momo'), 0) AS momo
+      FROM credit_payments cp
+     WHERE cp.sale_id IS NOT NULL
+     GROUP BY 1
+  )
+  SELECT
+    v.jour                                                  AS day,
+    -- Ce qui est réellement rentré, pas ce qui a été facturé : amount_received
+    -- est la seule colonne qui distingue « j'ai vendu 9 000 » de « j'ai reçu
+    -- 1 000 maintenant ».
+    COALESCE(SUM(v.amount_received), 0)                     AS revenue,
+    -- Les deux parts sortent du même montant que le total, et les règlements de
+    -- dettes s'y ajoutent par LEUR moyen : un client qui solde sa dette en
+    -- espèces a bien donné des espèces. Avant, ce cash-là n'entrait nulle part,
+    -- et les modes de paiement ne correspondaient pas au chiffre d'affaires
+    -- affiché juste au-dessus — sur la même carte.
+    COALESCE(SUM(v.amount_received) FILTER (WHERE v.payment_method = 'cash'), 0)
+      + COALESCE(SUM(r.cash), 0)                           AS cash,
+    COALESCE(SUM(v.amount_received) FILTER (WHERE v.payment_method = 'momo'), 0)
+      + COALESCE(SUM(r.momo), 0)                           AS momo,
+    COUNT(*)                                                AS tx
+  FROM ventes v
+  LEFT JOIN reglements r ON r.sale_id = v.id
+  GROUP BY 1
+  ORDER BY 1;
+$$;
+
+REVOKE ALL ON FUNCTION get_sales_summary(date, date, text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION get_sales_summary(date, date, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION get_sales_summary(date, date, text) TO service_role;
+
+COMMENT ON FUNCTION get_sales_summary(date, date, text) IS
+  'Chiffre d''affaires en BASE DE CAISSE : somme de amount_received, pas de '
+  'total_amount. Une vente à crédit n''y entre qu''à l''encaissement de ce qui a '
+  'été versé, rattaché au jour de la vente. Même base que get_cash_flow() et '
+  'get_product_profitability() — trois écrans ne doivent pas afficher trois '
+  'chiffres pour la même journée. cash et momo incluent les règlements de '
+  'dettes, par leur moyen de paiement.';
+
+
+-- ─── 3. Les versements qui alimentent cette répartition ───────────────────
+--
+-- record_credit_sale() : l'acompte est versé À LA VENTE, il connaît donc la
+-- vente qu'il couvre. pay_customer_debt() : c'est la boucle de répartition
+-- qui sait, pour chaque tour, combien va à quelle vente.
+
+CREATE OR REPLACE FUNCTION record_credit_sale(
+  p_items        jsonb,
+  p_client_name  text,
+  p_client_phone text,
+  p_note         text          DEFAULT NULL,
+  p_advance      numeric(12,2) DEFAULT 0
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_owner    uuid;
+  v_name     text;
+  v_phone    text;
+  v_avance   numeric(12,2);
+  v_total    numeric(12,2);
+  v_du       numeric(12,2);
+  v_sale     jsonb;
+  v_sale_id  uuid;
+  v_debt_id  uuid;
+BEGIN
+  v_owner := get_business_owner_id();
+  IF v_owner IS NULL THEN
+    RAISE EXCEPTION 'Non authentifié' USING ERRCODE = '28000';
+  END IF;
+
+  IF p_client_name IS NULL OR btrim(p_client_name) = '' THEN
+    RAISE EXCEPTION 'Indiquez le nom du client' USING ERRCODE = '22023';
+  END IF;
+  v_name := btrim(p_client_name);
+
+  v_phone := normalize_phone(p_client_phone);
+  IF v_phone IS NULL THEN
+    RAISE EXCEPTION 'Le numéro de téléphone est obligatoire pour une vente à crédit'
+      USING ERRCODE = '22023';
+  END IF;
+
+  IF p_advance IS NULL OR p_advance < 0 THEN
+    RAISE EXCEPTION 'L''avance versée ne peut pas être négative' USING ERRCODE = '22023';
+  END IF;
+  v_avance := p_advance;
+
+  PERFORM set_config('credit.internal', '1', true);
+  v_sale := create_sale(p_items, 'credit', v_name, p_note);
+  PERFORM set_config('credit.internal', NULL, true);
+  v_sale_id := (v_sale->>'id')::uuid;
+  v_total := (v_sale->>'total_amount')::numeric(12,2);
+
+  IF v_avance > v_total THEN
+    RAISE EXCEPTION
+      'L''avance versée (% F) dépasse le prix de la vente (% F)', v_avance, v_total
+      USING ERRCODE = '22023';
+  END IF;
+
+  -- amount_received porte ce qui est réellement rentré : c'est la seule colonne
+  -- qui décide du chiffre d'affaires. settled reste dérivé — il ne sert plus
+  -- qu'à l'indexation des dettes en cours.
+  UPDATE sales
+     SET amount_received = v_avance,
+         settled = (v_avance >= v_total),
+         client_phone = v_phone
+   WHERE id = v_sale_id;
+
+  -- Fiche client créée à la première dette, réutilisée ensuite. ON CONFLICT DO
+  -- UPDATE garde le nom à jour : « Maman Koffi » devient « Mme Koffi ».
+  INSERT INTO customer_debts (user_id, phone, name)
+  VALUES (v_owner, v_phone, v_name)
+  ON CONFLICT (user_id, phone) DO UPDATE
+    SET name = EXCLUDED.name,
+        updated_at = now();
+
+  SELECT id INTO v_debt_id
+    FROM customer_debts
+   WHERE user_id = v_owner AND phone = v_phone;
+
+  -- L'acompte entre aussi dans l'historique des versements. Pas pour calculer la
+  -- dette — ça, c'est amount_received — mais pour que la question « il m'a déjà
+  -- donné combien ? » ait une réponse datée, avec son moyen de paiement. C'est
+  -- aussi ce que l'écran Dettes affiche en « versements », et ce qu'un client
+  -- conteste éventuellement.
+  --
+  -- sale_id renseigné : l'acompte couvre CETTE vente, et sa part de caisse doit
+  -- suivre le moyen choisi au moment du paiement.
+  IF v_avance > 0 THEN
+    INSERT INTO credit_payments (debt_id, user_id, amount, day, method, note, sale_id)
+    VALUES (v_debt_id, v_owner, v_avance, current_date, 'cash',
+            'Acompte versé à la vente', v_sale_id);
+  END IF;
+
+  v_du := v_total - v_avance;
+
+  RETURN jsonb_build_object(
+    'id',              v_sale_id,
+    'total_amount',    v_total,
+    -- Reste à recouvrer, renvoyé pour que l'écran n'ait pas à le recalculer et
+    -- risquer un arrondi différent de celui de la base.
+    'amount_advance',  v_avance,
+    'amount_due',      v_du,
+    'invoice_number',  v_sale->>'invoice_number',
+    'debt_id',         v_debt_id,
+    'client_phone',    v_phone
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION record_credit_sale(jsonb, text, text, text, numeric) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION record_credit_sale(jsonb, text, text, text, numeric) TO authenticated;
+GRANT EXECUTE ON FUNCTION record_credit_sale(jsonb, text, text, text, numeric) TO service_role;
+
+
+CREATE OR REPLACE FUNCTION pay_customer_debt(
+  p_debt_id uuid,
+  p_amount  numeric(12,2),
+  p_method  text DEFAULT 'cash',
+  p_note    text DEFAULT NULL
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_owner        uuid;
+  v_phone        text;
+  v_user_id      uuid;
+  v_restant      numeric(12,2);
+  v_avant        numeric(12,2);
+  -- Ce qui manque sur la vente en cours de traitement. Différent de v_restant,
+  -- qui est le reliquat de trésorerie : les deux se confondent vite, et les
+  -- confondre ferait solder une vente par de l'argent destiné à une autre.
+  v_du           numeric(12,2);
+  v_part         numeric(12,2);
+  v_reglees      int := 0;
+  v_sale         record;
+  v_note         text;
+  v_gesture      uuid := gen_random_uuid();
+BEGIN
+  v_owner := get_business_owner_id();
+  IF v_owner IS NULL THEN
+    RAISE EXCEPTION 'Non authentifié' USING ERRCODE = '28000';
+  END IF;
+
+  -- Sans FOR UPDATE explicite ici, deux caisses encaissant en même temps
+  -- pourraient toutes deux solder la même vente. Verrou de ligne sur la fiche.
+  SELECT phone, user_id INTO v_phone, v_user_id
+    FROM customer_debts
+   WHERE id = p_debt_id
+   FOR UPDATE;
+
+  IF NOT FOUND OR v_user_id <> v_owner THEN
+    -- Message identique à « introuvable » : un patron ne doit pas pouvoir
+    -- deviner l'existence d'une fiche d'un autre tenant.
+    RAISE EXCEPTION 'Client introuvable' USING ERRCODE = 'P0002';
+  END IF;
+
+  IF p_amount IS NULL OR p_amount <= 0 THEN
+    RAISE EXCEPTION 'Montant de versement invalide' USING ERRCODE = '22023';
+  END IF;
+
+  IF p_method IS NULL OR p_method NOT IN ('cash', 'momo') THEN
+    RAISE EXCEPTION 'Moyen de paiement invalide : %', p_method USING ERRCODE = '22023';
+  END IF;
+
+  -- Solde avant versement : ce qui manque sur les ventes ouvertes de ce client.
+  -- Une simple somme de différences, juste par construction. La version
+  -- précédente soustrayait un cumul de versements d'un cumul de prix, et
+  -- reconstituait la répartition dans la boucle — deux calculs à tenir d'accord,
+  -- donc une occasion de diverger. Ici il n'y a rien à reconstituer.
+  SELECT COALESCE(SUM(s.total_amount - s.amount_received), 0) INTO v_avant
+    FROM sales s
+   WHERE s.user_id = v_owner AND s.client_phone = v_phone AND NOT s.settled;
+
+  IF v_avant <= 0 THEN
+    RAISE EXCEPTION 'Ce client n''a pas de dette en cours' USING ERRCODE = '22023';
+  END IF;
+
+  v_note := NULLIF(btrim(COALESCE(p_note, '')), '');
+
+  -- Répartit le versement sur les ventes ouvertes, de la plus ancienne à la plus
+  -- récente. Chaque vente reçoit ce qui lui manque, pas plus.
+  --
+  -- On boucle sur un curseur simple, sans FOR UPDATE : le verrou utile est posé
+  -- sur la fiche client plus haut, ce qui sérialise deux caisses encaissant pour
+  -- le même client. Verrouiller aussi chaque ligne ici n'apporte rien et, dans
+  -- un FOR ... LOOP PL/pgSQL, n'itère pas sur la snapshot attendue.
+  --
+  -- Le reliquat porte aussi les acomptes déjà versés à la vente : c'est
+  -- amount_received qui dit ce qui a été couvert, pas le montant de ce versement.
+  -- C'est ce qui rend le calcul insensible à l'ordre des appels — deux versements
+  -- de 8 000 puis 12 000 soldent une vente de 20 000, comme un seul de 20 000.
+  --
+  -- UN ENREGISTREMENT DE VERSEMENT PAR VENTE SOLDÉE, amount valant la part qui
+  -- la couvre. C'est ce qui rattache l'argent reçu au bon jour et au bon moyen
+  -- dans le chiffre d'affaires : avant, un règlement en espèces encaissé sur une
+  -- dette n'entrait dans aucun total, et le jour où le client payait, la caisse
+  -- du commerçant paraissait diminuer. Un geste peut donc donner plusieurs
+  -- lignes — même montant, même note : un règlement, ventilé sur ce qu'il solde.
+  v_restant := p_amount;
+
+  FOR v_sale IN
+    SELECT s.id, s.total_amount, s.amount_received
+      FROM sales s
+     WHERE s.user_id = v_owner
+       AND s.client_phone = v_phone
+       AND NOT s.settled
+     ORDER BY s.created_at ASC
+  LOOP
+    EXIT WHEN v_restant <= 0;
+
+    -- Ce qui manque sur CETTE vente, l'acompte éventuel étant déjà déduit.
+    v_du := v_sale.total_amount - v_sale.amount_received;
+    IF v_du <= 0 THEN
+      CONTINUE;
+    END IF;
+
+    IF v_restant >= v_du THEN
+      v_part := v_du;
+      UPDATE sales
+         SET amount_received = total_amount,
+             settled = true
+       WHERE id = v_sale.id;
+      v_restant := v_restant - v_du;
+      v_reglees := v_reglees + 1;
+    ELSE
+      -- Paiement partiel : la vente reste ouverte, et ce reliquat devient du
+      -- chiffre d'affaires encaissé dès aujourd'hui.
+      v_part := v_restant;
+      UPDATE sales SET amount_received = amount_received + v_restant WHERE id = v_sale.id;
+      v_restant := 0;
+    END IF;
+
+    INSERT INTO credit_payments (debt_id, user_id, amount, day, method, note, sale_id, gesture_id)
+    VALUES (p_debt_id, v_owner, v_part, current_date, p_method, v_note, v_sale.id, v_gesture);
+  END LOOP;
+
+  -- Ce qui dépasse la dette restant due reste au client. Enregistré sans
+  -- sale_id : il ne solde aucune vente, et ne doit donc entrer dans aucun total.
+  IF v_restant > 0 THEN
+    INSERT INTO credit_payments (debt_id, user_id, amount, day, method, note, sale_id, gesture_id)
+    VALUES (p_debt_id, v_owner, v_restant, current_date, p_method, v_note, NULL, v_gesture);
+  END IF;
+
+  -- Solde final : ce qui n'a pas couvert une vente entière reste dû.
+  SELECT COALESCE(SUM(s.total_amount - s.amount_received), 0) INTO v_restant
+    FROM sales s
+   WHERE s.user_id = v_owner AND s.client_phone = v_phone AND NOT s.settled;
+
+  UPDATE customer_debts SET updated_at = now() WHERE id = p_debt_id;
+
+  RETURN jsonb_build_object(
+    'debt_id',        p_debt_id,
+    'amount_paid',    p_amount,
+    'balance_before', v_avant,
+    'balance_after',  GREATEST(v_restant, 0),
+    'sales_settled',  v_reglees
+  );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION pay_customer_debt(uuid, numeric, text, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION pay_customer_debt(uuid, numeric, text, text) TO authenticated;
+
+
+-- ─── 4. Le nombre de versements reste un nombre de gestes ─────────────────
+--
+-- La répartition ventile un règlement en une ligne par vente soldée.
+-- get_customer_debts() comptait les LIGNES et affichait le résultat sous le
+-- mot « versements » : un règlement soldant trois ventes serait annoncé au
+-- client comme trois versements. Il compte désormais les gestes.
+--
+-- Cette fonction était définie par migration_credit_fns.sql, dont on ne
+-- rejoue pas l'intégralité : seule la clause payments_count change.
+
+CREATE OR REPLACE FUNCTION get_customer_debts()
+RETURNS TABLE (
+  debt_id         uuid,
+  phone           text,
+  name            text,
+  total_due       numeric,
+  last_sale_at    timestamptz,
+  sales_count     bigint,
+  oldest_sale_at  timestamptz,
+  payments_count  bigint,
+  last_payment_at date,
+  -- Ce que le client a déjà versé sur ses ventes en cours. Affiché à côté du
+  -- solde : « 130 000 dont 50 000 déjà payés » est plus parlant qu'un 80 000
+  -- nu, et c'est la phrase à prononcer au comptoir.
+  total_paid      numeric
+)
+LANGUAGE sql
+STABLE
+SECURITY INVOKER
+SET search_path = public
+AS $$
+  WITH dues AS (
+    SELECT
+      s.user_id,
+      s.client_phone,
+      SUM(s.total_amount - s.amount_received) AS total_due,
+      SUM(s.amount_received)                 AS total_paid,
+      COUNT(*)                               AS sales_count,
+      MAX(s.created_at)                      AS last_sale_at,
+      MIN(s.created_at)                      AS oldest_sale_at
+    FROM sales s
+    WHERE NOT s.settled AND s.client_phone IS NOT NULL
+    GROUP BY s.user_id, s.client_phone
+  ), soldes AS (
+    SELECT
+      d.id,
+      d.user_id,
+      d.phone,
+      d.name,
+      GREATEST(COALESCE(u.total_due, 0), 0) AS total_due,
+      u.last_sale_at,
+      COALESCE(u.sales_count, 0) AS sales_count,
+      u.oldest_sale_at,
+      COALESCE(u.total_paid, 0) AS total_paid,
+      -- DISTINCT gesture_id, et non COUNT(*) : un règlement qui solde
+      -- plusieurs ventes est ventilé en autant de lignes, et cet écran
+      -- annonce « X versements » au client. Compter les lignes lui
+      -- annoncerait plus de passages en caisse qu'il n'en a réellement faits.
+      (SELECT COUNT(DISTINCT cp2.gesture_id) FROM credit_payments cp2
+        WHERE cp2.debt_id = d.id) AS payments_count,
+      (SELECT MAX(cp3.day) FROM credit_payments cp3 WHERE cp3.debt_id = d.id) AS last_payment_at
+    FROM customer_debts d
+    LEFT JOIN dues u ON u.user_id = d.user_id AND u.client_phone = d.phone
+  )
+  SELECT s.id, s.phone, s.name, s.total_due, s.last_sale_at, s.sales_count,
+         s.oldest_sale_at, s.payments_count, s.last_payment_at, s.total_paid
+    FROM soldes s
+   WHERE s.user_id = get_business_owner_id()
+     -- VERROU DE PLAN. Le carnet de dette fait partie des rapports : c'est ce
+     -- qui est vendu avec le plan Starter. Sans ce garde, un client en plan
+     -- gratuit liste ses débiteurs en appelant la fonction en RPC, alors que le
+     -- cadenas de l'onglet l'en empêche dans l'interface.
+     --
+     -- Le solde d'un client n'est pas une information anodine : c'est la liste
+     -- des personnes qui doivent de l'argent à la boutique, avec leur numéro de
+     -- téléphone. Le RLS protège le voisin, pas le plan.
+     AND (SELECT true FROM require_feature('reports'))
+     -- Une dette soldée n'a plus rien à réclamer. Sans ce critère, la fiche
+     -- persiste et l'écran montre un client à 0 F comme s'il devait de l'argent.
+     AND s.total_due > 0
+   ORDER BY s.oldest_sale_at ASC NULLS LAST;
+$$;
+
+REVOKE ALL ON FUNCTION get_customer_debts() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION get_customer_debts() TO authenticated;
+
+
+-- ─── 5. Les versements antérieurs sont rattachés à la vente qu'ils soldent ─
+--
+-- Sur une base déjà en service, credit_payments.sale_id est NULL partout. Le
+-- chiffre d'affaires reste juste — il compte amount_received, renseigné depuis
+-- migration_partial_payment.sql — mais les règlements passés n'entrent dans
+-- aucune répartition par moyen de paiement. Ce manque ne se voit que sur
+-- l'historique, se corrige à la prochaine saisie, et ne vaut pas un
+-- inventaire.
+--
+-- Seuls les acomptes à la vente sont rattachables, et ils le sont sans
+-- ambiguïté : la note le dit mot pour mot, et l'acompte a été versé LE JOUR DE
+-- LA VENTE — c'est ce que signifie la note. D'où le rapprochement sur
+-- (client, jour calendaire de la vente), en prenant la plus ancienne vente du
+-- jour qui pouvait recevoir ce montant : c'est l'ordre FIFO que
+-- pay_customer_debt() applique déjà.
+--
+-- Les règlements ordinaires, eux, ne sont PAS rattachés : sans trace de la
+-- répartition à l'époque, il faudrait deviner, et une dette rattachée à la
+-- mauvaise vente vaut moins qu'une dette dont la ventilation n'apparaît pas.
+UPDATE credit_payments cp
+   SET sale_id = (
+     SELECT s.id
+       FROM sales s
+       JOIN customer_debts d ON d.id = cp.debt_id
+      WHERE s.user_id = cp.user_id
+        AND s.client_phone = d.phone
+        AND (s.created_at AT TIME ZONE (
+              SELECT o.timezone FROM organizations o WHERE o.id = s.user_id
+            ))::date = cp.day
+        AND s.amount_received >= cp.amount
+      ORDER BY s.created_at ASC
+      LIMIT 1
+   )
+ WHERE cp.sale_id IS NULL
+   AND cp.note = 'Acompte versé à la vente';
