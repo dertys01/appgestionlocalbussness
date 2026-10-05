@@ -266,3 +266,18 @@ COMMENT ON VIEW restaurant_floor IS
 
 REVOKE ALL ON restaurant_floor FROM anon;
 GRANT SELECT ON restaurant_floor TO authenticated, service_role;
+-- ─── Un nom de table est unique parmi les tables actives ────────────────
+--
+-- Trouvé en recette le 05/10/2026 : rien n'empêchait de créer deux « Table 1 ».
+-- Le plan affichait alors deux tuiles identiques, et surtout le TICKET DE CUISINE
+-- et le REÇU n'imprimaient que « Table 1 » — le plongeur ne savait plus quelle
+-- table les deux portions attendaient.
+--
+-- Le nom est comparé en minuscules et sans espaces aux extrémités : « table 1 »
+-- et « Table 1  » sont la même table, et c'est ce que le serveur tape.
+--
+-- PARTIEL (WHERE is_active) : une table archivée libère son nom. Sans cela, on
+-- ne pourrait plus jamais réutiliser « Table 5 » après avoir démonté la table.
+CREATE UNIQUE INDEX IF NOT EXISTS restaurant_tables_owner_name_uniq
+  ON restaurant_tables (owner_id, lower(btrim(name)))
+  WHERE is_active;

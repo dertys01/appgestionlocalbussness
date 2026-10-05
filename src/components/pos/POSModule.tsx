@@ -26,6 +26,7 @@ import { rechercher } from '@/lib/utils/productSearch';
 import { generateWhatsAppReceiptLink } from '@/lib/utils/whatsapp';
 import { logActivity } from '@/lib/utils/activity';
 import { printReceipt } from '@/lib/utils/print';
+import { loadDishIds } from '@/lib/utils/dishes';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import type { Product, CartItem } from '@/types';
 
@@ -112,6 +113,33 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
    * pour trouver un téléphone.
    */
   const [plusVendus, setPlusVendus] = useState<Record<string, number>>({});
+  /**
+   * Produits qui sont des PLATS (ils ont une recette).
+   *
+   * Un plat ne se stocke pas : son stock propre est 0 par nature, et sa
+   * disponibilité vient de ses ingrédients. Sans cette distinction, la caisse
+   * affichait « Rupture de stock » sur chaque plat et refusait de l'ajouter au
+   * panier — un maquis ne pouvait rien servir au comptoir, y compris ses propres
+   * plats du catalogue d'exemple. La base ne contrôle ni ne décrémente le stock
+   * d'un plat ; le client doit appliquer la même règle.
+   */
+  const [dishIds, setDishIds] = useState<Set<string>>(() => new Set());
+  useEffect(() => {
+    let vivant = true;
+    void loadDishIds(supabase).then((ids) => { if (vivant) setDishIds(ids); });
+    return () => { vivant = false; };
+  }, [supabase]);
+
+  /**
+   * Un produit est-il vendable ? Un plat l'est toujours : ce sont ses
+   * ingrédients qui peuvent manquer, et la vente sera refusée en précisant
+   * lequel — un message utile, là où « Rupture de stock » sur le plat n'en
+   * disait rien.
+   */
+  const vendable = useCallback(
+    (p: Product) => dishIds.has(p.id) || p.stock_qty > 0,
+    [dishIds],
+  );
   const rechercheRef = useRef<HTMLInputElement>(null);
   // Vue « liste » par défaut : avec des centaines de références, la grille de
   // cartes étalait le catalogue sur des heures de scroll. La grille reste
@@ -341,11 +369,13 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         if (ligne) {
           // Jamais au-delà du stock : c'est la caisse qui refuse au dernier
           // moment, et le caissier perd alors la vente entière.
-          ligne.quantity = Math.min(ligne.quantity + qte, produit.stock_qty);
+          ligne.quantity = dishIds.has(produit.id)
+            ? ligne.quantity + qte
+            : Math.min(ligne.quantity + qte, produit.stock_qty);
         } else {
           suivant.push({
             product: produit,
-            quantity: Math.min(qte, produit.stock_qty),
+            quantity: dishIds.has(produit.id) ? qte : Math.min(qte, produit.stock_qty),
             unitPrice: null,
           });
         }
@@ -354,7 +384,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
     });
 
     setPanierOuvert(true);
-  }, [ventePrecedente, products]);
+  }, [ventePrecedente, products, dishIds]);
 
   /**
    * Une frappe sur une lettre met le curseur dans la recherche.
@@ -445,14 +475,18 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
     setCart((prev) => {
       const existing = prev.find((i) => i.product.id === product.id);
       if (existing) {
-        if (existing.quantity >= product.stock_qty) return prev;
+        // Jamais au-delà du stock... SAUF pour un plat : son stock propre vaut 0
+        // par nature, et une borne à 0 figerait la ligne à 0 — le plat serait
+        // invendable au comptoir, comme en salle.
+        const plafond = dishIds.has(product.id) ? Number.POSITIVE_INFINITY : product.stock_qty;
+        if (existing.quantity >= plafond) return prev;
         return prev.map((i) =>
           i.product.id === product.id ? { ...i, quantity: i.quantity + 1 } : i
         );
       }
       return [...prev, { product, quantity: 1, unitPrice: null }];
     });
-  }, []);
+  }, [dishIds]);
 
   /**
    * Clic sur une tuile du catalogue.
@@ -464,7 +498,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
    * le produit n'est pas dans la liste.
    */
   const ajouter = (product: Product) => {
-    if (product.stock_qty <= 0) {
+    if (!vendable(product)) {
       setScanError(`« ${product.name} » est en rupture de stock.`);
       return;
     }
@@ -526,13 +560,13 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
       setScanError('Produit introuvable.');
       return;
     }
-    if (product.stock_qty <= 0) {
+    if (!vendable(product)) {
       setScanError(`« ${product.name} » est en rupture de stock.`);
       return;
     }
     setScanError('');
     addToCart(product);
-  }, [addToCartRequest, products, addToCart, onAddToCartHandled]);
+  }, [addToCartRequest, products, addToCart, onAddToCartHandled, vendable]);
 
   const removeFromCart = useCallback((productId: string) => {
     setCart((prev) => prev.filter((i) => i.product.id !== productId));
@@ -808,27 +842,33 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                 <button
                   key={p.id}
                   onClick={() => ajouter(p)}
-                  aria-disabled={p.stock_qty <= 0 || undefined}
+                  aria-disabled={!vendable(p) || undefined}
                   className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors ${
-                    p.stock_qty > 0
+                    vendable(p)
                       ? 'hover:bg-indigo-50/40 active:bg-indigo-50'
                       : 'bg-slate-50/60 cursor-not-allowed'
                   }`}
                 >
                   <div className="flex-1 min-w-0">
-                    <div className={`text-sm truncate ${p.stock_qty > 0 ? 'font-medium text-slate-800' : 'text-slate-400 line-through'}`}>
+                    <div className={`text-sm truncate ${vendable(p) ? 'font-medium text-slate-800' : 'text-slate-400 line-through'}`}>
                       {p.name}
                       <span className="ml-2 text-xs font-normal text-slate-400">{p.category ?? '—'}</span>
                     </div>
                     <div className="text-xs text-slate-500">
-                      {p.stock_qty > 0 ? (
-                        <>Stock : {formatQty(p.stock_qty)} {p.unit ?? 'pce'}</>
-                      ) : (
+                      {!vendable(p) ? (
                         <span className="text-red-500 font-medium">Rupture de stock</span>
+                      ) : dishIds.has(p.id) ? (
+                        /* Un plat n'a pas de stock à afficher : ce qui peut
+                           manquer, c'est un ingrédient, et la vente sera refusée
+                           en le nommant. « Stock : 0 pce » sur un plat ne
+                           voulait rien dire. */
+                        <span className="text-slate-400">Recette</span>
+                      ) : (
+                        <>Stock : {formatQty(p.stock_qty)} {p.unit ?? 'pce'}</>
                       )}
                     </div>
                   </div>
-                  <div className={`text-sm whitespace-nowrap ${p.stock_qty > 0 ? 'font-semibold text-indigo-600' : 'text-slate-300 font-semibold'}`}>
+                  <div className={`text-sm whitespace-nowrap ${vendable(p) ? 'font-semibold text-indigo-600' : 'text-slate-300 font-semibold'}`}>
                     {formatCFA(p.price_sell)}
                   </div>
                   {inCart && (
@@ -867,9 +907,9 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
               <button
                 key={p.id}
                 onClick={() => ajouter(p)}
-                aria-disabled={p.stock_qty <= 0 || undefined}
+                aria-disabled={!vendable(p) || undefined}
                 className={`group relative text-left rounded-xl border p-3 shadow-sm transition-all ${
-                  p.stock_qty > 0
+                  vendable(p)
                     ? 'border-slate-200 bg-white hover:border-indigo-400 hover:shadow-md active:scale-95'
                     : 'border-slate-200 bg-slate-50 cursor-not-allowed'
                 }`}
@@ -880,15 +920,17 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                   </span>
                 )}
                 <div className="text-xs text-slate-500 mb-1">{p.category ?? '—'}</div>
-                <div className={`font-semibold text-sm leading-tight line-clamp-2 ${p.stock_qty > 0 ? 'text-slate-800' : 'text-slate-400 line-through'}`}>
+                <div className={`font-semibold text-sm leading-tight line-clamp-2 ${vendable(p) ? 'text-slate-800' : 'text-slate-400 line-through'}`}>
                   {p.name}
                 </div>
-                <div className={`mt-2 font-bold ${p.stock_qty > 0 ? 'text-indigo-600' : 'text-slate-300'}`}>{formatCFA(p.price_sell)}</div>
+                <div className={`mt-2 font-bold ${vendable(p) ? 'text-indigo-600' : 'text-slate-300'}`}>{formatCFA(p.price_sell)}</div>
                 <div className="text-xs text-slate-500">
-                  {p.stock_qty > 0 ? (
-                    <>Stock : {formatQty(p.stock_qty)} {p.unit ?? 'pce'}</>
-                  ) : (
+                  {!vendable(p) ? (
                     <span className="text-red-500 font-medium">Rupture de stock</span>
+                  ) : dishIds.has(p.id) ? (
+                    <span className="text-slate-400">Recette</span>
+                  ) : (
+                    <>Stock : {formatQty(p.stock_qty)} {p.unit ?? 'pce'}</>
                   )}
                 </div>
               </button>

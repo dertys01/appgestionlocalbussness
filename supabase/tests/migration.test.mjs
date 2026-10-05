@@ -3512,6 +3512,99 @@ await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, uni
   check('26b7. et la vente est bien écrite', vente >= 1, `${vente} vente(s) de 4 500`);
 }
 
+// 26b8. UN PLAT SE SERT MÊME AVEC UN STOCK PROPRE DE 0.
+//
+// Trouvé en recette navigateur le 05/10/2026 : un maquis neuf, ouvert sur
+// Table 1, deux attiéké poisson et deux poulet braisé. L'encaissement est
+// refusé : « Stock insuffisant pour « Attiéké poisson » (disponible : 0.000,
+// demandé : 2.000) ». Le stock du PLAT est vérifié, alors qu'un plat ne se
+// stocke pas — sa disponibilité vient de ses ingrédients, qui étaient là.
+//
+// create_sale() contrôle donc qu'un produit ayant une recette, et ce
+// seulement. Sans ce correctif, le catalogue d'exemple — qui crée des plats à
+// 0 — rendait tout maquis instantly incapable de servir quoi que ce soit.
+{
+  // Un plat à 0, deux ingrédients en stock.
+  const PLAT = 'eeeeeeee-0000-0000-0000-0000000000b6';
+  await q(`INSERT INTO products (id, user_id, name, category, price_sell, price_buy, stock_qty)
+    VALUES ('${PLAT}', '${RESTO}', 'Plat test 0 stock', 'Plats', 2000, 0, 0)`);
+  await q(`INSERT INTO products (id, user_id, name, category, price_sell, price_buy, stock_qty)
+    VALUES ('eeeeeeee-0000-0000-0000-0000000000b7', '${RESTO}', 'Ingrédient test A', 'Ingrédients', 800, 400, 10),
+           ('eeeeeeee-0000-0000-0000-0000000000b8', '${RESTO}', 'Ingrédient test B', 'Ingrédients', 600, 300, 10)`);
+  await q(`INSERT INTO recipe_ingredients (dish_id, ingredient_id, quantity)
+    VALUES ('${PLAT}', 'eeeeeeee-0000-0000-0000-0000000000b7', 0.2),
+           ('${PLAT}', 'eeeeeeee-0000-0000-0000-0000000000b8', 0.1)`);
+
+  const r = await q(`SELECT create_sale(
+    '[{"product_id":"${PLAT}","quantity":2}]'::jsonb, 'cash')`);
+  const v = r.rows[0].create_sale;
+  check('26b8. un plat à 0 de stock se vend quand ses ingrédients sont là',
+    Number(v.total_amount) === 4000, `total ${v?.total_amount}, attendu 4 000`);
+
+  const platApres = await q(`SELECT stock_qty::text s FROM products WHERE id='${PLAT}'`);
+  check('26b9. et le stock du plat reste à 0 : un plat ne se stocke pas',
+    Number(platApres.rows[0].s) === 0, `stock ${platApres.rows[0].s}`);
+
+  const a = await q(`SELECT stock_qty::text s FROM products WHERE id='eeeeeeee-0000-0000-0000-0000000000b7'`);
+  check('26b10. les ingrédients, eux, sont décrémentés de 2 × 0,2',
+    Math.abs(Number(a.rows[0].s) - 9.6) < 0.001, `stock ${a.rows[0].s}, attendu 9,6`);
+
+  // L'ing manquant, lui, doit refuser — et c'est le DÉCLENCHEUR qui parle, avec
+  // le nom de l'ingrédient, pas le nom du plat.
+  await q(`UPDATE products SET stock_qty = 0.05 WHERE id='eeeeeeee-0000-0000-0000-0000000000b7'`);
+  let refus = '';
+  try {
+    await q(`SELECT create_sale('[{"product_id":"${PLAT}","quantity":1}]'::jsonb, 'cash')`);
+  } catch (e) { refus = e.message; }
+  check('26b11. un ingrédient manquant refuse la vente, en nommant l\'ingrédient',
+    /Stock insuffisant pour l'ingrédient/.test(refus) && /Ingrédient test A/.test(refus),
+    refus.slice(0, 90) || 'acceptée !');
+}
+
+// 26b12. Un produit SANS recette reste contrôlé normalement : le correctif ne
+// doit pas ouvrir la vente d'un article en rupture.
+{
+  await q(`UPDATE products SET stock_qty = 0.2 WHERE id='eeeeeeee-0000-0000-0000-0000000000b8'`);
+  let refus = '';
+  try {
+    await q(`SELECT create_sale(
+      '[{"product_id":"eeeeeeee-0000-0000-0000-0000000000b8","quantity":1}]'::jsonb, 'cash')`);
+  } catch (e) { refus = e.message; }
+  check('26b12. un ingrédient vendu seul reste soumis au contrôle de stock',
+    /Stock insuffisant pour/.test(refus) && /Ingrédient test B/.test(refus),
+    refus.slice(0, 70) || 'acceptée !');
+}
+
+// 26b13. Deux tables ne peuvent pas porter le même nom.
+//
+// Trouvé en recette le 05/10/2026 : rien ne l'empêchait. Le plan affichait
+// deux tuiles « Table 1 », et le ticket cuisine comme le reçu n'imprimaient que
+// « Table 1 » — le plongeur ne savait plus quelle table les deux portions
+// attendaient. La comparaison ignore la casse et les espaces : « table 1 » est
+// « Table 1 » pour un serveur qui tape vite.
+{
+  const ref = '';
+  void ref;
+  const tableId = await q(`INSERT INTO restaurant_tables (owner_id, name, zone)
+    VALUES ('${RESTO}', 'Table garantie unique', 'Salle') RETURNING id`);
+  const id = tableId.rows[0].id;
+
+  let refus = '';
+  try {
+    await q(`INSERT INTO restaurant_tables (owner_id, name, zone)
+      VALUES ('${RESTO}', '  TABLE GARANTIE UNIQUE  ', 'Salle')`);
+  } catch (e) { refus = e.message; }
+  check('26b13. un nom de table déjà pris est refusé, casse et espaces ignorés',
+    /restaurant_tables_owner_name_uniq/.test(refus), refus.slice(0, 90) || 'accepté !');
+
+  // Archiver une table libère son nom : sans le WHERE is_active, on ne pourrait
+  // plus jamais réinstaller « Table 1 » après l'avoir démontée.
+  await q(`UPDATE restaurant_tables SET is_active = false WHERE id = '${id}'`);
+  const re = await q(`INSERT INTO restaurant_tables (owner_id, name, zone)
+    VALUES ('${RESTO}', 'Table garantie unique', 'Salle') RETURNING id`);
+  check('26b14. une table archivée libère son nom', !!re.rows[0]?.id);
+}
+
 // 26d. Le ticket de cuisine montre le modificateur, TOUJOURS sans prix.
 {
   const colonnes = (await q(`

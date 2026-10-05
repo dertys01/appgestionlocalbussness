@@ -38,7 +38,7 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
 
   // Catalogue d'exemple. « exemples » = combien d'articles sont chargés, pour
   // l'afficher et proposer leur retrait d'un clic plus tard.
-  const [catalogue, setCatalogue] = useState<{ charges: number; recettes: number } | null>(null);
+  const [catalogue, setCatalogue] = useState<{ charges: number; recettes: number; options: number } | null>(null);
   const exemples = fieldExamples(domain);
 
   const handleSkipOrComplete = async () => {
@@ -134,7 +134,8 @@ export function OnboardingWizard({ onComplete }: OnboardingWizardProps) {
         action: 'product_add',
         description:
           `Catalogue d'exemple chargé : ${r.charges} articles` +
-          (r.recettes > 0 ? `, ${r.recettes} ingrédients de recette` : ''),
+          (r.recettes > 0 ? `, ${r.recettes} ingrédients de recette` : '') +
+          (r.options > 0 ? `, ${r.options} options de plat` : ''),
       });
     }
     setStep('invite');

@@ -38,7 +38,7 @@ export async function loadStarterCatalog(
   supabase: SupabaseClient,
   ownerId: string,
   domain: unknown
-): Promise<{ charges: number; recettes: number } | { erreur: string }> {
+): Promise<{ charges: number; recettes: number; options: number } | { erreur: string }> {
   const catalogue: StarterArticle[] = starterCatalog(domain);
 
   // Un catalogue déjà présent ne se réécrit pas : deux passages sur le même
@@ -49,7 +49,7 @@ export async function loadStarterCatalog(
     .eq('user_id', ownerId)
     .like('sku', `${DEMO_PREFIX}%`);
   if (dejaLa.error) return { erreur: dejaLa.error.message };
-  if ((dejaLa.data ?? []).length > 0) return { charges: 0, recettes: 0 };
+  if ((dejaLa.data ?? []).length > 0) return { charges: 0, recettes: 0, options: 0 };
 
   const ecrit = await supabase
     .from('products')
@@ -118,7 +118,31 @@ export async function loadStarterCatalog(
     }
   }
 
-  return { charges: lignes.length, recettes };
+  // Les options des plats, comme les recettes : sans elles, la fiche d'un plat
+  // affiche « Aucune option pour ce plat » et le serveur ne voit jamais ce que
+  // l'application sait faire d'une double portion. Elles sont écrites après les
+  // recettes, dans le même temps logique : le catalogue est « prêt à servir ».
+  let options = 0;
+  const optionsEcrites: { product_id: string; name: string; extra_price: number }[] = [];
+  for (const a of catalogue) {
+    if (!a.options?.length) continue;
+    const dish = parNom.get(a.name.toLowerCase());
+    if (!dish) continue;
+    for (const o of a.options) {
+      optionsEcrites.push({ product_id: dish, name: o.name, extra_price: o.extra });
+    }
+  }
+  if (optionsEcrites.length > 0) {
+    const r = await supabase.from('product_modifiers').insert(optionsEcrites);
+    if (r.error) {
+      // Même règle qu'un ingrédient refusé : le reste du catalogue tient debout.
+      options = 0;
+    } else {
+      options = optionsEcrites.length;
+    }
+  }
+
+  return { charges: lignes.length, recettes, options };
 }
 
 /**
@@ -168,7 +192,22 @@ export async function removeStarterCatalog(
     void ing.error;
   }
 
-  // ─── 2. Les produits.
+  // ─── 2. Les options des plats retirés.
+  // La clé étrangère est en ON DELETE CASCADE, donc les options partent avec le
+  // produit — mais un plat VENDU est archivé, pas supprimé, et ses options
+  // resteraient attachées à un produit invisible. C'est le même piège que pour
+  // les recettes, et la même raison de passer avant.
+  for (let i = 0; i < ids.length; i += 100) {
+    const lot = ids.slice(i, i + 100);
+    const r = await supabase.from('product_modifiers').delete().in('product_id', lot);
+    void r.error;
+  }
+
+  // ─── 3. Les produits.
+  //
+  // Les recettes d'abord (1), les options ensuite (2), les produits enfin : les
+  // deux premières tables portent une clé étrangère vers products, et le DELETE
+  // échouerait en bloc sans ces deux passages préalables.
   let supprimes = 0;
   let archives = 0;
   for (let i = 0; i < ids.length; i += 50) {

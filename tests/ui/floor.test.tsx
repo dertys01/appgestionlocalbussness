@@ -10,19 +10,20 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
  * Sprint 14 écrira dans `sales`.
  */
 
-const { salle, inserts, lignesCommande, modificateurs } = vi.hoisted(() => {
+const { salle, inserts, lignesCommande, modificateurs, updates } = vi.hoisted(() => {
   const inserts: Array<Record<string, unknown>> = [];
   return {
     salle: [] as unknown[],
     inserts,
     lignesCommande: [] as unknown[],
     modificateurs: [] as unknown[],
+    updates: [] as Array<{ table: string; id: string; payload: Record<string, unknown> }>,
   };
 });
 
 // Le plan de salle vient de la vue restaurant_floor, qui répond déjà au tri :
 // chaque appel .from('restaurant_floor') rend une promesse résolue.
-const chaine = (donnees: unknown) => {
+const chaine = (donnees: unknown, tableCourante = '') => {
   const c: Record<string, unknown> = {};
   c.select = () => c;
   c.eq = () => c;
@@ -37,7 +38,20 @@ const chaine = (donnees: unknown) => {
     inserts.push(payload);
     return { select: () => ({ single: async () => ({ data: { id: 'cmd-1' }, error: null }) }) };
   };
-  c.update = () => ({ eq: async () => ({ error: null }) });
+  c.update = (payload: Record<string, unknown>) => {
+    // L'identifiant de la ligne est celui passé au .eq() : c'est ce qui permet
+    // d'affirmer « la quantité de CETTE ligne a été corrigée ».
+    const lot: { table: string; id: string; payload: Record<string, unknown> }[] = [];
+    const chain = {
+      eq: (_col: string, id: string) => {
+        updates.push({ table: tableCourante, id, payload });
+        return chain;
+      },
+      then: (ok: (v: unknown) => unknown) => ok({ error: null }),
+    };
+    void lot;
+    return chain;
+  };
   c.delete = () => ({ eq: async () => ({ error: null }) });
   return c;
 };
@@ -47,12 +61,12 @@ const { rpcResultats } = vi.hoisted(() => ({ rpcResultats: [] as unknown[] }));
 const supabase = {
   from: (table: string) =>
     table === 'restaurant_floor'
-      ? chaine(salle)
+      ? chaine(salle, table)
       : table === 'restaurant_order_items'
-        ? chaine(lignesCommande)
+        ? chaine(lignesCommande, table)
         : table === 'product_modifiers'
-          ? chaine(modificateurs)
-          : chaine({ id: 'x' }),
+          ? chaine(modificateurs, table)
+          : chaine({ id: 'x' }, table),
   rpc: vi.fn(async (fn: string) => {
     rpcResultats.push(fn);
     if (fn === 'close_table_order') {
@@ -305,5 +319,113 @@ fireEvent.click(screen.getAllByText('Poulet braisé')[0]);
     await waitFor(() => {
       expect(screen.getByText(/Stock n'est décrémenté qu'à la clôture/i)).toBeInTheDocument();
     });
+  });
+
+  /**
+   * Trouvé en recette navigateur le 05/10/2026.
+   *
+   * Le formulaire de création de table n'était rendu que dans l'état « aucune
+   * table ». La première table créée, il disparaissait — et il n'existait aucun
+   * autre chemin pour en ajouter : un maquis de douze tables restait bloqué à une
+   * seule, sans message et sans erreur.
+   */
+  it('permet d\'ajouter une table même quand la salle est déjà installée', async () => {
+    definirSalle(table({ id: 't1', name: 'Table 1' }));
+    render(<FloorModule products={produits} />);
+
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+
+    // Le formulaire n'est pas là d'emblée : il prend de la place aux tuiles.
+    expect(screen.queryByLabelText(/Nom de la table/i)).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /Ajouter une table/i }));
+
+    const champ = await screen.findByLabelText(/Nom de la table/i);
+    fireEvent.change(champ, { target: { value: 'Terrasse 1' } });
+    inserts.length = 0;
+    fireEvent.submit(champ.closest('form')!);
+
+    await waitFor(() =>
+      expect(inserts.some((i) => i.name === 'Terrasse 1')).toBe(true),
+    );
+  });
+
+  /**
+   * Même recette, même jour. La carte des plats était tronquée à 12 plats sans
+   * rien l'annoncer : sur le catalogue d'exemple (17 articles), « Poulet braisé »
+   * et « Riz gras » étaient invisibles. Le serveur, qui voit le plat absent de la
+   * carte, conclut que la cuisine ne le fait pas.
+   */
+  it('montre toute la carte, sans troncature cachée', async () => {
+    const carte = Array.from({ length: 20 }, (_, i) => ({
+      id: `p${i}`,
+      name: `Plat numéro ${String(i).padStart(2, '0')}`,
+      sku: `P${i}`,
+      price_buy: 500,
+      price_sell: 1500,
+      stock_qty: 5,
+      min_stock_level: 1,
+      category: 'Plats',
+      unit: 'portion',
+    })) as unknown as Product[];
+
+    definirSalle(table({ id: 't1', name: 'Table 1' }));
+    render(<FloorModule products={carte} />);
+
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Table 1'));
+
+    await waitFor(() => expect(screen.getByText('Plat numéro 00')).toBeInTheDocument());
+    expect(screen.getByText('Plat numéro 19')).toBeInTheDocument();
+  });
+
+  /**
+   * Trouvé en recette le 05/10/2026.
+   *
+   * La quantité d'une ligne n'était modifiable qu'AU MOMENT de l'ajout. Une fois
+   * le plat dans la commande, on ne pouvait plus que le supprimer — et supprimer ne
+   * fusionne pas avec la ligne voisine. « Trois attiékés, puis on s'est trompé de
+   * deux » obligeait à tout refaire à la main.
+   */
+  it('permet de corriger la quantité d\'une ligne déjà entrée', async () => {
+    definirSalle(table({ id: 't1', name: 'Table 1' }));
+    definirCommande(plat);
+    render(<FloorModule products={produits} />);
+
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Table 1'));
+
+    const champ = await screen.findByLabelText(/Quantité de Poulet braisé/i);
+    expect(champ).toHaveValue(2);
+
+    updates.length = 0;
+    fireEvent.blur(champ, { target: { value: '5' } });
+
+    await waitFor(() =>
+      expect(updates.some((u) => u.payload.quantity === 5 && u.id === 'l1')).toBe(true),
+    );
+  });
+
+  /**
+   * Même recette. Une quantité nulle ou négative casserait l'addition : le total
+   * afficherait moins que la somme des lignes, et close_table_order() factories
+   * une ligne à prix 0.
+   */
+  it('refuse une quantité nulle ou négative sur une ligne', async () => {
+    definirSalle(table({ id: 't1', name: 'Table 1' }));
+    definirCommande(plat);
+    render(<FloorModule products={produits} />);
+
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Table 1'));
+
+    const champ = await screen.findByLabelText(/Quantité de Poulet braisé/i);
+    updates.length = 0;
+    fireEvent.blur(champ, { target: { value: '0' } });
+
+    await waitFor(() =>
+      expect(screen.getByText(/quantité doit être un nombre supérieur à zéro/i)).toBeInTheDocument(),
+    );
+    expect(updates.length).toBe(0);
   });
 });

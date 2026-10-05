@@ -84,7 +84,77 @@ describe('Catalogue d\'exemple — restauration', () => {
     }
   });
 
-  it('tient dans le quota du plan gratuit', () => {
+  /**
+ * Trouvé en recette navigateur le 05/10/2026 : la fiche d'un plat affiche
+ * « Aucune option pour ce plat » pour TOUS les plats du catalogue.
+ *
+ * Or c'est le geste le plus courant d'un maquis — « double portion »,
+ * « sauce à part » — et le supplément est la seule chose qui montre que
+ * l'addition sait compter une commande vraiment. Sans option, une moitié de
+ * l'application restaurant est invisible au premier écran.
+ */
+describe('Catalogue d\'exemple — les options des plats', () => {
+  const plats = starterPlats('restaurant');
+
+  it('chaque plat du catalogue propose au moins une option', () => {
+    for (const plat of plats) {
+      expect(plat.options?.length ?? 0, `${plat.name} n'a aucune option`).toBeGreaterThan(0);
+    }
+  });
+
+  it('propose des options RÉELLES pour un maquis, pas des mots generiques', () => {
+    const noms = plats.flatMap((p) => (p.options ?? []).map((o) => o.name.toLowerCase()));
+    expect(noms.some((n) => n.includes('portion'))).toBe(true);
+    expect(noms.some((n) => n.includes('sauce'))).toBe(true);
+  });
+
+  it('donne des suppléments plausibles, sans dépassement absurde', () => {
+    // Un supplément peut DÉPASSER le prix du plat : « riz gras » à 2 000 F
+    // avec « avec poulet braisé » à +3 500 F donne une assiette à 5 500 F,
+    // et c'est exactement ce qu'on commande dans un maquis. Ce qu'on refuse,
+    // c'est le supplément qui transforme un plat en billet de 50 000 F — le
+    // genre d'erreur de saisie qui traverse tous les tickets du restaurant.
+    for (const plat of plats) {
+      for (const o of plat.options ?? []) {
+        expect(
+          Math.abs(o.extra),
+          `${plat.name} / ${o.name} : supplément hors de proportions`,
+        ).toBeLessThanOrEqual(plat.priceSell * 2);
+      }
+    }
+  });
+
+  /**
+ * Un supplément négatif fait échouer l'INSERT du lot ENTIER
+ * (`product_modifiers_extra_price_check : extra_price >= 0`), et le restaurant
+ * se retrouve alors sans aucune option — l'exact contraire de ce que le
+ * catalogue est censé montrer. « Demi-poulet à −1 500 F » a fait le voyage
+ * jusqu'ici : un supplément négatif n'est pas une remise, c'est un plat moins
+ * cher, et ça s'écrit en prix.
+ */
+it('ne propose aucun supplément négatif', () => {
+  for (const plat of plats) {
+    for (const o of plat.options ?? []) {
+      expect(o.extra, `${plat.name} / ${o.name} : supplément négatif`).toBeGreaterThanOrEqual(0);
+    }
+  }
+});
+
+it('ne met pas deux fois le même nom d\'option sur un même plat', () => {
+    for (const plat of plats) {
+      const noms = (plat.options ?? []).map((o) => o.name.toLowerCase());
+      expect(new Set(noms).size, `${plat.name} a une option en double`).toBe(noms.length);
+    }
+  });
+
+  it('le commerce n\'a pas d\'options : un quincaier ne vend pas de riz en double portion', () => {
+    for (const a of starterCatalog('retail')) {
+      expect(a.options ?? []).toHaveLength(0);
+    }
+  });
+});
+
+it('tient dans le quota du plan gratuit', () => {
     // check_product_limit() refuse la 31e ligne en plan gratuit : un catalogue
     // d'exemple plus long que le quota rendrait l'assistant inutilisable.
     expect(starterCount('restaurant')).toBeLessThanOrEqual(30);

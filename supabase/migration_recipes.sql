@@ -37,10 +37,15 @@
 --
 -- ⚠ CE QUE CELA NE FAIT PAS
 --   Le stock d'un PLAT n'est pas décrémenté par la recette : un plat se
---   cuisine, il ne se stocke pas. Sa ligne conserve donc son propre stock
---   (utile pour une préparation comptée), et les ingrédients portent le vrai
---   stock. Un patron qui veut suivre ses plats en portions peut le faire
---   librement — les deux ne se gênent pas.
+--   cuisine, il ne se stocke pas. C'est aussi pour cela que create_sale()
+--   (migration_weighted_sales.sql) NE CONTRÔLE PAS et NE DÉCRÉMENTE PAS le
+--   stock d'un produit qui a une recette : sa disponibilité vient d'ici, et son
+--   propre stock n'est qu'un champ libre pour un patron qui veut suivre ses
+--   plats en portions.
+--
+--   Ces deux règles ont d'abord été écrites séparément, et create_sale()
+--   contredisait celle-ci : un plat à 0 — sa valeur naturelle — était refusé à
+--   la vente. Trouvé en recette navigateur le 05/10/2026, sur un maquis neuf.
 -- ============================================================
 
 -- ─── 1. Les recettes ───────────────────────────────────────

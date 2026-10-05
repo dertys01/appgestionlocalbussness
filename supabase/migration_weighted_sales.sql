@@ -180,6 +180,9 @@ DECLARE
   -- elle qu'on compare au stock, pas la quantité d'une ligne prise isolément.
   v_demande    numeric(12,3);
   v_qty        numeric(12,3);
+  -- Le produit est-il un plat (produit avec recette) ? Un plat ne se stocke pas :
+  -- ni contrôle, ni décrément — voir la boucle plus bas.
+  v_est_plat   boolean;
   v_total      numeric(12,2) := 0;
   v_discount   numeric(12,2) := 0;
   v_at_loss    int := 0;
@@ -266,6 +269,19 @@ BEGIN
   -- deux lignes du même produit verrouillent la même rangée, et vérifier 1 puis 1
   -- laisserait passer 2 sur un stock de 1 — l'erreur n'apparaîtrait qu'ensuite,
   -- en contrainte CHECK, avec un message que personne ne sait traduire.
+  --
+  -- UN PRODUIT QUI A UNE RECETTE EST UN PLAT, et la règle est différente : sa
+  -- disponibilité vient de ses INGRÉDIENTS, pas de son propre stock. C'est ce
+  -- que migration_recipes.sql dit depuis le début — « un plat se cuisine, il ne
+  -- se stocke pas » — et create_sale() le contredisait : un plat à 0 (sa valeur
+  -- naturelle) était refusé à la vente avec « Stock insuffisant pour « Riz gras »
+  -- (disponible : 0, demandé : 1) », alors que ses ingrédients étaient là. Aucun
+  -- plat du catalogue d'exemple n'était donc servable, et le blocage venait de
+  -- la caisse, pas de la cuisine.
+  --
+  -- Le contrôle et le décrément sont donc sautés pour un plat ; c'est le
+  -- déclencheur sale_items_consume_recipe qui refuse, ingredients vides, avec
+  -- le bon message (« Stock insuffisant pour l'ingrédient « Riz blanc » »).
   FOR v_i IN 1 .. COALESCE(array_length(v_ids, 1), 0) LOOP
     SELECT p.name, p.price_sell, COALESCE(p.price_buy, 0), p.stock_qty
       INTO v_name, v_list, v_cost, v_stock
@@ -278,13 +294,19 @@ BEGIN
       RAISE EXCEPTION 'Produit introuvable : %', v_ids[v_i] USING ERRCODE = 'P0002';
     END IF;
 
-    SELECT COALESCE(SUM(u.q), 0) INTO v_demande
-      FROM unnest(v_qtys) WITH ORDINALITY AS u(q, n)
-     WHERE u.n >= v_i AND v_ids[u.n] = v_ids[v_i];
+    v_est_plat := EXISTS (
+      SELECT 1 FROM recipe_ingredients ri WHERE ri.dish_id = v_ids[v_i]
+    );
 
-    IF v_stock < v_demande THEN
-      RAISE EXCEPTION 'Stock insuffisant pour « % » (disponible : %, demandé : %)',
-        v_name, v_stock, v_demande USING ERRCODE = '23514';
+    IF NOT v_est_plat THEN
+      SELECT COALESCE(SUM(u.q), 0) INTO v_demande
+        FROM unnest(v_qtys) WITH ORDINALITY AS u(q, n)
+       WHERE u.n >= v_i AND v_ids[u.n] = v_ids[v_i];
+
+      IF v_stock < v_demande THEN
+        RAISE EXCEPTION 'Stock insuffisant pour « % » (disponible : %, demandé : %)',
+          v_name, v_stock, v_demande USING ERRCODE = '23514';
+      END IF;
     END IF;
 
     v_price := COALESCE(v_agreed[v_i], v_list);
@@ -358,15 +380,25 @@ BEGIN
       v_price, v_price * v_qty, v_cost, v_list
     );
 
-    UPDATE products SET stock_qty = stock_qty - v_qty WHERE id = v_ids[v_i];
+    -- Un plat ne se stocke pas : on ne lui retire pas de quantité, et on
+    -- n'écrit pas de mouvement de stock pour lui. Ce qui sort du stock, ce sont
+    -- ses INGRÉDIENTS — et c'est le déclencheur sale_items_consume_recipe qui
+    -- s'en charge, avec le contrôle qui va avec.
+    --
+    -- Sans ce IF, la ligne « Riz gras × 1 » essayait de passer son stock de 0 à
+    -- −1 : la contrainte products_stock_qty_non_negative rejetait toute la
+    -- vente, avec une erreur que personne ne sait traduire.
+    IF NOT EXISTS (SELECT 1 FROM recipe_ingredients ri WHERE ri.dish_id = v_ids[v_i]) THEN
+      UPDATE products SET stock_qty = stock_qty - v_qty WHERE id = v_ids[v_i];
 
-    INSERT INTO stock_logs (
-      user_id, product_id, product_name, movement_type,
-      quantity_change, stock_before, stock_after, reference_id
-    ) VALUES (
-      v_owner, v_ids[v_i], v_name, 'sale',
-      -v_qty, v_stock, v_stock - v_qty, v_sale_id
-    );
+      INSERT INTO stock_logs (
+        user_id, product_id, product_name, movement_type,
+        quantity_change, stock_before, stock_after, reference_id
+      ) VALUES (
+        v_owner, v_ids[v_i], v_name, 'sale',
+        -v_qty, v_stock, v_stock - v_qty, v_sale_id
+      );
+    END IF;
   END LOOP;
 
   RETURN jsonb_build_object(

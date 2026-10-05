@@ -38,6 +38,24 @@ export interface StarterArticle {
    * qu'il peut en faire.
    */
   recipe?: { ingredient: string; quantity: number }[];
+  /**
+   * Options du plat (modificateurs payants ou non).
+   *
+   * Elles sont aussi importantes que la recette. Sans option, la fiche d'un plat
+   * affiche « Aucune option pour ce plat », et le serveur en conclut que le
+   * logiciel ne sait pas ce qu'est une double portion — alors que c'est le geste
+   * le plus courant d'un maquis. Le supplément étant pris en compte dans
+   * l'addition, c'est aussi le seul endroit où l'application montre qu'elle sait
+   * compter une commande vraiment.
+   *
+   * `extra` est un SUPPLÉMENT, pas un prix : il ne peut pas être négatif. La
+   * colonne `product_modifiers.extra_price` porte un CHECK `>= 0`, et c'est
+   * justifié — un supplément négatif n'est pas une remise, c'est un plat moins
+   * cher, et ça s'écrit en prix. Cette règle n'était pas respectée par le
+   * catalogue : un seul supplément négatif fait échouer l'INSERT du lot entier,
+   * et le restaurant se retrouve sans aucune option.
+   */
+  options?: { name: string; extra: number }[];
 }
 
 /**
@@ -104,18 +122,17 @@ const RESTAURANT: StarterArticle[] = [
 
   // ─── Plats ───
   {
-    name: 'Riz gras', category: 'Plats', unit: 'portion', priceBuy: 0, priceSell: 2000, stock: 0, minStock: 0,
-    recipe: [
-      { ingredient: 'Riz blanc', quantity: 0.3 },
-      { ingredient: 'Huile végétale 1 L', quantity: 0.03 },
-    ],
-  },
-  {
     name: 'Poulet braisé', category: 'Plats', unit: 'pce', priceBuy: 0, priceSell: 4500, stock: 0, minStock: 0,
     recipe: [
       { ingredient: 'Poulet entier', quantity: 1 },
       { ingredient: 'Oignon', quantity: 0.05 },
       { ingredient: 'Piment', quantity: 0.01 },
+    ],
+    options: [
+      { name: 'Bien cuit', extra: 0 },
+      { name: 'Sauce à part', extra: 0 },
+      { name: 'Avec alloco', extra: 500 },
+      { name: 'Piment enExtra', extra: 100 },
     ],
   },
   {
@@ -126,10 +143,31 @@ const RESTAURANT: StarterArticle[] = [
       { ingredient: 'Tomate', quantity: 0.05 },
       { ingredient: 'Oignon', quantity: 0.03 },
     ],
+    options: [
+      { name: 'Poisson braisé', extra: 700 },
+      { name: 'Sauce piment à part', extra: 0 },
+      { name: 'Sans oignon', extra: 0 },
+    ],
+  },
+  {
+    name: 'Riz gras', category: 'Plats', unit: 'portion', priceBuy: 0, priceSell: 2000, stock: 0, minStock: 0,
+    recipe: [
+      { ingredient: 'Riz blanc', quantity: 0.3 },
+      { ingredient: 'Huile végétale 1 L', quantity: 0.03 },
+    ],
+    options: [
+      { name: 'Avec poulet braisé', extra: 3500 },
+      { name: 'Portion double', extra: 1000 },
+      { name: 'Sans piment', extra: 0 },
+    ],
   },
   {
     name: 'Alloco (banane plantain)', category: 'Plats', unit: 'portion', priceBuy: 0, priceSell: 1000, stock: 0, minStock: 0,
     recipe: [{ ingredient: 'Banane plantain', quantity: 0.15 }],
+    options: [
+      { name: 'Avec œuf', extra: 300 },
+      { name: 'Avec poisson braisé', extra: 1500 },
+    ],
   },
 
   // ─── Boissons ───

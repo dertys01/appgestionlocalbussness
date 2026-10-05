@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  UtensilsCrossed, Loader2, Plus, Users, Clock, CheckCircle2, PackageX, ChefHat,
+  UtensilsCrossed, Loader2, Plus, Users, Clock, CheckCircle2, PackageX, ChefHat, X,
 } from 'lucide-react';
 
 import { useSupabase } from '@/components/providers/SupabaseProvider';
@@ -113,6 +113,15 @@ export function FloorModule({
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [newTableName, setNewTableName] = useState('');
+  /** Le formulaire « nouvelle table » est-il déplié ? Replié dès qu'il y a des tables. */
+  const [nouvelleTableOuverte, setNouvelleTableOuverte] = useState(false);
+  /**
+   * La recherche ne doit pas survivre au changement de table : le serveur
+   * ouvre Table 2 après avoir tapé « poulet » sur Table 1, et voit une carte
+   * réduite à deux plats — puis conclut que les autres ne sont pas à la carte.
+   * La carte complète est rendue d'office, la recherche sert à retrouver un plat
+   * précis, pas à en cacher la moitié.
+   */
 
   // Carte des options : chargée pour le plat sélectionné, pas pour tout le
   // catalogue. Un restaurant de 200 plats ne doit pas envoyer 200 lignes de
@@ -298,6 +307,42 @@ export function FloorModule({
     await Promise.all([loadLines(orderId), loadTables()]);
   };
 
+  /**
+   * Changer la quantité d'une ligne déjà entrée.
+   *
+   * Trouvé en recette le 05/10/2026 : la quantité n'était modifiable qu'AU
+   * MOMENT de l'ajout. Une fois le plat dans la commande, on ne pouvait plus que
+   * le supprimer — et le supprimer ne fusionne pas avec une ligne voisine. Le
+   * geste le plus courant d'un maquis (trois attiékés, puis on s'est trompé de
+   * deux) obligeait donc à tout refaire à la main.
+   *
+   * On écrit directement la colonne : la policy ALL de restaurant_order_items
+   * l'autorise tant que la commande est ouverte, et close_table_order() relit
+   * les lignes au moment de l'encaissement — c'est cette quantité qui est
+   * facturée et qui décrémente les ingrédients.
+   */
+  const setLineQty = async (line: OrderLine, raw: string) => {
+    if (!orderId) return;
+    const n = Number(String(raw).replace(',', '.'));
+    if (!Number.isFinite(n) || n <= 0) {
+      setError('La quantité doit être un nombre supérieur à zéro.');
+      return;
+    }
+    if (n > 1000) {
+      setError('Une ligne de commande ne peut pas dépasser 1 000 portions.');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    const { error: err } = await db
+      .from('restaurant_order_items')
+      .update({ quantity: n })
+      .eq('id', line.id);
+    setBusy(false);
+    if (err) { setError(err.message); return; }
+    await Promise.all([loadLines(orderId), loadTables()]);
+  };
+
   const cycleLine = async (line: OrderLine) => {
     if (!orderId) return;
     const suivant = line.status === 'new' ? 'sent' : line.status === 'sent' ? 'served' : 'new';
@@ -316,17 +361,41 @@ export function FloorModule({
     await Promise.all([loadLines(orderId), loadTables()]);
   };
 
+  /** Comparaison de noms de tables : « table 1 » et « Table 1 » sont la même. */
+  const memeNom = (a: string, b: string) =>
+    a.trim().toLowerCase() === b.trim().toLowerCase();
+
   const addTable = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!ownerId || !newTableName.trim()) return;
+
+    // Un nom en double rend le plan et le ticket cuisine ambigus : deux tuiles
+    // « Table 1 », et le plongeur ne sait plus laquelle attendre. La base
+    // refuse aussi (restaurant_tables_owner_name_uniq), mais elle répond par un
+    // « duplicate key » que personne ne sait traduire — on parle donc en
+    // français, et la base reste la garantie.
+    const nom = newTableName.trim();
+    if (tables.some((t) => memeNom(t.name, nom))) {
+      setError(`Une table s'appelle déjà « ${nom} ».`);
+      return;
+    }
+
     setBusy(true);
     const { error: err } = await db.from('restaurant_tables').insert({
       owner_id: ownerId,
-      name: newTableName.trim(),
+      name: nom,
     });
     setBusy(false);
-    if (err) { setError(err.message); return; }
+    if (err) {
+      setError(
+        err.code === '23505'
+          ? `Une table s'appelle déjà « ${nom} ».`
+          : err.message,
+      );
+      return;
+    }
     setNewTableName('');
+    setNouvelleTableOuverte(false);
     await loadTables();
     if (user) {
       await logActivity({
@@ -340,13 +409,24 @@ export function FloorModule({
     }
   };
 
-  // Recherche : même tolérance que la caisse (fautes de frappe), pour qu'un
-  // serveur ne doive pas épeler un plat au client.
+  /**
+   * Recherche : même tolérance que la caisse (fautes de frappe), pour qu'un
+   * serveur ne doive pas épeler un plat au client.
+   *
+   * La carte n'est PAS tronquée. Elle l'était, à 12 plats, sans rien l'annoncer :
+   * sur le catalogue d'exemple de 17 plats, Poulet braisé et Riz gras — les deux
+   * plats d'un maquis — étaient invisibles, et le serveur, qui voit son plat
+   * absent de la carte, conclut que la cuisine ne le fait pas. Le serveur ne
+   * sait pas qu'il faut taper dans la recherche.
+   *
+   * Le tri par défaut range d'abord les plats du jour (voir platsServisAujourdhui)
+   * puis le reste par ordre alphabétique, ce qui garde les plats courants en haut.
+   */
   const resultats = useMemo(() => {
     const q = search.trim().toLowerCase();
     const actifs = platsServisAujourdhui(products, menuDuJour);
-    if (!q) return actifs.slice(0, 12);
     const norm = (s: string) => s.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    if (!q) return actifs;
     const nq = norm(q);
     return actifs
       .map((p) => {
@@ -358,8 +438,7 @@ export function FloorModule({
       })
       .filter((x): x is { p: Product; rang: number } => x !== null)
       .sort((a, b) => a.rang - b.rang)
-      .map((x) => x.p)
-      .slice(0, 12);
+      .map((x) => x.p);
   }, [products, search, menuDuJour]);
 
   // Le supplément des modificateurs compte dans le total affiché : c'est le
@@ -476,6 +555,38 @@ export function FloorModule({
     void sendToKitchen();
   };
 
+  /**
+   * Formulaire de création d'une table.
+   *
+   * Il était rendu UNIQUEMENT dans l'état « aucune table » : dès la première
+   * table créée, il disparaissait, et le client n'avait plus aucun moyen d'en
+   * ajouter. Un maquis de douze tables restait bloqué à une seule table, sans
+   * message et sans erreur. Trouvé en recette le 05/10/2026.
+   *
+   * Il est donc rendu partout où il a du sens : dans l'état vide (où il est la
+   * seule chose à faire) et, une fois la salle installée, derrière un bouton
+   * « Ajouter une table ».
+   */
+  const formulaireTable = (compact: boolean) =>
+    canManageProducts ? (
+      <Card className="border-slate-200">
+        <CardContent className="p-4">
+          <form onSubmit={addTable} className="flex gap-2">
+            <Input
+              value={newTableName}
+              onChange={(e) => setNewTableName(e.target.value)}
+              placeholder="Nom de la table (ex: Table 1)"
+              aria-label="Nom de la table"
+            />
+            <Button type="submit" disabled={busy} className="bg-indigo-600 hover:bg-indigo-700 gap-2 shrink-0">
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+              {compact ? 'Ajouter' : 'Ajouter une table'}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+    ) : null;
+
   // ── Aucune table : le module n'a rien à montrer tant que la salle est vide
   if (!loading && tables.length === 0) {
     return (
@@ -492,24 +603,7 @@ export function FloorModule({
               : 'Votre patron n’a pas encore créé les tables. Vous pouvez encaisser au point de vente.'
           }
         />
-        {canManageProducts && (
-          <Card className="border-slate-200">
-            <CardContent className="p-4">
-              <form onSubmit={addTable} className="flex gap-2">
-                <Input
-                  value={newTableName}
-                  onChange={(e) => setNewTableName(e.target.value)}
-                  placeholder="Nom de la table (ex: Table 1)"
-                  aria-label="Nom de la table"
-                />
-                <Button type="submit" disabled={busy} className="bg-indigo-600 hover:bg-indigo-700 gap-2 shrink-0">
-                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                  Ajouter
-                </Button>
-              </form>
-            </CardContent>
-          </Card>
-        )}
+        {formulaireTable(false)}
       </div>
     );
   }
@@ -518,6 +612,32 @@ export function FloorModule({
     <div className="space-y-4">
       {error && (
         <p className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{error}</p>
+      )}
+
+      {/* La salle est installée : on doit pouvoir y ajouter une table, pas
+          seulement au premier écran. Le formulaire est replié pour ne pas
+          voler de place aux tuiles. */}
+      {canManageProducts && !nouvelleTableOuverte && (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setNouvelleTableOuverte(true)}
+          className="gap-1.5"
+          aria-label="Ajouter une table"
+        >
+          <Plus className="h-4 w-4" /> Ajouter une table
+        </Button>
+      )}
+      {nouvelleTableOuverte && (
+        <>
+          {formulaireTable(true)}
+          <button
+            onClick={() => setNouvelleTableOuverte(false)}
+            className="text-xs text-slate-500 underline"
+          >
+            Annuler
+          </button>
+        </>
       )}
 
       {/* ── Addition encaissée ── */}
@@ -554,6 +674,10 @@ export function FloorModule({
               <button
                 key={t.id}
                 onClick={() => {
+                  // Chaque table repart d'une carte complète : la recherche de la
+                  // table précédente ne doit pas filtrer celle-ci (voir l'état
+                  // `search`).
+                  setSearch('');
                   if (libre) { void openOrder(t.id); return; }
                   setOuverte({ tableId: t.id, nom: t.name, client: t.customer_name });
                   setOrderId(t.order_id);
@@ -678,6 +802,26 @@ export function FloorModule({
                         Number(l.quantity) * (Number(l.unit_price) + Number(l.extra_price ?? 0))
                       )}
                     </span>
+                    {/* Quantité modifiable APRÈS l'ajout — voir setLineQty.
+                        Le champ est décimal et borné par le navigateur : « 1,2 »
+                        comme « 1.2 » sont acceptés. */}
+                    <Input
+                      type="number"
+                      min="0.25"
+                      step="0.25"
+                      defaultValue={String(l.quantity)}
+                      disabled={busy}
+                      aria-label={`Quantité de ${l.name}`}
+                      onBlur={(e) => {
+                        const v = Number(String(e.target.value).replace(',', '.'));
+                        if (Number.isFinite(v) && v !== Number(l.quantity)) {
+                          void setLineQty(l, e.target.value);
+                        } else {
+                          e.target.value = String(l.quantity);
+                        }
+                      }}
+                      className="w-16 text-right shrink-0"
+                    />
                     <button
                       onClick={() => removeLine(l)}
                       aria-label={`Retirer ${l.name} de la commande`}
@@ -871,6 +1015,16 @@ export function FloorModule({
                   placeholder="Chercher un plat…"
                   aria-label="Chercher un plat à commander"
                 />
+                {search && (
+                  <button
+                    type="button"
+                    onClick={() => setSearch('')}
+                    aria-label="Effacer la recherche de plat"
+                    className="p-1 text-slate-400 hover:text-slate-700 shrink-0"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => setMenuDuJour((v) => !v)}
