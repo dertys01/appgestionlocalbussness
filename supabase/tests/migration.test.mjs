@@ -1747,6 +1747,17 @@ const credit = async (qty, nom, tel) => {
   const prof = (await q(`SELECT * FROM get_product_profitability()`)).rows
     .find((x) => x.name === 'Article crédit');
   check('14au. unités vendues = 4 (crédit compris)', Number(prof.units_sold) === 4, `obtenu ${prof.units_sold}`);
+
+  // Une seule signature, et c'est la dernière. CREATE OR REPLACE avec une
+  // nouvelle arity crée une SURCHARGE : l'ancienne version survivrait, et
+  // PostgREST la servirait — le client n'enverrait jamais p_advance_method.
+  // C'est le piège documenté au README, vérifié ici pour la dernière arité
+  // en date (5 → 6 avec p_advance_method).
+  const sigs = (await q(
+    `SELECT pronargs FROM pg_proc WHERE proname = 'record_credit_sale'`
+  )).rows.map((x) => Number(x.pronargs));
+  check("14av. record_credit_sale : une seule signature, 6 arguments",
+    sigs.length === 1 && sigs[0] === 6, `arités : ${sigs.join(', ')}`);
 }
 
 // ═══ 15. Deux boutiques Pro ════════════════════════════════

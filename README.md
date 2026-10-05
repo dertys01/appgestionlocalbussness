@@ -71,7 +71,7 @@ point à vérifier après un `git pull`.
 | 25 | `migration_recipes.sql` | `recipe_ingredients`, `recipe_costs` — coût de matière par plat |
 | 26 | `migration_restaurant_finitions.sql` | Modificateurs, plat du jour, pourboire, réservations |
 | 27 | `migration_menu_days.sql` | Carte par jour de la semaine (`is_daily_special`) |
-| 28 | `migration_ca_caisse.sql` | **Base de caisse** : `credit_payments.sale_id` + `gesture_id`, `get_sales_summary()` en `SUM(amount_received)`, `pay_customer_debt()` ventilé par vente, `get_customer_debts()` en `COUNT(DISTINCT gesture_id)` |
+| 28 | `migration_ca_caisse.sql` | **Base de caisse** : `credit_payments.sale_id` + `gesture_id`, `get_sales_summary()` en `SUM(amount_received)`, `pay_customer_debt()` ventilé par vente, `get_customer_debts()` en `COUNT(DISTINCT gesture_id)`, `record_credit_sale()` avec le moyen de l'acompte (`p_advance_method`) |
 
 **Le chiffre d'affaires est en base de caisse, partout.** Une seule
 définition : la somme de ce qui est réellement rentré (`sales.amount_received`),
@@ -88,6 +88,10 @@ mais reste **un** versement dans l'historique du client. Les versements
 antérieurs à cette migration ne sont pas ventilés (seuls les acomptes à la vente
 sont rattachables sans ambiguïté) : l'écart est affiché sous le graphique des
 modes de paiement plutôt que perdu en silence.
+
+L'acompte, versé à la vente, suit la même règle : son moyen se choisit au
+moment de la vente (`p_advance_method` — espèces ou MoMo), il n'est plus déduit
+en « espèces ». Sa part de caisse ventile alors sur le vrai geste du client.
 
 `migration_security.sql` **doit fermer la série** : elle réécrit ce que les
 migrations précédentes ont posé (policies de `business_members`, garde de
@@ -188,7 +192,8 @@ colonne dont dépend une vue — et l'ordre des fichiers masque le problème, pu
 la vue est créée par une migration *suivante*.
 
 La même règle vaut pour un **paramètre ajouté** : `record_credit_sale()` a reçu
-`p_advance`. `CREATE OR REPLACE` crée alors une *surcharge*, et l'ancienne
+`p_advance`, puis `p_advance_method`. `CREATE OR REPLACE` crée alors une
+*surcharge*, et l'ancienne
 version à quatre arguments reste. PostgREST sert alors l'ancienne, et le client
 ne voit jamais son champ. Le `DROP FUNCTION` de l'ancienne arité est
 indispensable — `test:db:existing` le vérifie.
