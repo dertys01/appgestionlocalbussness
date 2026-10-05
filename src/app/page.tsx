@@ -199,7 +199,11 @@ export default function HomePage() {
           ml-0 sous lg : le rail de 64 px a disparu au profit du tiroir. pt-14
           réserve la place du bouton flottant. */}
       <main className="flex-1 lg:ml-56 min-h-screen bg-slate-50 pt-14 lg:pt-0">
-        <div className="p-4 max-w-5xl mx-auto">
+        {/* max-w-none sur la caisse : catalogue + panier (320 px) réclament
+            toute la largeur. Borné à 5xl comme les autres onglets, la caisse
+            affichait de larges marges mortes sur grand écran et le panier
+            se faisait écraser par la colonne produits. */}
+        <div className={`p-4 mx-auto ${tab === 'pos' ? 'max-w-none' : 'max-w-5xl'}`}>
 
           {/* Erreur de chargement des produits : HORS condition d'onglet.
               Rendue uniquement dans le dashboard, elle était invisible dès
