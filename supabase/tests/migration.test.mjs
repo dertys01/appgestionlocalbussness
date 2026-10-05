@@ -3931,13 +3931,20 @@ check('28h. les espèces couvrent 1 000 + 2 000 + 3 000 = 6 000',
 // corrige : ils divergeaient parce que chacun lisait une colonne différente.
 {
   // get_cash_flow() découpe avec le fuseau de l'organisation (Porto-Novo, soit
-  // UTC+1) : la fenêtre doit couvrir les deux dates possibles, sinon la vente
-  // du jour tombe juste après la borne et la fonction renvoie zéro.
+  // UTC+1) alors que la synthèse est appelée ici en UTC : les deux fenêtres
+  // doivent contenir les ventes du test, sinon les totaux divergent. L'heure
+  // locale passe à minuit une heure avant qu'UTC ne bascule — entre 00:00 et
+  // 01:00 locales (23:00–24:00 UTC), la vente du jour tombe sur le lendemain
+  // LOCAL et sort d'une borne calée sur la date UTC (flux 0 / synthèse pleine).
+  // La borne de fin couvre donc aussi le lendemain UTC : ce jour ne contient
+  // aucune donnée — tout est « now » — élargir ne fausse rien, et la
+  // comparaison redevient valable à toute heure du jour et de la nuit.
   const d0 = (await q(`SELECT ((now() AT TIME ZONE 'UTC')::date - 1)::date::text d`)).rows[0].d;
-  const flux = (await q(`SELECT revenue FROM get_cash_flow('${d0}'::date,'${jourCa}'::date)`))
+  const d1 = (await q(`SELECT ((now() AT TIME ZONE 'UTC')::date + 1)::date::text d`)).rows[0].d;
+  const flux = (await q(`SELECT revenue FROM get_cash_flow('${d0}'::date,'${d1}'::date)`))
     .rows.reduce((t, r) => t + Number(r.revenue), 0);
   const syn = (await q(
-    `SELECT revenue FROM get_sales_summary('${d0}','${jourCa}','UTC')`))
+    `SELECT revenue FROM get_sales_summary('${d0}','${d1}','UTC')`))
     .rows.reduce((t, r) => t + Number(r.revenue), 0);
 
   check('28i. synthèse et flux de caisse affichent le même chiffre',
