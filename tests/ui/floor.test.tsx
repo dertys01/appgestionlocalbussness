@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 /**
@@ -83,14 +83,20 @@ const supabase = {
   auth: { getUser: vi.fn() },
 };
 
+/**
+ * Le rôle de l'utilisateur affiché. Par défaut : le patron. Un test qui veut
+ * voir l'écran du caissier le change avant de rendre.
+ */
+const acteur = { canManageProducts: true, isEmployee: false };
+
 vi.mock('@/components/providers/SupabaseProvider', () => ({
   useSupabase: () => ({
     supabase,
     ownerId: 'org-1',
     actorName: 'Recette',
     user: { id: 'u1', email: 'a@b.c' },
-    canManageProducts: true,
-    isEmployee: false,
+    get canManageProducts() { return acteur.canManageProducts; },
+    get isEmployee() { return acteur.isEmployee; },
     org: { domain: 'restaurant' },
   }),
 }));
@@ -145,6 +151,14 @@ const plat = {
   status: 'new',
   product: { name: 'Poulet braisé' },
 };
+
+beforeEach(() => {
+  // Le patron, sauf si un test change le rôle pour voir l'écran du caissier.
+  acteur.canManageProducts = true;
+  acteur.isEmployee = false;
+  updates.length = 0;
+  inserts.length = 0;
+});
 
 describe('FloorModule — la salle', () => {
   it('propose de créer une table quand la salle est vide', async () => {
@@ -411,6 +425,62 @@ fireEvent.click(screen.getAllByText('Poulet braisé')[0]);
    * afficherait moins que la somme des lignes, et close_table_order() factories
    * une ligne à prix 0.
    */
+  /**
+   * Décidé le 05/10/2026.
+   *
+   * L'écran disait « Demandez l'addition : seul le patron encaisse », et la base
+   * refusait l'appel. Mais la caisse, elle, laisse un caissier vendre tous les
+   * jours : dans un maquis, le personnel est employé, il ramasse l'argent et ne
+   * pouvait pas l'écrire. Le patron devait solder une addition après l'autre.
+   *
+   * Ce que le geste ne déplace pas : la vente est écrite sur le patron
+   * (create_sale() utilise l'identifiant du propriétaire, jamais celui du
+   * caissier) et le montant est lu dans les lignes de commande. Voir 24j et
+   * suivants dans supabase/tests/migration.test.mjs.
+   */
+  it('laisse le caissier encaisser une addition', async () => {
+    acteur.canManageProducts = false;
+    acteur.isEmployee = true;
+
+    definirSalle(table({ id: 't1', name: 'Table 1' }));
+    definirCommande(plat);
+    render(<FloorModule products={produits} />);
+
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Table 1'));
+
+    const encaisse = await screen.findByRole('button', { name: /Encaisser 9\s?000 F/ });
+    fireEvent.click(encaisse);
+
+    await waitFor(() => expect(screen.getByText(/Addition encaissée/i)).toBeInTheDocument());
+    expect(rpcResultats).toContain('close_table_order');
+  });
+
+  /**
+   * Le seul endroit de la salle qui reste fermé au caissier : choisir les plats
+   * servis aujourd'hui est de l'administration, pas de la vente.
+   */
+  it('ne laisse pas le caissier régler la carte du jour', async () => {
+    acteur.canManageProducts = false;
+    acteur.isEmployee = true;
+    definirModificateurs({ id: 'm1', product_id: 'p1', name: 'Bien cuit', extra_price: 0 });
+
+    definirSalle(table({ id: 't1', name: 'Table 1' }));
+    render(<FloorModule products={produits} />);
+
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Table 1'));
+    // L'ouverture de la commande est asynchrone : le panneau doit être là avant
+    // de cliquer un plat, sinon on cherche un bouton qui n'existe pas encore.
+    await screen.findByLabelText(/Chercher un plat/i);
+    fireEvent.click(screen.getByText('Poulet braisé'));
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Ajouter à la commande/i })).toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/Servi le/i)).toBeNull();
+  });
+
   it('refuse une quantité nulle ou négative sur une ligne', async () => {
     definirSalle(table({ id: 't1', name: 'Table 1' }));
     definirCommande(plat);

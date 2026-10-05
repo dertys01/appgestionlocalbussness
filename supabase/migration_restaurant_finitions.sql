@@ -182,14 +182,36 @@ BEGIN
   END IF;
 
   -- SECURITY DEFINER ignore les policies : le rôle se vérifie ici.
+  --
+  -- L'ADMINISTRATION de la salle est réservée au patron et aux managers — pas
+  -- question de donner ce pouvoir à un caissier.
+  --
+  -- L'ENCAISSEMENT, en revanche, est ouvert à quiconque est dans l'équipe. La
+  -- règle était ici plus stricte que sur la caisse, et c'était une incohérence
+  -- coûteuse : create_sale() n'examine pas le rôle — un caissier encaisse au
+  -- comptoir tous les jours — alors qu'il ne pouvait pas solder une table dont
+  -- il venait de servir les plats. Dans un maquis, le personnel est employé :
+  -- il ramasse l'argent, et il ne pouvait pas l'écrire. Le patron devait solder
+  -- une addition après l'autre, ce qui est exactement le mode de
+  -- fonctionnement que le logiciel était censé supprimer.
+  --
+  -- Ce que la vente reste patronale dans TOUS les cas : ci-dessous,
+  -- create_sale() écrit la vente avec user_id = v_owner, jamais avec
+  -- l'identifiant de celui qui appuie sur le bouton. Ouvrir l'encaissement au
+  -- caissier ne déplace donc ni le chiffre d'affaires, ni le crédit de la vente,
+  -- ni les commissions éventuelles. Il lui donne seulement le geste qu'il
+  -- fait déjà au comptoir.
+  --
+  -- Le montant facturé est lu dans les LIGNES DE COMMANDE, jamais reçu du
+  -- client : un caissier ne peut pas faire encaisser 100 F en appelant la
+  -- fonction, le montant à payer est celui qui était affiché à l'écran.
   IF v_owner <> auth.uid()
      AND NOT EXISTS (
        SELECT 1 FROM business_members bm
         WHERE bm.member_id = auth.uid()
           AND bm.owner_id = v_owner
-          AND bm.role IN ('owner', 'manager')
      ) THEN
-    RAISE EXCEPTION 'Seul le patron ou un manager peut encaisser une addition'
+    RAISE EXCEPTION 'Seul le patron, un manager ou un membre de l''équipe peut encaisser cette addition'
       USING ERRCODE = '42501';
   END IF;
 

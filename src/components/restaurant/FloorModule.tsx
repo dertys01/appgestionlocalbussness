@@ -465,9 +465,30 @@ export function FloorModule({
   const [tip, setTip] = useState(0);
   const [closing, setClosing] = useState(false);
   const [closed, setClosed] = useState<{ total: number; paid: number; tip: number; invoice: string | null; saleId: string; perShare: number } | null>(null);
-  // Le caissier encaisse en salle mais ne solde pas : la clôture écrit dans
-  // sales, c'est la vente du patron. Le patron peut, lui.
-  const peutEncaisser = !isEmployee || canManageProducts;
+  /**
+   * Qui encaisse une addition ? Tout membre de l'équipe — comme à la caisse.
+   *
+   * La règle était l'inverse (« seul le patron encaisse »), et c'était une
+   * incohérence coûteuse : le caissier encaisse au comptoir tous les jours,
+   * create_sale() n'examine pas le rôle, mais il ne pouvait pas solder une table
+   * dont il venait de servir les plats. Dans un maquis, le personnel est
+   * employé : il ramasse l'argent et ne pouvait pas l'écrire, et le patron
+   * devait solder une addition après l'autre.
+   *
+   * Ce que ça ne change pas : la vente est écrite avec user_id = le patron dans
+   * tous les cas, et le montant facturé est lu dans les lignes de commande. Le
+   * caissier fait le geste, pas le chiffre d'affaires.
+   */
+  const peutEncaisser = true;
+
+  /**
+   * Qui règle la carte du jour ? Le patron et les managers.
+   *
+   * Choisir les plats servis aujourd'hui est de l'administration : un caissier
+   * qui modifie la carte change le restaurant sans avoir mandat pour ça. Ça
+   * reste donc fermé, et c'est le seul endroit de la salle qui l'est.
+   */
+  const peutReglerCarte = !isEmployee || canManageProducts;
 
   const part = splitCount > 0 ? Math.round((totalLignes / splitCount) * 100) / 100 : 0;
 
@@ -950,8 +971,11 @@ export function FloorModule({
                         : <><CheckCircle2 className="h-4 w-4" /> Encaisser {formatCFA(totalLignes)}</>}
                     </Button>
                   ) : (
+                    /* Ne devrait pas arriver : tout membre de l'équipe encaisse.
+                        Le message reste, pour qu'une régression future se voie
+                        au lieu de disparaître en silence. */
                     <p className="text-xs text-slate-500">
-                      Demandez l&apos;addition : seul le patron encaisse.
+                      Demandez au patron de solder l&apos;addition.
                     </p>
                   )}
                 </div>
@@ -961,7 +985,7 @@ export function FloorModule({
             {/* Ajout */}
             {/* Menu du jour : le patron règle la carte d'ici, ou depuis Recettes.
           Un plat servi tous les jours garde menu_days = null. */}
-      {peutEncaisser && platChoisi && (
+      {peutReglerCarte && platChoisi && (
         <div className="rounded-lg border border-slate-200 p-3 space-y-2">
           <p className="text-xs font-medium text-slate-700">
             Servi le… <span className="text-slate-500">(tous les jours par défaut)</span>

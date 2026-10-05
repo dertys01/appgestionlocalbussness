@@ -2811,8 +2811,8 @@ check('22g. authenticated appelle toujours les deux helpers des policies',
 // Une commande n'est pas une vente : elle vit sur une table avant d'être
 // soldée, et elle ne touche pas au chiffre d'affaires tant qu'elle n'est pas
 // close. Ces contrôles verrouillent les trois invariants qui font le métier —
-// une seule commande ouverte par table, l'isolation entre restaurants, et
-// l'impossibilité pour un caissier de clôturer une addition.
+// une seule commande ouverte par table, l'isolation entre restaurants, et le
+// fait qu'un caissier solde une addition sans que la vente quitte le patron.
 console.log('\n▸ Restaurant — salle et commande ouverte');
 
 // UUID.ne clashes avec le reste de la suite : les identifiants 13131313 et
@@ -2944,12 +2944,15 @@ await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, uni
 }
 await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
 
-// 23g. Un caissier encaisse mais ne clôture pas : c'est ce qui protège le CA.
+// 23g. Un caissier sert une table comme tout le monde. Il peut aussi la solder
+// (24j) : il ne peut pas ÉCRIRE la clôture lui-même, seulement appeler
+// close_table_order() — c'est la fonction qui tient le contrôle de stock, la
+// facture et l'écriture de la vente. Un UPDATE direct passerait à côté des trois.
 await canWrite('23g. un caissier ajoute un plat à une commande',
   `INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price)
    VALUES ('${O2}', '${P1}', 1, 7000)`, true, SERVEUR);
 {
-  await canWrite('23h. un caissier ne clôture pas une commande',
+  await canWrite('23h. un caissier ne clôture pas la commande à la main',
     `UPDATE restaurant_orders SET status='closed', closed_at=now() WHERE id='${O2}'`, false, SERVEUR);
 
   await canWrite('23i. un caissier ne réorganise pas la salle',
@@ -3165,25 +3168,69 @@ await q(`INSERT INTO restaurant_order_items (order_id, product_id, quantity, uni
   check('24i. un moyen de paiement inconnu est refusé', refuse);
 }
 
-// 24j. Un caissier n'encaisse pas l'addition : la clôture écrit dans sales.
-// canWrite mesure des lignes affectées, ce qui n'a pas de sens pour un SELECT :
-// on vérifie donc que l'appel est refusé, et surtout qu'aucune vente n'apparaît.
+// 24j. Un caissier SOLDE une addition — et la vente reste celle du patron.
+//
+// Règle changée le 05/10/2026, décidée avec l'utilisateur. Elle était ici plus
+// stricte que sur la caisse : create_sale() n'examine pas le rôle, un caissier
+// encaisse au comptoir tous les jours, mais il ne pouvait pas clôturer une table
+// dont il venait de servir les plats. Dans un maquis, le personnel est employé :
+// il ramasse l'argent et ne pouvait pas l'écrire.
+//
+// Ce que le test verrouille, ce n'est pas l'interdiction — c'est que le geste ne
+// déplace RIEN : la vente est écrite sur le patron, jamais sur le caissier.
 {
   const avant = await count(`SELECT count(*) FROM sales WHERE user_id='${RESTO}'`);
-  let refuse = false;
+  let refus = '';
   try {
     await q(`SELECT set_config('request.jwt.claim.sub', '${SERVEUR}', false)`);
     await e('SET ROLE authenticated');
     await q(`SELECT close_table_order('${OP}', 'cash')`);
-  } catch {
-    refuse = true;
+  } catch (e2) {
+    refus = e2.message;
+  } finally {
+    await e('RESET ROLE');
+    await q(`SELECT set_config('request.jwt.claim.sub', '${RESTO}', false)`);
+  }
+  check('24j. un caissier solde une addition', refus === '', refus.slice(0, 90));
+
+  const apres = await count(`SELECT count(*) FROM sales WHERE user_id='${RESTO}'`);
+  check('24j2. et la vente reste inscrite sur le patron', apres === avant + 1,
+    `${avant} -> ${apres} ventes`);
+
+  const surServeur = await count(
+    `SELECT count(*) FROM sales WHERE user_id='${SERVEUR}'`);
+  check('24j3. aucune vente n\'est portée au nom du caissier', surServeur === 0,
+    `${surServeur} vente(s) au caissier`);
+
+  // Et le ticket est figé : la commande est close, on ne rajoute plus de plat.
+  const statut = await count(
+    `SELECT count(*) FROM restaurant_orders WHERE id='${OP}' AND status='closed'`);
+  check('24j4. et la commande est close', statut === 1);
+}
+
+// 24j5. Ouvrir l'encaissement au caissier n'ouvre RIEN aux étrangers.
+//
+// C'est le test qui manque le plus depuis l'assouplissement de la garde : elle
+// passe de « patron ou manager » à « membre de l'équipe ». Un patron d'une autre
+// boutique n'est membre de rien, il doit donc rester dehors — c'est l'ISOLATION,
+// pas le rôle, qui protège ici.
+{
+  const avant = await count(`SELECT count(*) FROM sales WHERE user_id='${RESTO}'`);
+  let refus = '';
+  try {
+    await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+    await e('SET ROLE authenticated');
+    await q(`SELECT close_table_order('${OP}', 'cash')`);
+  } catch (e2) {
+    refus = e2.message;
   } finally {
     await e('RESET ROLE');
     await q(`SELECT set_config('request.jwt.claim.sub', '${RESTO}', false)`);
   }
   const apres = await count(`SELECT count(*) FROM sales WHERE user_id='${RESTO}'`);
-  check('24j. un caissier ne solde pas une addition', refuse);
-  check('24j2. et aucune vente n\'est écrite par le caissier', apres === avant,
+  check('24j5. un patron d\'une autre boutique ne solde pas l\'addition',
+    refus !== '', refus.slice(0, 90) || 'accepté !');
+  check('24j6. et aucune vente n\'est écrite pour ce compte', apres === avant,
     `${avant} -> ${apres} ventes`);
 }
 
