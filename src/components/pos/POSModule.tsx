@@ -777,7 +777,11 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
             le filtre reste atteignable au milieu de la liste. */}
         {categories.length > 1 && (
           <div className="sticky top-14 lg:top-0 z-10 -mx-1 bg-slate-50/95 backdrop-blur px-1 py-1">
-            <div className="flex gap-1.5 overflow-x-auto pb-1" role="group" aria-label="Filtrer par catégorie">
+            {/* flex-wrap et non overflow-x-auto : en rangée non-wrap, la
+                somme des pastilles (~840 px) devient la largeur minimale de
+                toute la colonne, qui écrase alors le panneau du panier. Le
+                défilement horizontal masquait en plus les rayons de droite. */}
+            <div className="flex flex-wrap gap-1.5 pb-1" role="group" aria-label="Filtrer par catégorie">
               <button
                 onClick={() => setCategorie(null)}
                 aria-pressed={categorie === null}
@@ -809,8 +813,9 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
 
         {/* Le compteur évite qu'un commerçant cherche un produit absent en
             croyant qu'il n'existe pas : avec 1 000 références, une grille
-            tronquée sans indication paraît vide. */}
-        <div className="flex items-center gap-3 text-xs text-slate-500">
+            tronquée sans indication paraît vide. flex-wrap : en colonne
+            étroite (petit écran), une rangée non-wrap déborderait. */}
+        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-500">
           <span>
             {filtered.length} produit{filtered.length > 1 ? 's' : ''}
             {search.trim() && ` pour « ${search.trim()} »`}
@@ -983,12 +988,15 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           Sur grand écran : une colonne à droite, toujours visible.
           Sur mobile : absent du flux, et la barre fixe du bas l'ouvre en
           plein écran. Sans cette bifurcation, il se retrouvait sous les
-          produits — il fallait défiler tout le catalogue pour encaisser. */}
+          produits — il fallait défiler tout le catalogue pour encaisser.
+          lg:shrink-0 : sans ce garde-fou, la colonne produits (flex-1) peut
+          comprimer le panneau jusqu'à sa largeur minimale (~135 px), où les
+          libellés client et les boutons de paiement se chevauchent. */}
       <div
         className={
           panierOuvert
             ? 'fixed inset-0 z-40 bg-white flex flex-col gap-3 p-4 overflow-hidden'
-            : 'hidden lg:flex lg:w-80 flex-col gap-3'
+            : 'hidden lg:flex lg:w-80 lg:shrink-0 flex-col gap-3'
         }
       >
         <div className="flex items-center gap-2 font-semibold text-slate-700">
