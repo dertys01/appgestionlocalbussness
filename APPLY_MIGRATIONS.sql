@@ -6290,13 +6290,28 @@ COMMENT ON FUNCTION get_sales_summary(date, date, text) IS
 -- record_credit_sale() : l'acompte est versé À LA VENTE, il connaît donc la
 -- vente qu'il couvre. pay_customer_debt() : c'est la boucle de répartition
 -- qui sait, pour chaque tour, combien va à quelle vente.
+--
+-- L'acompte gagne p_advance_method. Il était écrit en « cash » par défaut —
+-- un moyen déduit, jamais choisi : l'argent réellement reçu à la vente peut
+-- être en espèces comme en MoMo, et sa part de caisse doit suivre le vrai
+-- geste du client. Le défaut reste « cash » : close_table_order() appelle
+-- avec cinq arguments positionnels, et l'acompte d'une table n'a pas de
+-- moyen enregistré en base.
+--
+-- DROP de l'ancienne arité AVANT la nouvelle : CREATE OR REPLACE crée une
+-- surcharge au lieu de remplacer, et PostgREST continuerait à servir la
+-- version à cinq arguments — le client n'enverrait jamais son champ (README,
+-- section « paramètre ajouté »).
+
+DROP FUNCTION IF EXISTS record_credit_sale(jsonb, text, text, text, numeric);
 
 CREATE OR REPLACE FUNCTION record_credit_sale(
-  p_items        jsonb,
-  p_client_name  text,
-  p_client_phone text,
-  p_note         text          DEFAULT NULL,
-  p_advance      numeric(12,2) DEFAULT 0
+  p_items          jsonb,
+  p_client_name    text,
+  p_client_phone   text,
+  p_note           text          DEFAULT NULL,
+  p_advance        numeric(12,2) DEFAULT 0,
+  p_advance_method text          DEFAULT 'cash'
 )
 RETURNS jsonb
 LANGUAGE plpgsql
@@ -6334,6 +6349,16 @@ BEGIN
     RAISE EXCEPTION 'L''avance versée ne peut pas être négative' USING ERRCODE = '22023';
   END IF;
   v_avance := p_advance;
+
+  -- Le moyen n'est lu que s'il y a acompte : sans argent reçu, la ligne de
+  -- versement n'existe pas. Même garde-fou que credit_payments_method_valid,
+  -- mais levé AVANT create_sale() — le stock n'est pas encore sorti et la
+  -- vente n'existe pas, donc rien à annuler.
+  IF v_avance > 0
+     AND (p_advance_method IS NULL OR p_advance_method NOT IN ('cash', 'momo')) THEN
+    RAISE EXCEPTION 'Moyen de paiement de l''acompte invalide : %', p_advance_method
+      USING ERRCODE = '22023';
+  END IF;
 
   PERFORM set_config('credit.internal', '1', true);
   v_sale := create_sale(p_items, 'credit', v_name, p_note);
@@ -6374,11 +6399,11 @@ BEGIN
   -- aussi ce que l'écran Dettes affiche en « versements », et ce qu'un client
   -- conteste éventuellement.
   --
-  -- sale_id renseigné : l'acompte couvre CETTE vente, et sa part de caisse doit
-  -- suivre le moyen choisi au moment du paiement.
+  -- sale_id renseigné : l'acompte couvre CETTE vente, et sa part de caisse
+  -- suit le moyen choisi à la vente — p_advance_method, plus « cash » déduit.
   IF v_avance > 0 THEN
     INSERT INTO credit_payments (debt_id, user_id, amount, day, method, note, sale_id)
-    VALUES (v_debt_id, v_owner, v_avance, current_date, 'cash',
+    VALUES (v_debt_id, v_owner, v_avance, current_date, p_advance_method,
             'Acompte versé à la vente', v_sale_id);
   END IF;
 
@@ -6398,9 +6423,15 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION record_credit_sale(jsonb, text, text, text, numeric) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION record_credit_sale(jsonb, text, text, text, numeric) TO authenticated;
-GRANT EXECUTE ON FUNCTION record_credit_sale(jsonb, text, text, text, numeric) TO service_role;
+REVOKE ALL ON FUNCTION record_credit_sale(jsonb, text, text, text, numeric, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION record_credit_sale(jsonb, text, text, text, numeric, text) TO authenticated;
+GRANT EXECUTE ON FUNCTION record_credit_sale(jsonb, text, text, text, numeric, text) TO service_role;
+
+COMMENT ON FUNCTION record_credit_sale(jsonb, text, text, text, numeric, text) IS
+  'Vente à crédit. p_advance est l''acompte versé sur-le-champ (0 = crédit '
+  'total), p_advance_method son moyen — cash ou momo, choisi à la vente. '
+  'L''acompte compte au chiffre d''affaires le jour même, réduit la dette et '
+  'ventile sa part de caisse selon ce moyen. Le stock part dans tous les cas.';
 
 
 CREATE OR REPLACE FUNCTION pay_customer_debt(

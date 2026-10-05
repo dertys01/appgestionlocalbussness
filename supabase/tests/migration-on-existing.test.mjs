@@ -29,6 +29,10 @@ const ORDER = [
   'migration_recipes.sql',
   'migration_restaurant_finitions.sql',
   'migration_menu_days.sql',
+  // Dernière de la série canonique : sans elle, la « montée de version »
+  // ci-dessous s'arrêterait à la version d'avant la base de caisse, et
+  // l'arité de record_credit_sale() ne serait plus la bonne.
+  'migration_ca_caisse.sql',
 ];
 
 let failed = 0;
@@ -198,8 +202,8 @@ const arites = (await db.query(
   `SELECT proname, pronargs FROM pg_proc
     WHERE proname IN ('record_credit_sale', 'get_customer_debts')`)).rows;
 const creditArity = arites.filter((x) => x.proname === 'record_credit_sale').map((x) => x.pronargs);
-check('record_credit_sale() a l\'arity 5 (avec p_advance)',
-  creditArity.length === 1 && creditArity[0] === 5, `arités : ${creditArity.join(', ')}`);
+check('record_credit_sale() a l\'arité 6 (avec p_advance et p_advance_method)',
+  creditArity.length === 1 && creditArity[0] === 6, `arités : ${creditArity.join(', ')}`);
 check('il ne reste qu\'une version de get_customer_debts',
   arites.filter((x) => x.proname === 'get_customer_debts').length === 1,
   `${arites.filter((x) => x.proname === 'get_customer_debts').length}`);

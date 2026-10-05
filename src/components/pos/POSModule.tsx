@@ -171,6 +171,10 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
   // 50 000 sur 130 000 » est le geste le plus courant d'une boutique de quartier,
   // et sans ce champ il n'avait aucun moyen d'être enregistré.
   const [advance, setAdvance] = useState('');
+  // Moyen de l'acompte : la vente est à crédit, mais l'argent réellement reçu
+  // sur-le-champ est en espèces ou en MoMo — c'est lui qui ventile la part de
+  // caisse du jour, pas « crédit » et pas un « cash » déduit.
+  const [advanceMethod, setAdvanceMethod] = useState<'cash' | 'momo'>('cash');
   const [loading, setLoading] = useState(false);
   /**
    * Message rouge de l'encaissement refusé (« Stock insuffisant… »). Il était
@@ -183,7 +187,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
   const [checkoutError, setCheckoutError] = useState('');
   useEffect(() => {
     setCheckoutError('');
-  }, [cart, paymentMethod, clientName, clientPhone, advance, amountGiven]);
+  }, [cart, paymentMethod, clientName, clientPhone, advance, advanceMethod, amountGiven]);
   const [receipt, setReceipt] = useState<ReceiptState | null>(null);
   /**
    * Sur mobile, le panier est un panneau plein écran plutôt qu'une colonne
@@ -600,6 +604,9 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
             // connaît que ce montant, donc c'est le seul endroit où il doit être
             // décidé.
             p_advance: advanceAmount,
+            // Moyen du versement : compté en « cash » avant, un moyen déduit
+            // et non choisi. Sans acompte, le serveur ne lit pas ce champ.
+            p_advance_method: advanceMethod,
           }
         : {
             p_items: items,
@@ -1301,6 +1308,40 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                   <span className="text-sm font-bold text-amber-900 tabular-nums">
                     {formatCFA(remaining)}
                   </span>
+                </div>
+              )}
+              {/* Moyen de l'acompte — visible seulement quand il y en a un :
+                  sans argent reçu, il n'y a rien à ventiler, et une question
+                  de plus à chaque vente ferait perdre le geste simple. */}
+              {advanceAmount > 0 && (
+                <div className="space-y-1">
+                  <span className="text-xs font-medium text-slate-500">
+                    Acompte payé en
+                  </span>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAdvanceMethod('cash')}
+                      className={`rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors ${
+                        advanceMethod === 'cash'
+                          ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                          : 'border-slate-200 text-slate-500 hover:bg-slate-50'
+                      }`}
+                    >
+                      Espèces
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAdvanceMethod('momo')}
+                      className={`rounded-lg border px-2 py-1.5 text-xs font-medium transition-colors ${
+                        advanceMethod === 'momo'
+                          ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
+                          : 'border-slate-200 text-slate-500 hover:bg-slate-50'
+                      }`}
+                    >
+                      MoMo
+                    </button>
+                  </div>
                 </div>
               )}
               <p className="text-[11px] text-slate-500">
