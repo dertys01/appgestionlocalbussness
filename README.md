@@ -63,7 +63,15 @@ point à vérifier après un `git pull`.
 | 18 | `migration_credit_fns.sql` | `record_credit_sale()`, `pay_customer_debt()`, `get_customer_debts()` |
 | 18b | `migration_sales_summary.sql` | `get_sales_summary()`, `get_top_products()` — totaux et top produits d'une période sans télécharger les ventes |
 | 19 | `migration_security.sql` | RLS sur `rate_limits`, verrou de `organizations.plan`, index unique de `subscriptions`, policies de `business_members`, réparation de la suppression de compte (jetons `auth.users`, FK différées), **retrait de la clé `anon`** (section 7) |
-| 19b | `migration_ca_caisse.sql` | **Base de caisse** : `credit_payments.sale_id` + `gesture_id`, `get_sales_summary()` en `SUM(amount_received)`, `pay_customer_debt()` ventilé par vente, `get_customer_debts()` en `COUNT(DISTINCT gesture_id)` |
+| 20 | `migration_webhook_claim.sql` | `claim_webhook_event()` — idempotence atomique du webhook Stripe |
+| 21 | `migration_fk_indexes.sql` | Index couvrant les FK `sale_items.product_id` et `stock_logs.user_id` |
+| 22 | `migration_domain.sql` | `organizations.domain` — paramètre d'affichage, jamais un privilège |
+| 23 | `migration_restaurant_tables.sql` | Salle et commande ouverte : `restaurant_tables`, `restaurant_orders` |
+| 24 | `migration_table_checkout.sql` | Clôture d'addition : `close_table_order()`, la commande entre dans `sales` |
+| 25 | `migration_recipes.sql` | `recipe_ingredients`, `recipe_costs` — coût de matière par plat |
+| 26 | `migration_restaurant_finitions.sql` | Modificateurs, plat du jour, pourboire, réservations |
+| 27 | `migration_menu_days.sql` | Carte par jour de la semaine (`is_daily_special`) |
+| 28 | `migration_ca_caisse.sql` | **Base de caisse** : `credit_payments.sale_id` + `gesture_id`, `get_sales_summary()` en `SUM(amount_received)`, `pay_customer_debt()` ventilé par vente, `get_customer_debts()` en `COUNT(DISTINCT gesture_id)` |
 
 **Le chiffre d'affaires est en base de caisse, partout.** Une seule
 définition : la somme de ce qui est réellement rentré (`sales.amount_received`),
@@ -92,7 +100,7 @@ fonctions sont re-grantées à `anon` — `get_business_owner_id()` et
 de l'appelant, et qu'un refus y valait « permission denied » au lieu de zéro
 ligne. Exécuter `npm run test:db` (section 22) avant d'y toucher.
 
-`APPLY_MIGRATIONS.sql` concatène les 23 migrations pour partir d'une base
+`APPLY_MIGRATIONS.sql` concatène les 31 migrations (plus `schema.sql`) pour partir d'une base
 vide. Sur une base existante, appliquer la seule migration concernée.
 
 `migration_partial_payment.sql` crée `sales.amount_received`, donc elle doit
@@ -122,7 +130,7 @@ fonction après avoir tout rejoué, et vérifie que `create_sale()` est bien rev
 `migration_profitability.sql` (colonne `list_price`) et suivre
 `migration_price_override.sql` (dont elle reprend le prix négocié).
 
-**Les 23 migrations sont rejouables** : `IF NOT EXISTS` sur les tables et les
+**Les 31 migrations sont rejouables** : `IF NOT EXISTS` sur les tables et les
 index, `DROP … IF EXISTS` avant chaque policy, chaque trigger et chaque fonction
 dont la signature a changé.
 
@@ -573,9 +581,12 @@ commerçant en a besoin. Elle est signalée : avertissement en caisse,
 `create_sale()`.
 
 Refusés : prix nul, négatif ou non numérique (une vente gratuite n'a pas de
-sens marchand), et deux prix différents pour le même article dans le même panier
-— ambigu, et prendre le minimum ou le maximum permettrait de fabriquer un panier
-truqué.
+sens marchand). Deux prix différents pour le même article sont en revanche
+**acceptés** — c'est le cas légitime du restaurant (un plat commandé deux
+fois avec deux options) : l'agrégation se fait par (produit, prix), deux
+lignes au même prix fusionnent, deux prix différents restent deux lignes.
+Chaque ligne garde son prix convenu et son `list_price`, donc la remise
+reste traçable ligne par ligne.
 
 `get_product_profitability()` expose `avg_sold_price` (prix moyen réellement
 encaissé), `discount_given` (total concédé) et `units_sold_at_loss`.
