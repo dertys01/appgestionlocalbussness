@@ -1060,7 +1060,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                         value={item.quantity}
                         onChange={(e) => setLineQty(item.product.id, e.target.value)}
                         aria-label={`Quantité pour ${item.product.name}`}
-                        className="w-14 rounded-lg border border-slate-200 px-1.5 py-0.5 text-sm font-bold text-center focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        className="w-16 rounded-lg border border-slate-200 px-1.5 py-1 text-sm font-bold text-center focus:outline-none focus:ring-2 focus:ring-indigo-500"
                       />
                       <span className="text-[11px] text-slate-500 w-8">
                         {item.product.unit ?? 'pce'}
@@ -1077,27 +1077,30 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
 
                   {/* Prix négocié : tapotable directement, sans menu. Un
                       marchandage se fait en trois secondes, un écran
-                      supplémentaire le ferait abandonner. */}
+                      supplémentaire le ferait abandonner.
+                      Le prix catalogue est un FRÈRE du champ, jamais un
+                      overlay par-dessus : « pr-14 » + span absolu recouvrait
+                      la saisie dès que le montant dépassait 4 chiffres —
+                      deux textes l'un sur l'autre, illisible. */}
                   <div className="flex items-center gap-2">
-                    <div className="relative flex-1">
-                      <input
-                        type="number"
-                        inputMode="decimal"
-                        min="0"
-                        step="1"
-                        value={item.unitPrice ?? ''}
-                        onChange={(e) => setLinePrice(item.product.id, e.target.value)}
-                        placeholder={String(item.product.price_sell)}
-                        aria-label={`Prix unitaire négocié pour ${item.product.name}`}
-                        className="w-full rounded-lg border border-slate-200 px-2 py-1 text-xs pr-14 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                      />
-                      <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[11px] text-slate-500 pointer-events-none">
-                        {formatCFA(item.product.price_sell)}
-                      </span>
-                    </div>
+                    <input
+                      type="number"
+                      inputMode="decimal"
+                      min="0"
+                      step="1"
+                      value={item.unitPrice ?? ''}
+                      onChange={(e) => setLinePrice(item.product.id, e.target.value)}
+                      placeholder={String(item.product.price_sell)}
+                      aria-label={`Prix unitaire négocié pour ${item.product.name}`}
+                      className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+
+                    <span className="shrink-0 text-[11px] tabular-nums text-slate-500">
+                      {formatCFA(item.product.price_sell)}
+                    </span>
 
                     {remise > 0 && (
-                      <span className="text-[11px] font-medium text-amber-700 whitespace-nowrap">
+                      <span className="shrink-0 text-[11px] font-medium text-amber-700 whitespace-nowrap">
                         −{formatCFA(remise * item.quantity)}
                       </span>
                     )}
@@ -1125,24 +1128,46 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         )}
 
         {/* Nom + téléphone client. Facultatif en espèces et MoMo, obligatoire
-            en crédit : sans numéro, la dette n'est rattachable à personne. */}
-        <div className="border-t border-slate-200 pt-3 space-y-2">
-          <Input
-            aria-label="Nom du client"
-            placeholder={creditNeedsPhone ? 'Nom du client *' : 'Nom du client (optionnel)'}
-            value={clientName}
-            onChange={(e) => setClientName(e.target.value)}
-            className={`text-sm ${creditNeedsPhone ? 'border-amber-400' : ''}`}
-          />
-          <Input
-            type="tel"
-            inputMode="tel"
-            aria-label="Téléphone du client"
-            placeholder={creditNeedsPhone ? 'Téléphone du client *' : 'Téléphone WhatsApp (optionnel)'}
-            value={clientPhone}
-            onChange={(e) => setClientPhone(e.target.value)}
-            className={`text-sm ${creditNeedsPhone ? 'border-amber-400' : ''}`}
-          />
+            en crédit : sans numéro, la dette n'est rattachable à personne.
+            Libellés VISIBLES au-dessus des champs et non en placeholder :
+            « Téléphone Wht… » tronqué dans une case étroite ne disait rien,
+            et disparaissait dès qu'on tapait. Champs en h-10 : la case par
+            défaut (h-8) était trop basse pour un pouce. */}
+        <div className="border-t border-slate-200 pt-3 space-y-2.5">
+          <div className="space-y-1">
+            <label htmlFor="pos-client-name" className="text-xs font-medium text-slate-500">
+              Nom du client{' '}
+              {creditNeedsPhone
+                ? <span className="text-amber-600">*</span>
+                : <span className="font-normal text-slate-400">(optionnel)</span>}
+            </label>
+            <Input
+              id="pos-client-name"
+              aria-label="Nom du client"
+              placeholder="Ex. Koffi Adjovi"
+              value={clientName}
+              onChange={(e) => setClientName(e.target.value)}
+              className={`h-10 ${creditNeedsPhone ? 'border-amber-400' : ''}`}
+            />
+          </div>
+          <div className="space-y-1">
+            <label htmlFor="pos-client-phone" className="text-xs font-medium text-slate-500">
+              Téléphone WhatsApp{' '}
+              {creditNeedsPhone
+                ? <span className="text-amber-600">*</span>
+                : <span className="font-normal text-slate-400">(optionnel)</span>}
+            </label>
+            <Input
+              id="pos-client-phone"
+              type="tel"
+              inputMode="tel"
+              aria-label="Téléphone du client"
+              placeholder="Ex. +229 97 00 00 00"
+              value={clientPhone}
+              onChange={(e) => setClientPhone(e.target.value)}
+              className={`h-10 ${creditNeedsPhone ? 'border-amber-400' : ''}`}
+            />
+          </div>
           {creditNeedsPhone && (
             <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
               Une vente à crédit exige le nom et le téléphone du client, sans quoi
@@ -1180,39 +1205,42 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
 
           {/* Mode de paiement — trois colonnes : le crédit est aussi fréquent
               qu'un paiement normal dans une boutique de quartier, et
-              l'enterrer dans un menu le ferait oublier. */}
+              l'enterrer dans un menu le ferait oublier.
+              min-w-0 + whitespace-nowrap : les colonnes de grid-cols-3 sont
+              minmax(0, 1fr), donc le libellé pouvait déborder de sa case et
+              se mêler au bouton voisin — le côté « pas pro » justement. */}
           <div className="grid grid-cols-3 gap-2">
             <button
               onClick={() => setPaymentMethod('cash')}
-              className={`flex flex-col items-center justify-center gap-1 rounded-lg border py-2 text-xs font-medium transition-colors ${
+              className={`flex min-w-0 flex-col items-center justify-center gap-1 whitespace-nowrap rounded-lg border px-1 py-2.5 text-xs font-medium transition-colors ${
                 paymentMethod === 'cash'
                   ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
                   : 'border-slate-200 text-slate-500 hover:bg-slate-50'
               }`}
             >
-              <CreditCard className="h-4 w-4" />
+              <CreditCard className="h-4 w-4 shrink-0" />
               Espèces
             </button>
             <button
               onClick={() => setPaymentMethod('momo')}
-              className={`flex flex-col items-center justify-center gap-1 rounded-lg border py-2 text-xs font-medium transition-colors ${
+              className={`flex min-w-0 flex-col items-center justify-center gap-1 whitespace-nowrap rounded-lg border px-1 py-2.5 text-xs font-medium transition-colors ${
                 paymentMethod === 'momo'
                   ? 'border-emerald-500 bg-emerald-50 text-emerald-700'
                   : 'border-slate-200 text-slate-500 hover:bg-slate-50'
               }`}
             >
-              <Smartphone className="h-4 w-4" />
+              <Smartphone className="h-4 w-4 shrink-0" />
               MoMo
             </button>
             <button
               onClick={() => setPaymentMethod('credit')}
-              className={`flex flex-col items-center justify-center gap-1 rounded-lg border py-2 text-xs font-medium transition-colors ${
+              className={`flex min-w-0 flex-col items-center justify-center gap-1 whitespace-nowrap rounded-lg border px-1 py-2.5 text-xs font-medium transition-colors ${
                 paymentMethod === 'credit'
                   ? 'border-amber-500 bg-amber-50 text-amber-700'
                   : 'border-slate-200 text-slate-500 hover:bg-slate-50'
               }`}
             >
-              <Handshake className="h-4 w-4" />
+              <Handshake className="h-4 w-4 shrink-0" />
               Crédit
             </button>
           </div>
@@ -1236,7 +1264,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                   value={amountGiven}
                   onChange={(e) => setAmountGiven(e.target.value)}
                   min={0}
-                  className="text-sm"
+                  className="h-10"
                 />
               </div>
               {donne >= total && total > 0 && (
@@ -1285,10 +1313,11 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
               geste simple, qui est majoritaire. */}
           {paymentMethod === 'credit' && (
             <div className="space-y-2">
-              <label className="text-xs font-medium text-slate-500">
+              <label htmlFor="pos-advance" className="text-xs font-medium text-slate-500">
                 Acompte versé maintenant (FCFA)
               </label>
               <Input
+                id="pos-advance"
                 type="number"
                 inputMode="decimal"
                 step="any"
@@ -1296,7 +1325,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                 placeholder="Rien — tout à crédit"
                 value={advance}
                 onChange={(e) => setAdvance(e.target.value)}
-                className={`text-sm ${advanceTooHigh ? 'border-red-400' : ''}`}
+                className={`h-10 ${advanceTooHigh ? 'border-red-400' : ''}`}
               />
               {advanceTooHigh ? (
                 <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-2.5 py-1.5">
