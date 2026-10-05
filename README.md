@@ -75,8 +75,8 @@ point à vérifier après un `git pull`.
 
 **Le chiffre d'affaires est en base de caisse, partout.** Une seule
 définition : la somme de ce qui est réellement rentré (`sales.amount_received`),
-jamais de ce qui a été facturé (`total_amount`). Les trois écrans qui affichent un
-chiffre — Historique des ventes, Rapports → Ventes, Rentabilité — lisent la même
+jamais de ce qui a été facturé (`total_amount`). Les quatre écrans qui affichent un
+chiffre — Journal du jour, Historique des ventes, Rapports → Ventes, Rentabilité — lisent la même
 fonction, donc ils ne peuvent pas diverger. C'est aussi ce que promet l'écran
 Dettes au commerçant : *« une vente à crédit n'entre pas dans le chiffre
 d'affaires : elle y entre quand vous encaissez »*.

@@ -18,6 +18,7 @@ import { LoginPage } from '@/components/auth/LoginPage';
 import { InventoryTab } from '@/components/inventory/InventoryTab';
 import { POSModule } from '@/components/pos/POSModule';
 import { SalesHistory } from '@/components/sales/SalesHistory';
+import { DailyJournal } from '@/components/sales/DailyJournal';
 import { DebtsModule } from '@/components/debts/DebtsModule';
 import { ReportsTab } from '@/components/reports/ReportsTab';
 import { ForecastModule } from '@/components/forecast/ForecastModule';
@@ -44,6 +45,9 @@ export default function HomePage() {
   const { supabase, user, loading, isEmployee, canManageProducts, org, plan, orgError } = useSupabase();
   const [tab, setTab] = useState<Tab>('dashboard');
   const [reportView, setReportView] = useState<ReportView>('sales');
+  // L'onglet Ventes s'ouvre sur le journal du jour (ce que le commerçant veut
+  // voir en fermant la boutique) ; l'historique complet reste à un clic.
+  const [salesView, setSalesView] = useState<'journal' | 'historique'>('journal');
   const { products, loadingProducts, productsError, fetchProducts } = useProducts();
   const [showScanner, setShowScanner] = useState(false);
   const [showInventoryCount, setShowInventoryCount] = useState(false);
@@ -247,8 +251,30 @@ export default function HomePage() {
 
           {tab === 'sales' && (
             <div className="space-y-4">
-              <h2 className="text-xl font-bold text-slate-800">Historique des ventes</h2>
-              <SalesHistory />
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-bold text-slate-800">
+                  {salesView === 'journal' ? 'Journal du jour' : 'Historique des ventes'}
+                </h2>
+                <div className="ml-auto flex rounded-lg bg-slate-100 p-0.5 text-sm">
+                  <button
+                    onClick={() => setSalesView('journal')}
+                    className={`px-3 py-1 rounded-md font-medium transition-colors ${
+                      salesView === 'journal' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'
+                    }`}
+                  >
+                    Journal
+                  </button>
+                  <button
+                    onClick={() => setSalesView('historique')}
+                    className={`px-3 py-1 rounded-md font-medium transition-colors ${
+                      salesView === 'historique' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'
+                    }`}
+                  >
+                    Historique
+                  </button>
+                </div>
+              </div>
+              {salesView === 'journal' ? <DailyJournal /> : <SalesHistory />}
             </div>
           )}
 
