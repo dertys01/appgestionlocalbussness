@@ -1,0 +1,96 @@
+-- ============================================================================
+--  AUDIT PROD ↔ DÉPÔT — GÉNÉRÉ par scripts/gen-audit-prod.mjs (ne pas éditer).
+--
+--  À exécuter sur la base cible (Supabase SQL Editor → New query, ou psql).
+--  Chaque ligne doit dire OK :
+--    OK           = identique au dépôt, byte à byte
+--    FORMAT       = même logique, commentaires/espaces seuls diffèrent (sans
+--                   risque comportemental ; re-synchronisable par réapplication)
+--    DIVERGENCE   = la base ne fait pas ce que le dépôt dit (à corriger)
+--    MANQUANTE    = fonction absente de la base
+--    EN PLUS      = fonction présente en base mais pas dans le dépôt
+--
+--  42 fonctions · ordre des sections = APPLY_MIGRATIONS.sql
+-- ============================================================================
+WITH expect(sig, brut_md5, code_md5) AS (
+  VALUES
+    ('add_recipe_ingredient(uuid,uuid,numeric)', 'e4c0dad4130d66ec3a640b89a0ce5bba', '8337ef1fe6a90cc392cd66df125e56fc'),
+    ('archive_product(uuid)', '610b13ef4713663065496c91f73a8786', '9dd0a32e27855218c7983ae482f6ba37'),
+    ('beta_claim_slot()', 'e004c9eaec49a5b43916a2adba0fe4ad', 'd0b3e0b43bb0d5f7f8d4a6ccc2b01c1e'),
+    ('beta_record_access()', 'e8b542d4667113dd77a3605542fcd9dd', 'e451433ec91bd9bfe216e88e54054ae8'),
+    ('beta_status()', 'a5cc743e43988495523970c1f56252be', 'a6aa4fbce06490cd79aed2131a51154c'),
+    ('bump_rate_limit(text,integer,integer)', '8610c404663063367697129f896b24a9', '4dba3acf3685f282fd7b22c011350327'),
+    ('business_members_reject_owner_member()', '2cbeac4c9480bd23a8d5ae26669c4036', 'cb4202f1705d555b74cbb106ecf08409'),
+    ('can_manage_products()', '7c1b153eba2bc02e61338c6b4becb01e', '475b14d5a81518d7f37aa3849484189d'),
+    ('check_product_limit()', 'c425ef7076490e9b8cc1e9eeb089ddd0', 'b16a2309f37c3ebf6b5d2196c68d67fc'),
+    ('check_product_supplier_tenant()', 'a67a791a03cdd317a211be3c870759e6', '03adf983a5186d2d128430f334e6237f'),
+    ('claim_webhook_event(text,text,text)', '40a1a3cbee1bf96bae5f60debca639fa', '0c164db9340e69ec622cd45bae135cb4'),
+    ('close_beta_program()', '28a8854e2d5e4e0ebf74288bfa0a0cae', '5a82cf9f604a045ca4f163abc3cd1650'),
+    ('close_table_order(uuid,text,numeric,integer,text,text,numeric)', '0203a702c3229e4d060d929cfb7e1285', '3954e9994a8ec5e873973912f02ebd0a'),
+    ('create_sale(jsonb,text,text,text)', 'da6e0c2f58ec4527db3bff1e630fb9b4', '8a6f6bf553a616318c32fb26b8f05bd0'),
+    ('current_org_plan()', '85e3ffea01aa25bdc1b405db6e2f8836', '8354e3aaa7ae02d48d1ae89a11c33bb2'),
+    ('fill_amount_received()', '35e03e2e5bc95e91ad3d43a5e0c5e8e2', '5e1305ee23c60dc867e4b46cd49f9219'),
+    ('freeze_sale_item_cost()', '51ea5fb2804004f581857f43c0702706', '9c10ad43d8f21aed0a3b77accd71c0da'),
+    ('get_business_owner_id()', 'f1a35c5ce9ed572c1a3313ba0be69fb7', '6cd22294040166c9e6714901940420d2'),
+    ('get_cash_flow(date,date)', 'd10976d2751a09b723cf67184725b566', '35094efd447bccb61360005a3876c9ca'),
+    ('get_customer_debts()', 'c3d998d63acfc08888cc6ede9c230b94', 'c2926d43fc98290f23da39c1d7bab549'),
+    ('get_product_profitability()', '3c326bb6148f64e6b04a147c9af1de34', '5fcbcc2842acd55de605b58ab8f4e1f1'),
+    ('get_sales_summary(date,date,text)', 'b20ea71234701f0c5cf9c570040027b2', '874d04e131374a05e6e53a23fa2a78bf'),
+    ('get_top_products(date,date,text,integer)', '03bcc22bb85b632d90912b919ad92c0d', '7487786d4255660fe52e807dc79f60b1'),
+    ('get_units_sold_since(integer)', '8f74000cae984ddf44cf1a6a78ffe3e2', '6b45edfae71cd3b4be3816ad3c959550'),
+    ('normalize_phone(text)', '6a691216268ac03ba30a1dab6da138cc', '45978e9a1d57ea9c68d8c97e76076c8f'),
+    ('organizations_reject_plan_change()', '9ee6f5d51d38737a7dc107f3f92caf88', 'feb8216cb154d6953576fe38198dc44a'),
+    ('pay_customer_debt(uuid,numeric,text,text)', 'c2464b9cb0a7397a2a09d56032533efe', '1c514fcfadaf0642d540b8318727872c'),
+    ('product_cost(uuid,integer)', 'd33441e87e3ffd248893a7024af5ff0e', '0f48633b1895a064c9aaa646118ade47'),
+    ('purge_accepted_invitations(integer)', 'f52a5d7351595f4fd16e1bbd9a8d94cf', '25e4947623f1b759a464d8d68b77d4ad'),
+    ('purge_rate_limits()', '4b7a9b9d63f02a306a83ab8f5e29aac7', '809045c7d82f9d32e142716d707faf44'),
+    ('record_credit_sale(jsonb,text,text,text,numeric,text)', 'acda71063b51433c825ec6a2ee164349', 'ba220cfe297c4653d6b046cdf8772ff3'),
+    ('redeem_invitation(text,uuid,text)', '62597d5a8ef7b127a90c4354397b735e', '152bbebdabb4071781f1003954618caf'),
+    ('require_feature(text)', '8e95a1aba9ea44b186021f6c44cad186', '58f6b3d5be92afdc51ce430688c49882'),
+    ('restore_product(uuid)', 'a31eb65d699703f77adefa8827201769', '5a50f0cf4574e3016236455cd81ffa27'),
+    ('revoke_all_beta()', 'bef8042ef6262d0e9e84f43c66c76af6', '3e7a05ccee825530eba9ddf348668145'),
+    ('sale_items_consume_ingredients()', 'bbdfd78bf377342e2f7632d127d4caa2', '760ec933a9325c49396b08fb2bf08381'),
+    ('sale_items_set_unit_cost()', '98677a4e07d5385423a01dab4a7e57de', '8784429620953e858e6fa37cc8c2e34b'),
+    ('seed_expense_categories()', '08bc2bda2ee1a6f10c270b8388a23526', '1549868c21e25fd23812c0e698168e6f'),
+    ('send_order_items(uuid)', '64dc6cd05843ea786f32e8579966c76f', '9bd93f17cce950d628f5911fc10de731'),
+    ('set_beta_slots(integer)', '253f7aa9e61ee16c11f41570f2704ef3', '6ac8fd92fdacfa02c138eccc63564da1'),
+    ('update_org_timestamp()', '9baf00d43cdeb2cd0e55c1de045be21b', 'f019c2a85daf0ed4058b77a7a14664a9'),
+    ('update_updated_at()', 'da5ac28a58c8b4bb30209bf0d3d7082c', '8d0d99f0f246f51e6e468e02e03e428b')
+),
+src AS (
+  SELECT p.oid::regprocedure::text AS sig, p.prosrc
+  FROM pg_proc p
+  WHERE p.pronamespace = 'public'::regnamespace
+),
+lines AS (
+  SELECT s.sig,
+         btrim(regexp_replace(btrim(regexp_replace(l, '[ \t]+', ' ', 'g')), '[ \t]+--.*$', '')) AS y,
+         ord
+  FROM src s, LATERAL regexp_split_to_table(s.prosrc, E'\n') WITH ORDINALITY t(l, ord)
+),
+code AS (
+  SELECT sig, md5(string_agg(y, ' ' ORDER BY ord)) AS code_md5
+  FROM lines
+  WHERE y <> '' AND y !~ '^--'
+  GROUP BY sig
+),
+actual AS (
+  SELECT s.sig, md5(s.prosrc) AS brut_md5, c.code_md5
+  FROM src s LEFT JOIN code c USING (sig)
+)
+SELECT COALESCE(e.sig, a.sig) AS signature,
+       CASE
+         WHEN a.sig IS NULL THEN 'MANQUANTE EN BASE'
+         WHEN e.sig IS NULL THEN 'EN PLUS (pas dans le dépôt)'
+         WHEN a.code_md5 IS DISTINCT FROM e.code_md5 THEN '★ DIVERGENCE DE LOGIQUE ★'
+         WHEN a.brut_md5 IS DISTINCT FROM e.brut_md5 THEN 'FORMAT SEULEMENT'
+         ELSE 'OK'
+       END AS verdict
+FROM expect e
+FULL OUTER JOIN actual a ON a.sig = e.sig
+ORDER BY CASE
+           WHEN a.sig IS NULL OR e.sig IS NULL OR a.code_md5 IS DISTINCT FROM e.code_md5 THEN 0
+           WHEN a.brut_md5 IS DISTINCT FROM e.brut_md5 THEN 1
+           ELSE 2
+         END,
+         COALESCE(e.sig, a.sig) COLLATE "C";
