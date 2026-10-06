@@ -43,3 +43,6 @@ next-env.d.ts
 
 # données commerciales locales (prix d'achat, marges) — jamais dans un dépôt public
 /import-local/
+
+# identifiants des comptes de test de qa/ — jamais versionnés
+/qa/*.local.md
