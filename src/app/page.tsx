@@ -198,7 +198,14 @@ export default function HomePage() {
       {/* ── Contenu principal ──
           ml-0 sous lg : le rail de 64 px a disparu au profit du tiroir. pt-14
           réserve la place du bouton flottant. */}
-      <main className="flex-1 lg:ml-56 min-h-screen bg-slate-50 pt-14 lg:pt-0">
+      {/* min-w-0 : sans elle, <main> (item flex de <body>) refuse de descendre
+          sous la largeur MINIMUM de son contenu. Une seule ligne de caisse à
+          rallonge — un nom de produit de 90 caractères en `truncate` suffit —
+          et le document débordait de 270 px sur un écran de 1280 : le panneau
+          panier, à droite, sortait de l'écran. min-w-0 rend au navigateur la
+          permission de rétrécir la colonne, et `truncate` fait enfin son
+          travail. */}
+      <main className="flex-1 min-w-0 lg:ml-56 min-h-screen bg-slate-50 pt-14 lg:pt-0">
         {/* max-w-none sur la caisse : catalogue + panier (320 px) réclament
             toute la largeur. Borné à 5xl comme les autres onglets, la caisse
             affichait de larges marges mortes sur grand écran et le panier

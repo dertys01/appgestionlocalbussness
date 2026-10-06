@@ -29,8 +29,12 @@ interface ReportsTabProps {
 export function ReportsTab({ view, onView }: ReportsTabProps) {
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <h2 className="text-xl font-bold text-slate-800">Rapports & Analyses</h2>
+      {/* flex-wrap : à 320 px, les trois onglets (« Ventes », « Rentabilité »,
+          « Charges ») tenant sur une rangée non-wrap débordaient de 44 px et
+          « Charges » sortait de l'écran. Le titre descend d'une ligne plutôt
+          que de couper le sélecteur de vue. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-xl font-bold text-slate-800">Rapports &amp; Analyses</h2>
         <div className="ml-auto flex rounded-lg bg-slate-100 p-0.5 text-sm">
           <button
             onClick={() => onView('sales')}

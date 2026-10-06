@@ -69,6 +69,12 @@ const ORDER = [
   //precéder le rejouage de DERNIERE_VERSION, qui réinstalle l'ancienne
   // version de get_sales_summary() via migration_sales_summary.sql.
   'migration_ca_caisse.sql',
+  // Facturation : une boutique dont le compteur est désaligné doit pouvoir
+  // vendre. Elle redéfinit create_sale() en entier, donc DERNIÈRE.
+  'migration_facture_sequentielle.sql',
+  // Équipe : gestion des membres sans clé service role. Ne dépend que des
+  // fonctions de migration_team.sql / migration_security.sql.
+  'migration_equipe_sans_service_role.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -232,6 +238,15 @@ const DERNIERE_VERSION = [
   // En DERNIÈRE position, comme la règle du dépôt l'impose.
   'migration_security.sql',
   'migration_ca_caisse.sql',
+  // Facturation : redéfinit create_sale() en entier, donc elle ferme la
+  // liste. Sans cela la suite testerait la version antérieure — celle qui
+  // bloque une boutique dont le compteur est désaligné — et les tests 29*
+  // passeraient à vide.
+  'migration_facture_sequentielle.sql',
+  // Équipe : les deux fonctions de gestion de membre doivent être les
+  // dernières réinstallées, sinon la rejouabilité laisserait la version
+  // d'avant — qui ne vérifie pas l'appelant.
+  'migration_equipe_sans_service_role.sql',
 ];
 
 console.log(`\n▸ Rejouabilité (${REPLAYABLE.length} migrations incrémentales)`);
@@ -276,6 +291,7 @@ console.log(`\n▸ Rejouabilité (${REPLAYABLE.length} migrations incrémentales
 // ─── 2. Jeu de données de test ──────────────────────────────
 console.log('\n▸ Jeu de données');
 const PATRON = '11111111-1111-1111-1111-111111111111';
+const AUTRE_PATRON = '11111111-1111-1111-1111-111111111199';
 const EMPLOYE = '22222222-2222-2222-2222-222222222222';
 
 // Le programme bêta est FERMÉ pendant toute la suite, sauf sa section dédiée.
@@ -1005,18 +1021,72 @@ await q(`INSERT INTO employee_invitations (owner_id, email, token, role)
   check('8t. un client authentifié ne peut PAS appeler redeem_invitation', denied);
 }
 
-// Purge : seules les invitations acceptées et anciennes sont supprimées.
+// Purge : seules les invitations acceptées et anciennes de CETTE boutique sont
+// supprimées.
+//
+// La fonction a changé de signature : elle prend le propriétaire et refuse tout
+// identifiant qui n'est pas celui de l'appelant. Une version globale, exécutable
+// par un client, aurait laissé n'importe quel utilisateur authentifié vider les
+// invitations de toutes les boutiques — voir migration_equipe_sans_service_role.
 {
   const before = await count(`SELECT count(*) FROM employee_invitations`);
   await q(`UPDATE employee_invitations
            SET accepted_at = now() - interval '30 days'
            WHERE token='${TOKEN}'`);
-  const purged = (await q(`SELECT purge_accepted_invitations(7)`)).rows[0].purge_accepted_invitations;
-  const after = await count(`SELECT count(*) FROM employee_invitations`);
-  check('8u. purge supprime les invitations acceptées et anciennes', Number(purged) === 1,
+
+  await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+  await e('SET ROLE authenticated');
+  let purged = -1;
+  try {
+    purged = Number((await q(
+      `SELECT purge_accepted_invitations('${PATRON}', 7)`
+    )).rows[0].purge_accepted_invitations);
+  } catch {
+    purged = -1;
+  }
+  await e('RESET ROLE');
+  check('8u. purge supprime les invitations acceptées et anciennes', purged === 1,
     `${purged} purgée(s)`);
+
+  const after = await count(`SELECT count(*) FROM employee_invitations`);
   check('8v. la purge épargne les invitations en attente', after === before - 1,
     `${before} → ${after}`);
+
+  // Le contrôle du propriétaire est le seul qui tienne : la fonction est
+  // SECURITY DEFINER, donc la RLS ne filtre rien pour elle.
+  await q(`INSERT INTO auth.users (id, email) VALUES ('${AUTRE_PATRON}', 'purge-tiers@test.local')`);
+  // Le jeton est calculé ici et non dans le gabarit : `\${...}` est la seule
+  // interpolation reconnue dans un gabarit, donc 'f'.repeat(48) y partait
+  // littéralement et PostgreSQL signalait une erreur de syntaxe sur le point.
+  const jetonTiers = 'f'.repeat(48);
+  await q(`INSERT INTO employee_invitations (owner_id, email, role, token, expires_at, accepted_at)
+    VALUES ('${AUTRE_PATRON}', 'tiers@test.local', 'employee', '${jetonTiers}',
+            now() - interval '1 day', now() - interval '30 days')`);
+
+  await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+  await e('SET ROLE authenticated');
+  let refuse = false;
+  try {
+    await q(`SELECT purge_accepted_invitations('${AUTRE_PATRON}', 7)`);
+  } catch { refuse = true; }
+  await e('RESET ROLE');
+  check('8w. un patron ne purge pas les invitations d\'une autre boutique', refuse);
+
+  const tiers = await count(
+    `SELECT count(*) FROM employee_invitations WHERE owner_id='${AUTRE_PATRON}'`
+  );
+  check('8x. les invitations du tiers sont intactes', tiers === 1, `${tiers} ligne(s)`);
+
+  // Et l'autre patron purge bien les siennes : le refus vient du contrôle, pas
+  // d'une fonction devenue inerte.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${AUTRE_PATRON}', false)`);
+  await e('SET ROLE authenticated');
+  const tiersPurges = Number((await q(
+    `SELECT purge_accepted_invitations('${AUTRE_PATRON}', 7)`
+  )).rows[0].purge_accepted_invitations);
+  await e('RESET ROLE');
+  check('8y. le tiers purge ses propres invitations', tiersPurges === 1,
+    `${tiersPurges} purgée(s)`);
 }
 
 // ═══ 9. Correctif marge : lines sans coût figé ═══════════
@@ -4114,6 +4184,342 @@ const d2 = (await q(`SELECT id::text d FROM customer_debts
      VALUES ('${d2}', '${CA}', 100, current_date, 'cash')`,
     false, CAISSER2);
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// Facturation séquentielle — une boutique bloquée ne peut plus vendre
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Le scénario reproduit ici est le pire de l'application : le compteur de
+// factures est désaligné, `create_sale()` se prend une violation d'unicité, et
+// le commerçant ne peut plus encaisser QUOI QUE CE SOIT. Aucune quantité, aucun
+// client, aucun montant ne débloque la boutique.
+//
+// Chaque test réfute le mécanisme de blocage, pas seulement le symptôme.
+console.log('\n▸ Facturation : compteur désaligné');
+
+const FB = 'ffffffff-0000-0000-0000-0000000000fb';
+const FB2 = 'ffffffff-0000-0000-0000-000000000fb2';
+const FP1 = 'ffffffff-0000-0000-0000-0000000000f1';
+const FP2 = 'ffffffff-0000-0000-0000-0000000000f2';
+const AN = new Date().getFullYear();
+
+{
+  await q(`INSERT INTO auth.users (id, email) VALUES ('${FB}', 'facture@test.local')`);
+  await q(`INSERT INTO organizations (id, name, slug, plan, timezone)
+    VALUES ('${FB}', 'Boutique facturée', 'boutique-facturee', 'pro', 'Africa/Porto-Novo')`);
+  await q(`INSERT INTO products (id, user_id, name, price_sell, price_buy, stock_qty)
+    VALUES ('${FP1}', '${FB}', 'Article facturé', 2000, 900, 100)`);
+  // La boutique courante doit être FB : create_sale() ne voit que le tenant
+  // de l'appelant, et refuserait un produit qui n'est pas le sien.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${FB}', false)`);
+}
+
+const vendreFB = async (qte = 1) => {
+  const r = await q(
+    `SELECT create_sale('[{"product_id":"${FP1}","quantity":${qte}}]'::jsonb, 'cash')`
+  );
+  return r.rows[0].create_sale;
+};
+const compteurFB = async () =>
+  Number((await q(`SELECT invoice_counter FROM organizations WHERE id='${FB}'`)).rows[0].invoice_counter);
+
+// Une facture saisie à la main, hors de create_sale() : c'est ainsi qu'une
+// boutique se désaligne (rattrapage après incident, restauration, bascule de
+// plan). Le compteur reste à 0, la facture portera le 00005.
+{
+  await q(`INSERT INTO sales (user_id, total_amount, payment_method, invoice_number, amount_received)
+    VALUES ('${FB}', 2000, 'cash', 'FAC-${AN}-00005', 2000)`);
+
+  const vente = await vendreFB();
+  check('29a. une vente aboutit malgré une facture saisie à la main',
+    typeof vente?.invoice_number === 'string', JSON.stringify(vente));
+  check('29b. le numéro évite la facture manuelle',
+    vente?.invoice_number === `FAC-${AN}-00006`, vente?.invoice_number);
+  check('29c. le compteur est remis d\'après la vente',
+    await compteurFB() === 6, `compteur ${await compteurFB()}`);
+}
+
+// Le cas le plus fréquent : le compteur est en RETARD de plusieurs numéros.
+{
+  await q(`UPDATE organizations SET invoice_counter = 1 WHERE id='${FB}'`);
+
+  const vente = await vendreFB();
+  check('29d. une vente aboutit avec le compteur en retard',
+    typeof vente?.invoice_number === 'string', JSON.stringify(vente));
+  check('29e. le numéro reprend après le plus haut déjà émis',
+    vente?.invoice_number === `FAC-${AN}-00007`, vente?.invoice_number);
+  check('29f. le compteur est rattrapé',
+    await compteurFB() === 7, `compteur ${await compteurFB()}`);
+}
+
+// Le compteur en avance (saut volontaire d'une série) doit être respecté :
+// la réparation ne recule JAMAIS un compteur.
+{
+  await q(`UPDATE organizations SET invoice_counter = 50 WHERE id='${FB}'`);
+  const vente = await vendreFB();
+  check('29g. un compteur volontairement avancé n\'est pas reculé',
+    vente?.invoice_number === `FAC-${AN}-00051`, vente?.invoice_number);
+}
+
+// Séquentielité continue : aucune vente ne saute de numéro, sur une série.
+{
+  const numeros = [];
+  for (let i = 0; i < 5; i++) numeros.push((await vendreFB()).invoice_number);
+  const attendus = [52, 53, 54, 55, 56].map((n) => `FAC-${AN}-${String(n).padStart(5, '0')}`);
+  check('29h. la numérotation reste continue sur cinq ventes',
+    JSON.stringify(numeros) === JSON.stringify(attendus), numeros.join(', '));
+}
+
+// Une facture au bon gabarit mais hors suite ne doit pas non plus bloquer.
+{
+  await q(`INSERT INTO sales (user_id, total_amount, payment_method, invoice_number, amount_received)
+    VALUES ('${FB}', 2000, 'cash', 'FAC-${AN}-00060', 2000)`);
+  await q(`UPDATE organizations SET invoice_counter = 2 WHERE id='${FB}'`);
+  const vente = await vendreFB();
+  check('29i. une facture hors suite ne bloque pas la vente',
+    vente?.invoice_number === `FAC-${AN}-00061`, vente?.invoice_number);
+}
+
+// Une facture écrite dans un AUTRE format est ignorée, jamais comptée.
+{
+  await q(`INSERT INTO sales (user_id, total_amount, payment_method, invoice_number, amount_received)
+    VALUES ('${FB}', 2000, 'cash', 'FACTURE-INTERNE-1', 2000)`);
+  const vente = await vendreFB();
+  check('29j. une facture au format étranger est ignorée',
+    vente?.invoice_number === `FAC-${AN}-00062`, vente?.invoice_number);
+}
+
+// Une boutique qui n'a jamais facturé CETTE année repart à 1, même si l'année
+// d'avant est allée très haut : c'est le comportement attendu, et la
+// réparation ne doit surtout pas le « rattraper » vers le haut.
+//
+// Boutique dédiée : celle de 29a-29j a déjà 62 factures cette année, et il est
+// correct qu'elle ne reparte pas à 1. Réutiliser FB rendrait le test faux.
+{
+  await q(`INSERT INTO auth.users (id, email) VALUES ('${FB2}', 'facture2@test.local')`);
+  await q(`INSERT INTO organizations (id, name, slug, plan, timezone)
+    VALUES ('${FB2}', 'Boutique janvier', 'boutique-janvier', 'pro', 'Africa/Porto-Novo')`);
+  await q(`INSERT INTO products (id, user_id, name, price_sell, price_buy, stock_qty)
+    VALUES ('${FP2}', '${FB2}', 'Article de janvier', 2000, 900, 100)`);
+  await q(`INSERT INTO sales (user_id, total_amount, payment_method, invoice_number, amount_received)
+    VALUES ('${FB2}', 2000, 'cash', 'FAC-${AN - 1}-00099', 2000)`);
+  await q(`SELECT set_config('request.jwt.claim.sub', '${FB2}', false)`);
+
+  const nums = [];
+  for (let i = 0; i < 2; i++) {
+    const r = await q(
+      `SELECT create_sale('[{"product_id":"${FP2}","quantity":1}]'::jsonb, 'cash')`
+    );
+    nums.push(r.rows[0].create_sale?.invoice_number);
+  }
+  check('29k. l\'année en cours repart à 1 malgré 99 factures l\'an passé',
+    nums[0] === `FAC-${AN}-00001` && nums[1] === `FAC-${AN}-00002`, nums.join(', '));
+}
+
+// Deux ventes ne doivent pas pouvoir lire le même compteur. La sérialisation
+// repose sur le verrou de la ligne organisation (FOR UPDATE), pris dans la
+// transaction de la vente.
+//
+// Ce harnais tourne sur une seule connexion PGlite : les requêtes y sont
+// sérialisées, donc la concurrence y est INDÉMONTRABLE — un test ici
+// passerait sans rien prouver. Ce qui est vérifiable, c'est que le verrou est
+// pris : la fonction tient la ligne organisation ouverte pendant qu'elle lit le
+// compteur et le réécrit, ce que la migration garantit en réalignant dans le
+// même SELECT ... FOR UPDATE. La preuve de bout en bout demanderait deux
+// connexions, hors de ce harnais.
+
+// Le stock doit être descendu par ces ventes : la réparation ne doit pas
+// court-circuiter l'écriture de la vente, ni laisser la vente sans effets.
+{
+  const restant = Number((await q(`SELECT stock_qty FROM products WHERE id='${FP1}'`)).rows[0].stock_qty);
+  const vendu = 100 - restant;
+  // 29a, 29d, 29g : 1 unité chacune — 29h : 5 — 29i, 29j : 1 chacune.
+  check('29l. le stock a bien été décrémenté par ces ventes',
+    vendu === 10, `${vendu} unité(s) décrémentée(s), attendu 10`);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Équipe — gérer ses employés sans clé service role
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Les routes de l'équipe utilisent la clé service, qui contourne toutes les
+// règles de sécurité de la base, pour deux opérations seulement : changer un
+// rôle, retirer un membre. Ce test vérifie que les fonctions qui les remplacent
+// font le même travail — et surtout qu'elles ne laissent personne faire ce que
+// la clé service permettait à tout le monde.
+//
+// Chaque test d'intrusion compte autant que les tests de fonctionnement : une
+// fonction SECURITY DEFINER accessible aux clients est une porte, et une
+// porte sans serrure est pire que le service role qu'elle remplace.
+console.log('\n▸ Équipe : rôle et retrait sans clé service role');
+
+const EQ = 'cccccccc-0000-0000-0000-0000000000e1';
+const EQ_EMPLOYE = 'cccccccc-0000-0000-0000-0000000000e2';
+const EQ_AUTRUI = 'cccccccc-0000-0000-0000-0000000000e3';
+const EQ_CALC = 'cccccccc-0000-0000-0000-0000000000e4';
+const EQ_SIEN = 'cccccccc-0000-0000-0000-0000000000e5';
+
+{
+  for (const [id, email] of [
+    [EQ, 'equipe@test.local'],
+    [EQ_EMPLOYE, 'equipe-employe@test.local'],
+    [EQ_AUTRUI, 'equipe-tiers@test.local'],
+    [EQ_CALC, 'equipe-calculateur@test.local'],
+    [EQ_SIEN, 'equipe-sien@test.local'],
+  ]) {
+    await q(`INSERT INTO auth.users (id, email) VALUES ('${id}', '${email}')`);
+  }
+  await q(`INSERT INTO organizations (id, name, slug, plan, timezone) VALUES
+    ('${EQ}', 'Boutique équipe', 'boutique-equipe', 'pro', 'Africa/Porto-Novo'),
+    ('${EQ_AUTRUI}', 'Boutique tierce', 'boutique-tierce', 'pro', 'Africa/Porto-Novo')`);
+  // Un membre n'appartient qu'à UNE équipe (idx_business_members_member_id) :
+  // l'autre équipe a donc le sien, sinon la donnée de test serait invalide et
+  // l'insertion échouerait avant même d'atteindre les fonctions testées.
+  await q(`INSERT INTO business_members (owner_id, member_id, member_name, role) VALUES
+    ('${EQ}', '${EQ_EMPLOYE}', 'employé', 'employee'),
+    ('${EQ}', '${EQ_CALC}',   'calculateur', 'employee'),
+    ('${EQ_AUTRUI}', '${EQ_SIEN}', 'employé ailleurs', 'employee')`);
+}
+
+// ── Le fonctionnement normal ────────────────────────────────────────────
+{
+  await q(`SELECT set_config('request.jwt.claim.sub', '${EQ}', false)`);
+  const r = await q(`SELECT business_members_set_role('${EQ_EMPLOYE}', 'manager')`);
+  check('30a. le patron promeut son employé', r.rows[0].business_members_set_role === true);
+
+  const role = (await q(
+    `SELECT role FROM business_members WHERE member_id='${EQ_EMPLOYE}' AND owner_id='${EQ}'`
+  )).rows[0]?.role;
+  check('30b. le rôle est bien enregistré', role === 'manager', `role = ${role}`);
+}
+
+// ── Un rôle inventé ne doit pas être accepté ────────────────────────────
+{
+  await q(`SELECT set_config('request.jwt.claim.sub', '${EQ}', false)`);
+  let msg = '';
+  try { await q(`SELECT business_members_set_role('${EQ_EMPLOYE}', 'patron')`); } catch (e) { msg = e.message; }
+  check('30c. un rôle hors nomenclature est refusé', /Rôle invalide/.test(msg), msg.slice(0, 80));
+
+  const role = (await q(
+    `SELECT role FROM business_members WHERE member_id='${EQ_EMPLOYE}' AND owner_id='${EQ}'`
+  )).rows[0]?.role;
+  check('30d. le rôle n\'a pas bougé', role === 'manager', `role = ${role}`);
+}
+
+// ── L'intrusion : un employé ne gère pas l'équipe ───────────────────────
+{
+  await q(`SELECT set_config('request.jwt.claim.sub', '${EQ_EMPLOYE}', false)`);
+  let msg = '';
+  try { await q(`SELECT business_members_set_role('${EQ_CALC}', 'manager')`); } catch (e) { msg = e.message; }
+  check('30e. un employé ne promeut pas un collègue', /Employé introuvable/.test(msg), msg.slice(0, 80));
+
+  msg = '';
+  try { await q(`SELECT business_members_remove('${EQ_CALC}')`); } catch (e) { msg = e.message; }
+  check('30f. un employé ne retire pas un collègue', /Employé introuvable/.test(msg), msg.slice(0, 80));
+
+  // rows[0] peut ne pas exister — c'est précisément le symptôme d'une
+  // intrusion réussie. Un assert qui lit une ligne absente planterait le
+  // fichier de tests et masquerait tous les contrôles suivants : pire qu'un
+  // échec, puisque l'arrêt premature donne l'impression que rien d'autre
+  // n'était à vérifier.
+  const role = (await q(
+    `SELECT role FROM business_members WHERE member_id='${EQ_CALC}' AND owner_id='${EQ}'`
+  )).rows[0]?.role;
+  check('30g. le collègue est intact', role === 'employee', `role = ${role}`);
+}
+
+// ── L'intrusion : un patron étranger ne touche pas cette équipe ────────
+{
+  await q(`SELECT set_config('request.jwt.claim.sub', '${EQ_AUTRUI}', false)`);
+  let msg = '';
+  try { await q(`SELECT business_members_remove('${EQ_EMPLOYE}')`); } catch (e) { msg = e.message; }
+  check('30h. un patron étranger ne retire pas un employé', /Employé introuvable/.test(msg), msg.slice(0, 80));
+
+  const reste = Number((await q(
+    `SELECT count(*) FROM business_members WHERE member_id='${EQ_EMPLOYE}'`
+  )).rows[0].count);
+  check('30i. l\'employé est toujours là', reste === 1, `${reste} ligne(s)`);
+}
+
+// ── Le patron ne se retire pas lui-même de sa propre équipe ────────────
+{
+  // La base refuse déjà ce cas : le déclencheur business_members_guard
+  // (business_members_reject_owner_member) rejette un membre qui possède sa
+  // propre boutique. La garde de la fonction est donc une défense en
+  // profondeur — mais une défense qui n'a jamais été éprouvée n'est pas une
+  // défense. On neutralise le déclencheur le temps du test, puis on le remet.
+  await q(`ALTER TABLE business_members DISABLE TRIGGER business_members_guard`);
+  await q(`INSERT INTO business_members (owner_id, member_id, member_name, role)
+    VALUES ('${EQ}', '${EQ}', 'lui-même', 'employee')`);
+  await q(`SELECT set_config('request.jwt.claim.sub', '${EQ}', false)`);
+
+  let msg = '';
+  try { await q(`SELECT business_members_remove('${EQ}')`); } catch (e) { msg = e.message; }
+  check('30j. le patron ne se retire pas lui-même', /ne peut pas se retirer/.test(msg), msg.slice(0, 80));
+
+  await q(`DELETE FROM business_members WHERE member_id='${EQ}'`);
+  await q(`ALTER TABLE business_members ENABLE TRIGGER business_members_guard`);
+}
+
+// ── Le retrait libère le poste et épargne le compte ─────────────────────
+{
+  await q(`SELECT set_config('request.jwt.claim.sub', '${EQ}', false)`);
+
+  // Si une intrusion a réussi plus haut, l'employé n'existe plus : on le
+  // recrée pour que la section rende son bilan complet au lieu de planter.
+  // L'échec, lui, est déjà reporté par 30i.
+  const present = Number((await q(
+    `SELECT count(*) FROM business_members WHERE member_id='${EQ_EMPLOYE}' AND owner_id='${EQ}'`
+  )).rows[0].count);
+  if (!present) {
+    await q(`INSERT INTO business_members (owner_id, member_id, member_name, role)
+      VALUES ('${EQ}', '${EQ_EMPLOYE}', 'employé', 'employee')`);
+  }
+
+  const r = await q(`SELECT business_members_remove('${EQ_EMPLOYE}')`);
+  check('30k. le patron retire son employé', r.rows[0].business_members_remove === true);
+
+  const reste = Number((await q(
+    `SELECT count(*) FROM business_members WHERE member_id='${EQ_EMPLOYE}'`
+  )).rows[0].count);
+  check('30l. le lien est supprimé', reste === 0, `${reste} ligne(s)`);
+
+  // Le compte Auth doit survivre : organizations et sales partent en CASCADE
+  // depuis auth.users. C'est ce qui a détruit une boutique entière par le passé.
+  const compte = Number((await q(
+    `SELECT count(*) FROM auth.users WHERE id='${EQ_EMPLOYE}'`
+  )).rows[0].count);
+  check('30m. le compte de l\'employé survit', compte === 1, `${compte} compte(s)`);
+}
+
+// ── L'écriture directe reste interdite, même au patron ─────────────────
+//
+// C'est le cœur du changement : la table n'a toujours AUCUNE écriture client.
+// Sans cela, la clé service n'aurait servi à rien — il suffirait d'un client
+// malveillant pour écrire directement.
+await canWrite(
+  '30n. le patron n\'écrit toujours pas directement dans business_members',
+  `UPDATE business_members SET role = 'manager' WHERE member_id='${EQ_CALC}'`,
+  false,
+  EQ
+);
+await canWrite(
+  '30o. le patron ne supprime toujours pas directement un membre',
+  `DELETE FROM business_members WHERE member_id='${EQ_CALC}' AND owner_id='${EQ}'`,
+  false,
+  EQ
+);
+
+// ── La lecture, elle, reste possible : c'est ce que l'écran Équipe fait ──
+//
+// canRead fait son propre assert ; il prend un booléen « visible attendu », pas
+// un nombre, d'où le booléen en troisième argument.
+await canRead('30p. le patron voit son équipe',
+  `SELECT count(*) FROM business_members WHERE owner_id='${EQ}'`, true, EQ);
+await canRead('30q. un patron ne voit pas l\'équipe d\'un autre',
+  `SELECT count(*) FROM business_members WHERE owner_id='${EQ_AUTRUI}'`, false, EQ);
+await canRead('30r. un employé voit son propre lien',
+  `SELECT count(*) FROM business_members WHERE member_id='${EQ_CALC}'`, true, EQ_CALC);
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
 process.exit(failures ? 1 : 0);

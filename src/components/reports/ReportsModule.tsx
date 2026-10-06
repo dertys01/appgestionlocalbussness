@@ -10,7 +10,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { PeriodPicker } from '@/components/ui/PeriodPicker';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
-import { formatCFA } from '@/lib/utils/currency';
+import { formatCFA, formatQty } from '@/lib/utils/currency';
 import { PLAN_LIMITS } from '@/lib/utils/plans';
 import {
   buildBuckets, bucketFor, bucketKey, daysBetween, localTimeZone, rangeFromDays,
@@ -261,7 +261,12 @@ export function ReportsModule() {
                         />
                       </div>
                     </div>
-                    <span className="text-sm font-bold text-slate-600 shrink-0">{p.qty} unités</span>
+                    {/* formatQty : « 19.5 unités » sortait avec un point, à côté
+                        du stock écrit « 19,5 pce ». Et « 1 unités » : le
+                        pluriel était collé à la quantité sans regarder. */}
+                    <span className="text-sm font-bold text-slate-600 shrink-0">
+                      {formatQty(p.qty)} {p.qty > 1 ? 'unités' : 'unité'}
+                    </span>
                   </div>
                 ))}
               </div>

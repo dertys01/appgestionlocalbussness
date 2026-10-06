@@ -11,9 +11,31 @@ const RegisterBody = z.object({
 
 // Validées AVANT tout appel réseau : createClient(URL, undefined) produisait
 // une erreur d'en-tête invalide dont le message affichait la clé utilisée.
+//
+// SUPABASE_URL et ANON_KEY restent des constantes de module : elles sont
+// présentes sur tous les environnements. La clé service role, elle, est lue
+// DANS le handler : c'est la seule chose ici qui ne soit pas disponible en
+// local, et exiger sa présence au chargement du module faisait échouer le
+// `next build` et le serveur de développement — donc TOUTE l'application —
+// pour une variable dont l'absence n'affecte que la création de compte.
+// Une inscription tentée sans la variable doit répondre « inscription
+// indisponible », pas empêcher l'application de démarrer.
 const SUPABASE_URL = requireEnv('NEXT_PUBLIC_SUPABASE_URL');
-const SERVICE_ROLE_KEY = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
 const ANON_KEY = requireEnv('NEXT_PUBLIC_SUPABASE_ANON_KEY');
+
+/**
+ * Client admin, ou null si la clé service role n'est pas configurée.
+ *
+ * La présence de la clé est vérifiée ici plutôt qu'en amont pour que
+ * `requireEnv` ne jette pas au chargement du module : voir ci-dessus.
+ */
+function adminClientOrNull() {
+  const cle = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!cle) return null;
+  return createClient(SUPABASE_URL, cle, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  });
+}
 
 const MAX_ATTEMPTS_PER_HOUR = 3;
 
@@ -67,9 +89,15 @@ export async function POST(req: NextRequest) {
   try {
     const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ?? 'unknown';
 
-    const adminClient = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-      auth: { autoRefreshToken: false, persistSession: false },
-    });
+    const adminClient = adminClientOrNull();
+    if (!adminClient) {
+      // 503 : ce n'est pas une erreur du visiteur, et un 500 ferait croire à un
+      // problème de son côté. Le message est volontairement sans détail.
+      return NextResponse.json(
+        { error: 'Inscription temporairement indisponible. Réessayez plus tard.' },
+        { status: 503 }
+      );
+    }
 
     // Validation AVANT le compteur : une faute de frappe, un champ oublié ou
     // un e-mail déjà utilisé ne doit pas griller une heure d'essai au patron.

@@ -49,8 +49,19 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
         console.error('[ProductForm] chargement des catégories', error.message);
         return;
       }
-      const unique = [...new Set((data ?? []).map((p) => p.category).filter(Boolean))] as string[];
-      setCategories(unique.sort());
+      // Un Set sur les chaînes brutes ne suffit pas : « smartphones » et
+      // « smartphones » (espace final) sont deux clés différentes, et la
+      // pastille se retrouvait affichée deux fois, identique à l'œil. La
+      // comparaison ignore la casse et les espaces de bord, et c'est la
+      // version ASSOUPLIE qui est retenue — « sms » garde son orthographe.
+      const parCle = new Map<string, string>();
+      for (const p of data ?? []) {
+        const brut = (p.category ?? '').trim();
+        if (!brut) continue;
+        const cle = brut.toLocaleLowerCase('fr');
+        if (!parCle.has(cle)) parCle.set(cle, brut);
+      }
+      setCategories([...parCle.values()].sort((a, b) => a.localeCompare(b, 'fr')));
     };
 
     loadCategories();
@@ -127,7 +138,10 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
     const payload = {
       name: form.name.trim(),
       sku: form.sku.trim() || null,
-      category: form.category || null,
+      // trim() : « smartphones » et « smartphones » doivent rester le même
+      // rayon. Sans ça, la saisie ajoute une catégorie à un espace près de
+      // l'existante, et les filtres de la caisse en affichent deux.
+      category: form.category.trim() || null,
       price_buy: priceBuy,
       price_sell: priceSell,
       stock_qty: stockQty,

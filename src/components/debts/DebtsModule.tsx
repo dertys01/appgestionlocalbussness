@@ -225,66 +225,78 @@ export function DebtsModule() {
                     </p>
                   )}
 
-                  <div className="flex gap-2">
+                  {/* flex-wrap + ordre explicite.
+                      Les trois contrôles tiennent sur une ligne à 1280 px :
+                      « Relancer », le montant, le moyen, « Encaisser ». Sur un
+                      téléphone, la rangée non-wrap gardait la largeur de ses
+                      voisins à largeur fixe — « Relancer », « Espèces/MoMo » et
+                      « Encaisser » — et le champ montant se retrouvait
+                      écrasé à 22 px, illisible et impossible à viser juste.
+                      Ici les deux boutons passent en tête de rangée (order-1,
+                      Encaisser poussé à droite par ml-auto) et le montant +
+                      moyen occupent la rangée du dessous, en pleine largeur. */}
+                  <div className="flex flex-wrap gap-2">
                     <a
                       href={reminderLink(d)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="shrink-0 inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#25D366] hover:bg-[#1ebe5d] text-white text-xs font-medium px-3 h-9"
+                      className="order-1 shrink-0 inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#25D366] hover:bg-[#1ebe5d] text-white text-xs font-medium px-3 h-11 sm:h-9"
                     >
                       <MessageCircle className="w-3.5 h-3.5" /> Relancer
                     </a>
 
                     {canManageProducts && (
-                      <div className="flex-1 flex gap-2">
-                        <Input
-                          type="number"
-                          inputMode="decimal"
-                          step="any"
-                          min="0"
-                          placeholder={String(d.total_due)}
-                          value={amounts[d.debt_id] ?? ''}
-                          onChange={(e) => setAmounts((prev) => ({ ...prev, [d.debt_id]: e.target.value }))}
-                          onKeyDown={(e) => { if (e.key === 'Enter') pay(d); }}
-                          className="text-sm h-9"
-                          aria-label={`Montant encaissé pour ${d.name ?? d.phone}`}
-                        />
-                        {/* Le moyen se choisit au moment de compter l'argent,
-                            pas dans un réglage caché plus haut : c'est
-                            précisément l'information que le caissier a sous
-                            les yeux. */}
-                        <div
-                          role="radiogroup"
-                          aria-label={`Moyen du règlement pour ${d.name ?? d.phone}`}
-                          className="flex rounded-lg border border-slate-200 overflow-hidden shrink-0 h-9"
-                        >
-                          {(['cash', 'momo'] as const).map((m) => (
-                            <button
-                              key={m}
-                              type="button"
-                              role="radio"
-                              aria-checked={method === m}
-                              onClick={() => setMethod(m)}
-                              className={`px-2.5 text-xs font-medium transition-colors ${
-                                method === m
-                                  ? 'bg-indigo-600 text-white'
-                                  : 'bg-white text-slate-500 hover:bg-slate-50'
-                              }`}
-                            >
-                              {m === 'cash' ? 'Espèces' : 'MoMo'}
-                            </button>
-                          ))}
+                      <>
+                        <div className="order-3 sm:order-2 basis-full sm:basis-auto flex-1 min-w-[9rem] flex gap-2">
+                          <Input
+                            type="number"
+                            inputMode="decimal"
+                            step="any"
+                            min="0"
+                            placeholder={String(d.total_due)}
+                            value={amounts[d.debt_id] ?? ''}
+                            onChange={(e) => setAmounts((prev) => ({ ...prev, [d.debt_id]: e.target.value }))}
+                            onKeyDown={(e) => { if (e.key === 'Enter') pay(d); }}
+                            className="text-sm h-11 sm:h-9"
+                            aria-label={`Montant encaissé pour ${d.name ?? d.phone}`}
+                          />
+                          {/* Le moyen se choisit au moment de compter l'argent,
+                              pas dans un réglage caché plus haut : c'est
+                              précisément l'information que le caissier a sous
+                              les yeux. */}
+                          <div
+                            role="radiogroup"
+                            aria-label={`Moyen du règlement pour ${d.name ?? d.phone}`}
+                            className="flex rounded-lg border border-slate-200 overflow-hidden shrink-0 h-11 sm:h-9"
+                          >
+                            {(['cash', 'momo'] as const).map((m) => (
+                              <button
+                                key={m}
+                                type="button"
+                                role="radio"
+                                aria-checked={method === m}
+                                onClick={() => setMethod(m)}
+                                className={`px-2.5 text-xs font-medium transition-colors ${
+                                  method === m
+                                    ? 'bg-indigo-600 text-white'
+                                    : 'bg-white text-slate-500 hover:bg-slate-50'
+                                }`}
+                              >
+                                {m === 'cash' ? 'Espèces' : 'MoMo'}
+                              </button>
+                            ))}
+                          </div>
                         </div>
                         <Button
                           onClick={() => pay(d)}
                           disabled={payingId === d.debt_id}
-                          className="h-9 bg-indigo-600 hover:bg-indigo-700 text-white gap-1.5"
+                          className="order-2 sm:order-3 ml-auto sm:ml-0 h-11 sm:h-9 bg-indigo-600 hover:bg-indigo-700 text-white gap-1.5"
                         >
                           {payingId === d.debt_id
                             ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
                             : <><X className="w-3.5 h-3.5 rotate-45" /> Encaisser</>}
                         </Button>
-                      </div>
+                      </>
                     )}
                   </div>
                 </CardContent>

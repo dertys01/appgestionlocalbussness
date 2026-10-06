@@ -21,7 +21,7 @@ npm run dev
 |---|---|
 | `NEXT_PUBLIC_SUPABASE_URL` | URL du projet Supabase |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Clé anon (côté navigateur) |
-| `SUPABASE_SERVICE_ROLE_KEY` | Clé service role — **serveur uniquement**, contourne la RLS |
+| `SUPABASE_SERVICE_ROLE_KEY` | Clé service role — **serveur uniquement**, contourne la RLS. Facultative en local : seulement l'inscription et Stripe en dépendent (voir `SECURITY.md`) |
 | `NEXT_PUBLIC_APP_URL` | Origine publique, utilisée par Stripe pour les redirections |
 | `STRIPE_SECRET_KEY` | Clé Stripe serveur |
 | `STRIPE_PRICE_STARTER`, `STRIPE_PRICE_PRO` | Identifiants de prix pour le checkout |

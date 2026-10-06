@@ -1,42 +1,52 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
 import { randomBytes, createHash } from 'crypto';
 import { PLAN_LIMITS } from '@/lib/utils/plans';
-import { serverError, requireEnv } from '@/lib/utils/server';
+import { serverError } from '@/lib/utils/server';
 import { z } from 'zod';
 import type { Plan } from '@/types';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { clientFor, readUser } from '@/lib/utils/user-client';
 
-const SUPABASE_URL = requireEnv('NEXT_PUBLIC_SUPABASE_URL');
-const SERVICE_ROLE_KEY = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '');
 
 const INVITATION_DAYS = 7;
 const MAX_PENDING = 20;
 
-function getAdminClient() {
-  return createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-    auth: { autoRefreshToken: false, persistSession: false },
-  });
-}
-
 // Un·e employé·e ne gère pas l'équipe : get_business_owner_id() renverrait son
 // patron, la vérification doit donc porter sur l'identité du patron lui-même.
+//
+// Le contrôle compare l'identifiant renvoyé par get_business_owner_id() à celui
+// de l'appelant : identiques si et seulement si l'appelant est un patron. La
+// fonction voit le tenant réel même sous RLS, là où une lecture directe de
+// `business_members` ne verrait rien et laisserait passer tout le monde.
 async function requirePatron(req: NextRequest) {
-  const jwt = req.headers.get('authorization')?.replace('Bearer ', '');
-  if (!jwt) return { error: 'Non authentifié', status: 401 } as const;
+  const user = await readUser(req);
+  if (!user) return { error: 'Non authentifié', status: 401 } as const;
 
-  const adminClient = getAdminClient();
-  const { data: { user }, error } = await adminClient.auth.getUser(jwt);
-  if (error || !user) return { error: 'Non authentifié', status: 401 } as const;
+  const db = clientFor(req);
+  const { data: patron, error: errPatron } = await db.rpc('get_business_owner_id');
+  if (errPatron) throw errPatron;
 
-  const { data: membership } = await adminClient
-    .from('business_members')
-    .select('owner_id')
-    .eq('member_id', user.id)
-    .maybeSingle();
-  if (membership) return { error: 'Seul le patron peut inviter des employés', status: 403 } as const;
+  if (patron !== user.id) {
+    return { error: 'Seul le patron peut inviter des employés', status: 403 } as const;
+  }
 
-  return { user, adminClient } as const;
+  return { user, db } as const;
+}
+
+/**
+ * Combien de postes sont occupés : membres de l'équipe + invitations en attente.
+ *
+ * Une invitation en attente occupe un poste, sinon on prometrait plus de caisses
+ * que le plan n'en autorise.
+ */
+async function postesOccupes(db: SupabaseClient, ownerId: string) {
+  const [{ count: membres }, { count: enAttente }] = await Promise.all([
+    db.from('business_members').select('*', { count: 'exact', head: true }).eq('owner_id', ownerId),
+    db.from('employee_invitations').select('*', { count: 'exact', head: true })
+      .eq('owner_id', ownerId).is('accepted_at', null),
+  ]);
+  return (membres ?? 0) + (enAttente ?? 0);
 }
 
 // GET : invitations en attente du patron
@@ -45,7 +55,10 @@ export async function GET(req: NextRequest) {
     const auth = await requirePatron(req);
     if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
-    const { data, error } = await auth.adminClient
+    // `employee_invitations` porte une policy FOR ALL sur `auth.uid() =
+    // owner_id` : le patron gère ses invitations avec sa propre session, sans
+    // clé service role.
+    const { data, error } = await auth.db
       .from('employee_invitations')
       .select('id, email, role, created_at, expires_at')
       .eq('owner_id', auth.user.id)
@@ -54,10 +67,17 @@ export async function GET(req: NextRequest) {
 
     if (error) throw error;
 
-    // Purge opportuniste : les invitations consommées ne doivent pas vivre
-    // indéfiniment (emails, jetons). Fire-and-forget : un échec ne bloque
-    // pas l'écran de l'équipe.
-    auth.adminClient.rpc('purge_accepted_invitations', {}).then(() => {}, () => {});
+    // Purge des invitations déjà consommées : une fois le lien utilisé, il ne
+    // sert plus à rien et garde un email et une empreinte en base. La fonction
+    // est recentrée sur la boutique de l'appelant et refuse tout autre
+    // identifiant, donc l'appel se fait avec la session du patron — sans clé
+    // service role.
+    //
+    // Fire-and-forget assumé : un échec ne doit pas priver le patron de la liste
+    // de ses invitations en attente. Le nettoyage est un confort, pas une
+    // condition d'affichage.
+    auth.db.rpc('purge_accepted_invitations', { p_owner_id: auth.user.id })
+      .then(() => {}, () => {});
 
     return NextResponse.json({
       invitations: data ?? [],
@@ -90,7 +110,7 @@ export async function POST(req: NextRequest) {
     // Un lien en attente pour la même adresse : on le renvoie plutôt que d'en
     // créer un second. Deux liens actifs pour un employé, c'est deux occasions
     // de diffuser un accès par erreur.
-    const { data: existing } = await auth.adminClient
+    const { data: existing } = await auth.db
       .from('employee_invitations')
       .select('id, email, token, expires_at')
       .eq('owner_id', auth.user.id)
@@ -105,7 +125,7 @@ export async function POST(req: NextRequest) {
       const newToken = randomBytes(32).toString('base64url');
       const newHash = createHash('sha256').update(newToken).digest('hex');
       const newExpiry = new Date(Date.now() + INVITATION_DAYS * 86400_000).toISOString();
-      const { error: updErr } = await auth.adminClient
+      const { error: updErr } = await auth.db
         .from('employee_invitations')
         .update({ token: newHash, role, expires_at: newExpiry })
         .eq('id', existing.id);
@@ -120,7 +140,7 @@ export async function POST(req: NextRequest) {
 
     // Garde-fou contre l'accumulation : 20 liens en attente pour un patron, c'est
     // une fuite ou une boucle, pas un usage normal.
-    const { count } = await auth.adminClient
+    const { count } = await auth.db
       .from('employee_invitations')
       .select('*', { count: 'exact', head: true })
       .eq('owner_id', auth.user.id)
@@ -133,19 +153,16 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // La limite d'employés compte les invitations en attente comme des postes
+    // La limite du plan compte les invitations en attente comme des postes
     // occupés : sinon on promet plus de caisses que le plan n'en autorise.
-    const [{ data: org }, { count: memberCount }, { count: pendingCount }] = await Promise.all([
-      auth.adminClient.from('organizations').select('plan').eq('id', auth.user.id).maybeSingle(),
-      auth.adminClient.from('business_members').select('*', { count: 'exact', head: true }).eq('owner_id', auth.user.id),
-      auth.adminClient.from('employee_invitations').select('*', { count: 'exact', head: true })
-        .eq('owner_id', auth.user.id).is('accepted_at', null),
+    const [{ data: org }, occupes] = await Promise.all([
+      auth.db.from('organizations').select('plan').eq('id', auth.user.id).maybeSingle(),
+      postesOccupes(auth.db, auth.user.id),
     ]);
 
     const plan = (org?.plan ?? 'free') as Plan;
     const limit = PLAN_LIMITS[plan].employees;
-    const occupied = (memberCount ?? 0) + (pendingCount ?? 0);
-    if (limit !== Infinity && occupied >= limit) {
+    if (limit !== Infinity && occupes >= limit) {
       return NextResponse.json(
         { error: `Limite d'employés atteinte pour le plan ${plan} (max ${limit}). Passez au plan supérieur dans Paramètres.` },
         { status: 403 }
@@ -161,7 +178,7 @@ export async function POST(req: NextRequest) {
     // comparent la même empreinte.
     const tokenHash = createHash('sha256').update(token).digest('hex');
 
-    const { data: inv, error: insertError } = await auth.adminClient
+    const { data: inv, error: insertError } = await auth.db
       .from('employee_invitations')
       .insert({
         owner_id: auth.user.id,
@@ -195,8 +212,9 @@ export async function DELETE(req: NextRequest) {
     if (!id) return NextResponse.json({ error: 'Identifiant manquant' }, { status: 400 });
 
     // Le owner_id dans le WHERE : sans lui, un patron pourrait révoquer
-    // l'invitation d'un autre en devinant l'identifiant.
-    const { error } = await auth.adminClient
+    // l'invitation d'un autre en devinant l'identifiant. La policy
+    // `invitations_owner_write` rend ce filtre obligatoire de toute façon.
+    const { error } = await auth.db
       .from('employee_invitations')
       .delete()
       .eq('id', id)

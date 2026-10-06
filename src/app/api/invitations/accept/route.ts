@@ -3,12 +3,21 @@ import { createClient } from '@supabase/supabase-js';
 import { createHash } from 'crypto';
 import { serverError, requireEnv } from '@/lib/utils/server';
 import { z } from 'zod';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 const SUPABASE_URL = requireEnv('NEXT_PUBLIC_SUPABASE_URL');
-const SERVICE_ROLE_KEY = requireEnv('SUPABASE_SERVICE_ROLE_KEY');
 
-function getAdminClient() {
-  return createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
+// Clé service role lue à la demande, et non au chargement du module : c'est le
+// seul endroit de l'application hors Stripe qui ne puisse pas faire autrement —
+// redeem_invitation() est privileged et crée le lien de membre. Mais exiger la
+// clé au chargement faisait échouer le serveur de développement EN LOCAL pour
+// une opération qu'un commerçant ne lance qu'en invitant quelqu'un. Le même
+// motif que /api/register : l'absence de la variable doit se voir à l'usage,
+// pas empêcher l'application de démarrer.
+function getAdminClient(): SupabaseClient | null {
+  const cle = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (!cle) return null;
+  return createClient(SUPABASE_URL, cle, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
 }
@@ -40,6 +49,14 @@ export async function POST(req: NextRequest) {
     const tokenHash = createHash('sha256').update(String(token)).digest('hex');
 
     const adminClient = getAdminClient();
+    if (!adminClient) {
+      // 503 : l'application fonctionne, c'est la création de compte qui n'est
+      // pas configurée ici. Un 500 ferait croire à une erreur du visiteur.
+      return NextResponse.json(
+        { error: 'Inscription temporairement indisponible. Demandez à votre patron de vous renvoyer le lien plus tard.' },
+        { status: 503 }
+      );
+    }
 
     // Compteur dédié : sans lui, un botnet pouvait sonder les jetons à la
     // vitesse du rate limit général d'écriture. 10/h par IP, fail-open pour
