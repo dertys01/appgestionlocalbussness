@@ -16,7 +16,9 @@
     "test": "npm run test:sync && npm run test:db && npm run test:db:existing && npm run test:audit && npm run test:period && npm run test:plan && npm run test:rl && npm run test:wa && npm run test:ui",
     "test:plan": "node --experimental-strip-types --test tests/plan-errors.test.mts",
     "test:rl": "node --experimental-strip-types --test tests/rate-limit.test.mts",
-    "test:wa": "node --experimental-strip-types --import ./tests/ts-hooks.mjs --test tests/whatsapp-credit.test.mts"
+    "test:wa": "node --experimental-strip-types --import ./tests/ts-hooks.mjs --test tests/whatsapp-credit.test.mts",
+    "qa:audit": "node qa/audit.mjs",
+    "qa:parcours": "node qa/parcours.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
@@ -48,6 +50,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.1",
     "jsdom": "^29.1.1",
+    "playwright": "^1.63.0",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^3.2.7"

@@ -1,5 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+
+import { matchMediaPour } from './setup';
 
 const { products, saleRpc, supabase } = vi.hoisted(() => {
   const produits = Array.from({ length: 43 }, (_, i) => ({
@@ -48,9 +50,32 @@ import type { Product } from '@/types';
  *
  * Les produits sont une prop du module — le POS ne lit pas le catalogue
  * lui-même — donc aucun mock de base n'est nécessaire ici.
+ *
+ * Le panier plein écran n'existe QUE sur téléphone : à partir de 1024 px il
+ * est une colonne à droite. Le fichier décrit donc un téléphone (375 px) et
+ * déclare le grand écran explicitement là où il compte — sans cela, un test
+ * « le panier s'ouvre » passait sur unBehavior qui n'a lieu que sur mobile.
  */
 
+/** Bascule la largeur perçue par le composant, et rend la main. */
+const matchMediaLarge = window.matchMedia;
+function surMobile() {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    configurable: true,
+    value: matchMediaPour(375),
+  });
+}
+function surGrandEcran() {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    configurable: true,
+    value: matchMediaPour(1440),
+  });
+}
+
 beforeEach(() => {
+  surMobile();
   vi.clearAllMocks();
   saleRpc.mockResolvedValue({ data: {}, error: null });
 });
@@ -60,8 +85,27 @@ function ajouterAuPanier() {
   fireEvent.click(screen.getByText('Produit 0'));
 }
 
+/** Chaîne PostgREST chaînable — même convention que pos-repeat-sale. */
+function chaine(donnees: unknown[] = []) {
+  const q: Record<string, unknown> = {};
+  for (const m of ['select', 'gte', 'lte', 'order', 'eq', 'limit']) {
+    q[m] = () => q;
+  }
+  q.then = (ok: unknown, ko: unknown) =>
+    Promise.resolve({ data: donnees, error: null }).then(ok as never, ko as never);
+  return q;
+}
+
 const renderPOS = () =>
   render(<POSModule products={products as unknown as Product[]} onSaleComplete={vi.fn()} />);
+
+afterEach(() => {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    configurable: true,
+    value: matchMediaLarge,
+  });
+});
 
 describe('POS — la caisse est atteignable sans défiler le catalogue', () => {
   it('montre une barre qui donne le total et ouvre le panier', () => {
@@ -142,6 +186,52 @@ describe('POS — la caisse est atteignable sans défiler le catalogue', () => {
     await waitFor(() =>
       expect(container.querySelector('[inert]')).not.toBeNull()
     );
+  });
+});
+
+describe('POS — le panier ne recouvre pas l\'application sur grand écran', () => {
+  beforeEach(surGrandEcran);
+
+  it('« Reprendre la dernière vente » laisse le panier en colonne', async () => {
+    // Régression : la reprise ouvrait le panneau `fixed inset-0`, qui
+    // recouvrait toute la page — navigation comprise. Sur grand écran le
+    // panier est une colonne à droite ; le calque rendait l'application
+    // inutilisable jusqu'au rechargement.
+    const rpc = vi.fn(async (nom: string) =>
+      nom === 'get_units_sold_since'
+        ? { data: [], error: null }
+        : { data: [], error: null }
+    );
+    const from = vi.fn((table: string) =>
+      table === 'sales'
+        ? chaine([{ id: 'v1', total_amount: 1500 }])
+        : chaine([{ product_id: 'p0', quantity: 1, unit_price: 1500 }])
+    );
+    saleRpc.mockImplementation(rpc);
+    supabase.from.mockImplementation(from);
+
+    renderPOS();
+
+    // Le nom accessible du bouton est son aria-label, pas son texte : c'est
+    // lui qui le décrit pour un lecteur d'écran (« Ajouter au panier les N
+    // articles de la dernière vente »).
+    const reprise = await screen.findByRole(
+      'button',
+      { name: /Ajouter au panier les \d+ articles de la dernière vente/ },
+      { timeout: 3000 }
+    );
+    fireEvent.click(reprise);
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /1 article, total/ })).toBeInTheDocument()
+    );
+
+    // Aucun panneau en position fixe : le panier reste une colonne.
+    const calque = document.querySelector('.fixed.inset-0.z-40');
+    expect(calque).toBeNull();
+
+    // Et surtout : la grille n'est pas neutralisée, elle reste utilisable.
+    expect(document.querySelector('.flex-1.min-w-0 [inert]')).toBeNull();
   });
 });
 

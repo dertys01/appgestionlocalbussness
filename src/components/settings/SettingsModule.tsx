@@ -197,8 +197,15 @@ export function SettingsModule() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <label htmlFor="org-email" className="text-sm font-medium text-slate-700">Email du compte</label>
-                  <Input id="org-email" value={user?.email ?? ''} disabled className="bg-slate-50 text-slate-500" />
+                  <p className="text-sm font-medium text-slate-700">Email du compte</p>
+                  {/* Un paragraphe, pas un champ désactivé : l'adresse ne se
+                      saisit pas ici, et un input fait défiler son texte
+                      horizontalement — sur un téléphone à 320 px, la fin de
+                      l'adresse disparaissait sans qu'on puisse la faire défiler
+                      (disabled). Le texte, lui, passe à la ligne. */}
+                  <p className="rounded-lg border border-input bg-slate-50 px-2.5 py-1 text-sm text-slate-500 break-all min-h-8 flex items-center">
+                    {user?.email ?? '—'}
+                  </p>
                 </div>
                 {orgError && <p className="text-red-600 text-sm">{orgError}</p>}
                 {orgSuccess && <p className="text-emerald-700 text-sm">{orgSuccess}</p>}

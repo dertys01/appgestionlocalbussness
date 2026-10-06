@@ -1,0 +1,443 @@
+/**
+ * Parcours fonctionnels : on agit comme un commerçant et on vérifie que la
+ * suite des gestes produit l'effet attendu — pas seulement que l'écran
+ * s'affiche.
+ *
+ * Chaque étape est un couple (action, vérification). L'action est faite au
+ * navigateur ; la vérification porte sur ce que voit l'utilisateur ET sur ce
+ * qui a été écrit en base, parce que la plupart des bugs de cette application
+ * sont « l'écran dit que c'est bon, la base dit le contraire ».
+ *
+ *   node qa/parcours.mjs <email> <motdepasse> [retail|restaurant]
+ */
+
+import { chromium } from 'playwright';
+
+const [, , EMAIL = '', PASSWORD = '', PROFIL = 'retail'] = process.argv;
+if (!EMAIL || !PASSWORD) {
+  console.error('usage: node qa/parcours.mjs <email> <motdepasse> [retail|restaurant]');
+  process.exit(1);
+}
+
+const BASE = process.env.QA_BASE ?? 'http://localhost:3001';
+const SUPA = 'https://lmygvpruffpspixrsixh.supabase.co';
+const CLE = process.env.QA_SUPABASE_KEY ?? 'sb_publishable_DIVKAgzDFbWsJQyfeBjvSQ_x6axbuw1';
+
+const resultats = [];
+let echecs = 0;
+
+function verifie(nom, condition, detail = '') {
+  const ok = Boolean(condition);
+  if (!ok) echecs++;
+  const ligne = `${ok ? '✓' : '✗'} ${nom}${detail && !ok ? ` — ${detail}` : ''}`;
+  resultats.push(ligne);
+  console.log(ligne);
+  return ok;
+}
+
+const navigateur = await chromium.launch();
+const contexte = await navigateur.newContext({
+  viewport: { width: 1280, height: 900 },
+  locale: 'fr-FR',
+  timezoneId: 'Africa/Porto-Novo',
+});
+const page = await contexte.newPage();
+
+const erreursReseau = [];
+page.on('pageerror', (e) => erreursReseau.push(e.message.slice(0, 150)));
+
+await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+await page.waitForTimeout(1200);
+await page.fill('input[type="email"]', EMAIL);
+await page.fill('input[type="password"]', PASSWORD);
+await page.click('button[type="submit"]');
+await page.waitForSelector('button[aria-label="Accueil"]', { timeout: 30000 });
+await page.waitForTimeout(1500);
+
+/** Session et appels directs à la base, pour vérifier ce que l'écran cache. */
+const jeton = await page.evaluate(() => {
+  for (const k of Object.keys(localStorage)) {
+    const v = localStorage.getItem(k);
+    if (v && v.includes('access_token')) return JSON.parse(v).access_token;
+  }
+  return null;
+});
+
+async function base(sqlOuRequete) {
+  return page.evaluate(
+    async ([url, cle, token, requete]) => {
+      const reponse = await fetch(`${url}${requete}`, {
+        headers: { apikey: cle, authorization: `Bearer ${token}` },
+      });
+      return reponse.json();
+    },
+    [SUPA, CLE, jeton, sqlOuRequete]
+  );
+}
+
+const onglet = async (nom) => {
+  await fermerBoite();
+  await page.locator(`button[aria-label="${nom}"]`).first().click();
+  await page.waitForTimeout(2500);
+};
+
+/**
+ * Ferme tout ce qui flotte : reçu, fiche produit, réapprovisionnement.
+ *
+ * Base UI garde le voile dans le DOM avec data-open tant que la boîte est
+ * ouverte, et son overlay intercepte alors tous les clics de la page. Sans
+ * cette fermeture, l'étape suivante échoue sur un délai de 30 s et l'audit
+ * s'arrête sur le premier encountered, sans dire pourquoi.
+ */
+async function fermerBoite() {
+  // Deux familles coexistent : les boîtes Base UI (reçu), montées dans un
+  // portal et marquées data-slot, et les modales maison (fiche produit,
+  // réappro, inventaire), un simple `div.fixed.inset-0.z-50`. Les deux
+  // laissent un voile qui intercepte tous les clics de la page.
+  const fermeurs = page.locator(
+    '[data-slot="dialog-content"] button:has-text("Fermer"), [data-slot="dialog-content"] button:has-text("Annuler"), [data-slot="dialog-close"], .fixed.inset-0.z-50 button[aria-label="Fermer"]'
+  );
+  for (let i = 0; i < 4; i++) {
+    if (!(await fermeurs.first().isVisible().catch(() => false))) break;
+    await fermeurs.first().click({ timeout: 4000 }).catch(() => {});
+    await page.waitForTimeout(500);
+  }
+  await page.keyboard.press('Escape').catch(() => {});
+  await page.waitForTimeout(300);
+}
+
+const texte = () => page.evaluate(() => document.body.innerText);
+const panier = () =>
+  page.evaluate(() => {
+    const el = [...document.querySelectorAll('div')].find((d) =>
+      String(d.className).includes('lg:w-80')
+    );
+    return el ? el.innerText.replace(/\n+/g, ' | ') : '';
+  });
+
+// ─── Caisse : une vente complète, de la ligne au reçu ────────────────
+await onglet('Vente');
+await page.waitForTimeout(2000);
+
+// Une ligne à prix négocié, en quantité décimale : c'est le chemin le plus
+// long (le serveur fige le coût, le prix convenu et l'unité du produit).
+// Cible pilihan dans le catalogue RÉELLEMENT affiché, plutôt qu'un nom en
+// dur : « RIZ » existe dans un commerce de téléphone, pas dans un maquis.
+// On prend la première ligne qui porte un stock — un plat n'a pas de stock
+// propre, son prix de vente n'est donc pas comparable à celui du produit.
+const cible = await page.evaluate(() => {
+  const liste = document.querySelector('.divide-y.divide-slate-100');
+  const lignes = [...liste.children].map((b, i) => ({ i, texte: b.innerText.replace(/\n+/g, ' ') }));
+  const avecStock = lignes.find((l) => /Stock :/.test(l.texte) && !/Rupture/.test(l.texte));
+  const prix = avecStock ? Number((avecStock.texte.match(/([\d\s]+)\s?F\s*$/) || [])[1]?.replace(/\s/g, '')) : 0;
+  const nom = avecStock ? avecStock.texte.split(/\s+Stock :/)[0].trim() : '';
+  return { index: avecStock?.i ?? -1, nom, prix };
+});
+verifie('la caisse liste un produit stocké', cible.index >= 0 && cible.prix > 0, JSON.stringify(cible));
+
+const prixUnit = cible.prix;
+const nomCible = cible.nom;
+const quantite = 2.5;
+const prixNegocie = Math.round(prixUnit / 2);
+const totalAttendu = prixNegocie * quantite;
+
+if (cible.index >= 0) {
+  await page.locator('.divide-y.divide-slate-100 > button').nth(cible.index).click();
+  await page.waitForTimeout(600);
+
+  // Quantité décimale à la virgule — le pavé d'un téléphone béninois.
+  const champQty = page.locator(`input[aria-label="Quantité pour ${nomCible}"]`);
+  await champQty.fill('2,5');
+  await page.waitForTimeout(600);
+  const apresVirgule = await panier();
+  verifie('la quantité « 2,5 » est acceptée (virgule)', /2[,.]5/.test(apresVirgule), apresVirgule.slice(0, 160));
+  const attenduDecimal = new Intl.NumberFormat('fr-FR').format(prixUnit * quantite);
+  verifie(
+    `le total suit la quantité décimale (${prixUnit} × 2,5 = ${attenduDecimal})`,
+    new RegExp(attenduDecimal.replace(/\s/g, '\\s')).test(apresVirgule),
+    apresVirgule.slice(0, 200)
+  );
+
+  // Prix négocié
+  const champPrix = page.locator(`input[aria-label="Prix unitaire négocié pour ${nomCible}"]`);
+  await champPrix.fill(String(prixNegocie));
+  await page.waitForTimeout(600);
+  const apresRemise = await panier();
+  verifie(
+    `le prix négocié (${prixNegocie} F) remplace le prix catalogue`,
+    new RegExp(new Intl.NumberFormat('fr-FR').format(totalAttendu).replace(/\s/g, '\\s')).test(apresRemise),
+    apresRemise.slice(0, 200)
+  );
+
+  // Prix aberrant : refusé, l'ancien prix reste
+  await champPrix.fill('-5');
+  await page.waitForTimeout(400);
+  const apresNegatif = await panier();
+  verifie(
+    'un prix négatif est refusé, le prix négocié reste',
+    new RegExp(new Intl.NumberFormat('fr-FR').format(totalAttendu).replace(/\s/g, '\\s')).test(apresNegatif),
+    apresNegatif.slice(0, 200)
+  );
+
+  const stockAvant = await base('/rest/v1/products?select=name,stock_qty&limit=200');
+  const produitAvant = stockAvant.find((p) => p.name === nomCible);
+  const stockInitial = Number(produitAvant?.stock_qty);
+
+  // Encaissement espèces avec monnaie à rendre
+  await page.locator('input[aria-label="Montant donné"], input[type="number"]').last().fill('5000');
+  await page.waitForTimeout(500);
+  const avecMonnaie = await panier();
+  const monnaie = 5000 - totalAttendu;
+  verifie(
+    `la monnaie à rendre est annoncée (${monnaie} F)`,
+    monnaie > 0 &&
+      new RegExp(new Intl.NumberFormat('fr-FR').format(monnaie).replace(/\s/g, '\\s')).test(avecMonnaie),
+    avecMonnaie.slice(-160)
+  );
+
+  await page.locator('button:has-text("Encaisser")').first().click();
+  await page.waitForTimeout(4000);
+
+  const recu = await texte();
+  verifie('le reçu confirme la vente', /Vente enregistrée/.test(recu), recu.slice(0, 200));
+  verifie('le panier est vidé après la vente', /Cliquez sur un produit/.test(await panier()));
+
+  // Ce que la base dit : stock descendu de 2,5, prix figé au prix négocié.
+  // sale_items n'a pas de colonne date : on repart donc de l'identifiant de
+  // la VENTE. Une requête directe sur sale_items ramenait une ancienne ligne
+  // du même produit, et le test comparait le mauvais enregistrement.
+  const derniereVente = (await base('/rest/v1/sales?select=id&order=created_at.desc&limit=1'))[0];
+  const lignes = await base(
+    `/rest/v1/sale_items?select=product_name,quantity,unit_price,subtotal,unit_cost,list_price&sale_id=eq.${derniereVente.id}`
+  );
+  const ligne = lignes.find((l) => l.product_name === nomCible);
+  verifie(
+    `la ligne de vente porte la quantité décimale (${nomCible} : 2,5)`,
+    Number(ligne?.quantity) === 2.5,
+    JSON.stringify(ligne)
+  );
+  verifie(
+    `le prix négocié est conservé en base (${prixNegocie} F)`,
+    Number(ligne?.unit_price) === prixNegocie,
+    JSON.stringify(ligne)
+  );
+  verifie(
+    `le prix catalogue est mémorisé à part (${prixUnit} F)`,
+    Number(ligne?.list_price) === prixUnit,
+    JSON.stringify(ligne)
+  );
+
+  const stockApres = await base('/rest/v1/products?select=name,stock_qty&limit=200');
+  const produitApres = stockApres.find((p) => p.name === nomCible);
+  verifie(
+    `le stock baisse de la quantité vendue (${stockInitial} → ${produitApres?.stock_qty})`,
+    Number(produitApres.stock_qty) === stockInitial - 2.5,
+    JSON.stringify(produitApres)
+  );
+
+  // Numéro de facture : unique et croissant
+  const factures = await base('/rest/v1/sales?select=invoice_number&order=created_at.desc&limit=5');
+  const numeros = factures.map((s) => s.invoice_number).filter(Boolean);
+  verifie('chaque vente reçoit un numéro de facture', numeros.length >= 1, JSON.stringify(numeros));
+  verifie('les numéros de facture sont uniques', new Set(numeros).size === numeros.length, JSON.stringify(numeros));
+}
+
+// ─── « Reprendre la dernière vente » ────────────────────────────────
+await fermerBoite();
+const reprise = page.locator('button:has-text("Reprendre la dernière vente")');
+if (await reprise.isVisible().catch(() => false)) {
+  await reprise.click();
+  await page.waitForTimeout(900);
+  const apresReprise = await panier();
+  verifie('reprendre la dernière vente la recharge au panier', !/Cliquez sur un produit/.test(apresReprise), apresReprise.slice(0, 120));
+} else {
+  resultats.push('— pas de « Reprendre la dernière vente » (aucune vente antérieure)');
+}
+
+// ─── Journal du jour : le chiffre d'affaires suit l'encaissement ─────
+await onglet('Ventes');
+await page.waitForTimeout(4000);
+const journal = await texte();
+const apresVente = await base('/rest/v1/sales?select=total_amount,amount_received&order=created_at.desc&limit=1');
+const derniere = apresVente[0];
+verifie(
+  `le journal affiche le CA encaissé de la dernière vente (${derniere?.amount_received} F)`,
+  journal.includes(new Intl.NumberFormat('fr-FR').format(Number(derniere?.amount_received ?? 0))),
+  journal.slice(0, 300)
+);
+
+// ─── Une vente à crédit entre-t-elle dans le CA ? ────────────────────
+await onglet('Vente');
+await page.waitForTimeout(2500);
+await page.evaluate(() => {
+  const liste = document.querySelector('.divide-y.divide-slate-100');
+  liste.children[0].click();
+});
+await page.waitForTimeout(700);
+await page.locator('button:has-text("Crédit")').first().click();
+await page.waitForTimeout(500);
+await page.fill('input[aria-label="Nom du client"]', 'Client QA');
+await page.fill('input[aria-label="Téléphone du client"]', '+229 97 00 00 00');
+await page.waitForTimeout(400);
+const boutonCredit = await page.locator('button:has-text("Céder à crédit")').first().innerText().catch(() => '');
+verifie('le bouton de crédit annonce le montant', /Céder à crédit\s?\d/.test(boutonCredit), boutonCredit);
+await page.locator('button:has-text("Céder à crédit")').first().click();
+await page.waitForTimeout(4000);
+const recuCredit = await texte();
+verifie('le reçu distingue la vente à crédit', /Vente cédée à crédit/.test(recuCredit), recuCredit.slice(0, 200));
+verifie('le reçu annonce le reste à recouvrer', /à recouvrer/.test(recuCredit), recuCredit.slice(0, 300));
+
+// Le crédit ne doit PAS gonfler le CA : c'est la promesse de l'écran Dettes.
+const credit = await base('/rest/v1/sales?select=payment_method,total_amount,amount_received&order=created_at.desc&limit=1');
+verifie(
+  'une vente à crédit est enregistrée avec amount_received = 0',
+  Number(credit[0].amount_received) === 0 && credit[0].payment_method === 'credit',
+  JSON.stringify(credit[0])
+);
+
+await onglet('Dettes');
+await page.waitForTimeout(4000);
+const dettes = await texte();
+verifie('la vente à crédit apparaît au carnet de dette', /Client QA/.test(dettes), dettes.slice(0, 300));
+
+// ─── Un règlement de dette change-t-il le CA ? ──────────────────────
+const champMontant = page.locator('input[aria-label^="Montant encaissé"]').first();
+if (await champMontant.isVisible().catch(() => false)) {
+  await champMontant.fill('500');
+  await page.waitForTimeout(300);
+  await page.locator('button:has-text("Encaisser")').first().click();
+  await page.waitForTimeout(4000);
+  const apresReglement = await base('/rest/v1/credit_payments?select=amount,method&order=created_at.desc&limit=1');
+  verifie(
+    `le règlement de 500 F est enregistré (dernier : ${apresReglement[0]?.amount} F)`,
+    Number(apresReglement[0]?.amount) === 500,
+    JSON.stringify(apresReglement[0])
+  );
+  const dettesApres = await texte();
+  verifie('le solde du client diminue après règlement', !/à recouvrer/.test(dettesApres) || dettesApres.includes('Client QA'));
+} else {
+  resultats.push('— aucun champ de règlement visible');
+}
+
+// ─── Stock : réapprovisionnement ─────────────────────────────────────
+await onglet('Stock');
+await page.waitForTimeout(2500);
+
+const produitsAvantRappro = await base('/rest/v1/products?select=name,stock_qty&limit=200');
+// On clique le premier bouton de réappro et on relit le nom qu'il annonce :
+// c'est du même coup la vérification que les boutons d'action sont nommés.
+const boutonRappro = page.locator('button[aria-label^="Réapprovisionner"]').first();
+const libelleRappro = (await boutonRappro.getAttribute('aria-label')) ?? '';
+const nomProduit = libelleRappro.replace(/^Réapprovisionner\s*/, '');
+await boutonRappro.click();
+await page.waitForTimeout(900);
+const modaleRappro = await page.evaluate(() => {
+  const m = document.querySelector('.fixed.inset-0.z-50');
+  return m ? m.innerText.replace(/\n+/g, ' | ') : '';
+});
+verifie("la modale de réappro s'ouvre", modaleRappro.length > 0, modaleRappro.slice(0, 150));
+verifie(
+  `le bouton de réappro nomme le produit (« ${nomProduit} »)`,
+  nomProduit.length > 0 && modaleRappro.includes(nomProduit),
+  `libellé : ${libelleRappro}`
+);
+
+if (modaleRappro) {
+  const stockAvant = produitsAvantRappro.find((p) => p.name === nomProduit)?.stock_qty;
+
+  const champQte = page.locator('.fixed.inset-0.z-50 input[type="number"]').first();
+  if (await champQte.isVisible().catch(() => false)) {
+    await champQte.fill('7');
+    await page.waitForTimeout(300);
+    await page.locator('.fixed.inset-0.z-50 form button[type="submit"]').first().click();
+    await page.waitForTimeout(3500);
+    const apres = await base('/rest/v1/products?select=name,stock_qty&limit=200');
+    const trouve = apres.find((p) => p.name === nomProduit);
+    verifie(
+      `le réappro de 7 augmente le stock de « ${nomProduit} » (${stockAvant} → ${trouve?.stock_qty})`,
+      trouve && Number(trouve.stock_qty) === Number(stockAvant) + 7,
+      JSON.stringify(trouve)
+    );
+  } else {
+    resultats.push('— aucun champ de quantité dans la modale de réappro');
+  }
+}
+await fermerBoite();
+
+// ─── Un produit créé depuis le formulaire ───────────────────────────
+await fermerBoite();
+const produitsAvant = (await base('/rest/v1/products?select=id&limit=200')).length;
+await page.locator('button:has-text("Ajouter")').first().click();
+await page.waitForTimeout(900);
+const modale = page.locator('.fixed.inset-0.z-50');
+
+// On cible par identifiant, pas par position : la position change dès qu'un
+// champ est ajouté, et une saisie décalée d'un cran passe inaperçue
+// (prix d'achat dans prix de vente) ou bloque le formulaire.
+const nomProduitQA = `Produit QA ${Date.now() % 100000}`;
+await modale.locator('#pf-nom').fill(nomProduitQA);
+await modale.locator('#pf-prix-achat').fill('1500');
+await modale.locator('#pf-prix-vente').fill('2500');
+await modale.locator('#pf-stock').fill('12');
+await modale.locator('button:has-text("Ajouter le produit")').first().click();
+await page.waitForTimeout(3500);
+
+const produitsApres = await base('/rest/v1/products?select=id,name,price_buy,price_sell,stock_qty&limit=200');
+const cree = produitsApres.find((p) => p.name === nomProduitQA);
+verifie(
+  'le produit créé est bien enregistré',
+  produitsApres.length === produitsAvant + 1 && Boolean(cree),
+  `${produitsAvant} → ${produitsApres.length}`
+);
+verifie(
+  'les prix et le stock saisis sont ceux enregistrés',
+  cree && Number(cree.price_buy) === 1500 && Number(cree.price_sell) === 2500 && Number(cree.stock_qty) === 12,
+  JSON.stringify(cree)
+);
+
+// ─── Le même rayon ne doit pas se dédoubler ─────────────────────────
+await fermerBoite();
+await page.locator('button:has-text("Ajouter")').first().click();
+await page.waitForTimeout(900);
+await modale.locator('#pf-nom').fill('Produit catégorie QA');
+await modale.locator('#pf-categorie').fill('smartphones');
+await page.waitForTimeout(600);
+const pastillesSmartphones = await page.evaluate(() => {
+  const m = document.querySelector('.fixed.inset-0.z-50');
+  if (!m) return -1;
+  const libelles = [...m.querySelectorAll('button')].map((b) => b.innerText.trim().toLowerCase());
+  return libelles.filter((t) => t === 'smartphones').length;
+});
+verifie(
+  `le rayon « smartphones » n'est proposé qu'une fois (${pastillesSmartphones} fois)`,
+  pastillesSmartphones >= 0 && pastillesSmartphones <= 1,
+  `${pastillesSmartphones} pastille(s)`
+);
+await fermerBoite();
+
+// ─── Restaurant : la salle et les recettes ──────────────────────────
+if (PROFIL === 'restaurant') {
+  await onglet('Salle');
+  await page.waitForTimeout(3000);
+  const salle = await texte();
+  verifie('la salle affiche des tables', /Table|Terrasse/.test(salle), salle.slice(0, 250));
+
+  const tables = await base('/rest/v1/restaurant_tables?select=id,name,zone,seats');
+  verifie('les tables sont bien en base', tables.length >= 3, JSON.stringify(tables));
+  const zones = new Set(tables.map((t) => t.zone));
+  verifie('les zones de salle sont définies', zones.size >= 1, [...zones].join(','));
+
+  await onglet('Recettes');
+  await page.waitForTimeout(3000);
+  const recettes = await texte();
+  verifie('les recettes listent des plats', /pour 1 portion|Recette|recette/i.test(recettes), recettes.slice(0, 250));
+}
+
+// ─── Erreurs JavaScript ─────────────────────────────────────────────
+verifie('aucune erreur JavaScript non rattrapée', erreursReseau.length === 0, erreursReseau.join(' | '));
+
+await navigateur.close();
+
+console.log(resultats.join('\n'));
+console.log(`\n${resultats.length} vérifications, ${echecs} en échec. Profil : ${PROFIL}`);
+process.exit(echecs ? 1 : 0);

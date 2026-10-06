@@ -199,6 +199,40 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
   const [panierOuvert, setPanierOuvert] = useState(false);
 
   /**
+   * Le panier plein écran n'a de sens que là où il n'y a pas de colonne
+   * latérale.
+   *
+   * Sans cette lecture de la media query, « Reprendre la dernière vente »
+   * ouvrait le panneau `fixed inset-0 z-40` même à 1280 px, où le panier est
+   * une colonne à droite : l'écran se trouvait recouvert, navigation comprise,
+   * et le commerçant se retrouvait bloqué — plus aucun onglet, plus
+   * « Actualiser », plus rien.
+   *
+   * À l'inverse, ajouter un produit n'ouvre PAS le panneau, même sur
+   * téléphone : le caissier enchaîne les articles, et c'est la barre du bas —
+   * qui affiche le total en permanence — qui ouvre la caisse quand il a
+   * fini. Seule la reprise d'une vente ouvre l'écran d'encaissement, parce
+   * qu'elle est déjà un acte de vente.
+   *
+   * On suppose le grand écran au premier rendu, comme le fait la Sidebar :
+   * le serveur ne doit pas pouvoir rendre le panneau mobile.
+   */
+  const [grandEcran, setGrandEcran] = useState(true);
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const suivre = () => {
+      setGrandEcran(mq.matches);
+      // Un retour en grand écran referme un panneau resté ouvert depuis le
+      // mobile, plutôt que de laisser un calque orphelin à l'écran.
+      if (mq.matches) setPanierOuvert(false);
+    };
+    suivre();
+    mq.addEventListener('change', suivre);
+    return () => mq.removeEventListener('change', suivre);
+  }, []);
+
+  /**
    * Dernière vente, pour la reprendre d'un clic.
    *
    * « Deux GSM pareils » est une vente fréquente en boutique de téléphone : le
@@ -387,8 +421,8 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
       return suivant;
     });
 
-    setPanierOuvert(true);
-  }, [ventePrecedente, products, dishIds]);
+    if (!grandEcran) setPanierOuvert(true);
+  }, [ventePrecedente, products, dishIds, grandEcran]);
 
   /**
    * Une frappe sur une lettre met le curseur dans la recherche.
@@ -771,7 +805,10 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           inert : quand le panneau est ouvert il recouvre la grille, qui doit
           alors sortir du parcours de tabulation et des lecteurs d'écran —
           sinon le clavier saute dans un contenu que l'utilisateur ne voit pas. */}
-      <div className="flex-1 space-y-4 pb-24 lg:pb-0" inert={panierOuvert}>
+      {/* inert seulement quand le panneau plein écran recouvre réellement la
+          grille : à partir de lg le panier est une colonne, et inert rendait
+          tout le catalogue inaccessible au clavier pour rien. */}
+      <div className="flex-1 min-w-0 space-y-4 pb-24 lg:pb-0" inert={panierOuvert && !grandEcran}>
         {/* Recherche collante sur grand écran : à 200 références, descendre
             au produit 150 puis remonter à la recherche pour une autre
             requête était un aller-retour à chaque frappe. relative reste le
@@ -908,22 +945,41 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                   }`}
                 >
                   <div className="flex-1 min-w-0">
+                    {/* Le nom porte l'information ; la catégorie est une
+                        mention. C'est donc le nom qui se tronque, et la
+                        catégorie qui disparaît en premier quand la ligne est
+                        courte. */}
                     <div className={`text-sm truncate ${vendable(p) ? 'font-medium text-slate-800' : 'text-slate-400 line-through'}`}>
                       {p.name}
-                      <span className="ml-2 text-xs font-normal text-slate-400">{p.category ?? '—'}</span>
                     </div>
-                    <div className="text-xs text-slate-500">
-                      {!vendable(p) ? (
-                        <span className="text-red-500 font-medium">Rupture de stock</span>
-                      ) : dishIds.has(p.id) ? (
-                        /* Un plat n'a pas de stock à afficher : ce qui peut
-                           manquer, c'est un ingrédient, et la vente sera refusée
-                           en le nommant. « Stock : 0 pce » sur un plat ne
-                           voulait rien dire. */
-                        <span className="text-slate-400">Recette</span>
-                      ) : (
-                        <>Stock : {formatQty(p.stock_qty)} {p.unit ?? 'pce'}</>
-                      )}
+                    {/* Deux mentions sur une rangée : le stock à gauche (c'est
+                        lui qu'on compare d'un produit à l'autre), le rayon à
+                        droite. min-w-0 + truncate sur la mention de droite :
+                        la catégorie suit le nom dans le flux du texte, elle
+                        débordait donc à droite d'une colonne qui ne déborde
+                                        pas — invisible pour tout contrôle de
+                        largeur de page, mais bien hors du cadre à l'écran. */}
+                    <div className="flex items-baseline gap-2 text-xs">
+                      <span
+                        className={`shrink-0 ${
+                          !vendable(p) ? 'text-red-500 font-medium' : 'text-slate-500'
+                        }`}
+                      >
+                        {!vendable(p) ? (
+                          'Rupture de stock'
+                        ) : dishIds.has(p.id) ? (
+                          /* Un plat n'a pas de stock à afficher : ce qui peut
+                             manquer, c'est un ingrédient, et la vente sera refusée
+                             en le nommant. « Stock : 0 pce » sur un plat ne
+                             voulait rien dire. */
+                          <span className="text-slate-400">Recette</span>
+                        ) : (
+                          <>Stock : {formatQty(p.stock_qty)} {p.unit ?? 'pce'}</>
+                        )}
+                      </span>
+                      <span className="min-w-0 truncate text-right text-slate-400">
+                        {p.category ?? '—'}
+                      </span>
                     </div>
                   </div>
                   <div className={`text-sm whitespace-nowrap ${vendable(p) ? 'font-semibold text-indigo-600' : 'text-slate-300 font-semibold'}`}>
@@ -966,7 +1022,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                 key={p.id}
                 onClick={() => ajouter(p)}
                 aria-disabled={!vendable(p) || undefined}
-                className={`group relative text-left rounded-xl border p-3 shadow-sm transition-all ${
+                className={`group relative flex flex-col text-left rounded-xl border p-3 shadow-sm transition-all ${
                   vendable(p)
                     ? 'border-slate-200 bg-white hover:border-indigo-400 hover:shadow-md active:scale-95'
                     : 'border-slate-200 bg-slate-50 cursor-not-allowed'
@@ -978,10 +1034,14 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                   </span>
                 )}
                 <div className="text-xs text-slate-500 mb-1">{p.category ?? '—'}</div>
-                <div className={`font-semibold text-sm leading-tight line-clamp-2 ${vendable(p) ? 'text-slate-800' : 'text-slate-400 line-through'}`}>
+                {/* min-h fixe la hauteur du bloc nom sur deux lignes. Sans elle,
+                    un nom court laissait les prix de la rangée monte à des
+                    hauteurs différentes : la grille devenait un escalier, et le
+                    prix — la seule chose qu'on compare — n'était plus aligné. */}
+                <div className={`min-h-9 font-semibold text-sm leading-tight line-clamp-2 ${vendable(p) ? 'text-slate-800' : 'text-slate-400 line-through'}`}>
                   {p.name}
                 </div>
-                <div className={`mt-2 font-bold ${vendable(p) ? 'text-indigo-600' : 'text-slate-300'}`}>{formatCFA(p.price_sell)}</div>
+                <div className={`mt-2 pt-auto font-bold ${vendable(p) ? 'text-indigo-600' : 'text-slate-300'}`}>{formatCFA(p.price_sell)}</div>
                 <div className="text-xs text-slate-500">
                   {!vendable(p) ? (
                     <span className="text-red-500 font-medium">Rupture de stock</span>
@@ -1044,9 +1104,14 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           chaque ajout devenait un aller-retour. max-h borné à la fenêtre :
           les articles défilent à l'intérieur du panneau, le pied (client,
           total, paiement, bouton) reste toujours visible sans défiler. */}
+      {/* panierOuvert ET !grandEcran : à partir de lg le panier est la colonne
+          de droite. Sans le `!grandEcran`, l'état resté vrai après un agrandissement
+          de fenêtre (rotation, branchement d'un second écran) faisait basculer le
+          panier en calque `fixed inset-0` par-dessus toute l'application —
+          navigation comprise, donc un écran mort. */}
       <div
         className={
-          panierOuvert
+          panierOuvert && !grandEcran
             ? 'fixed inset-0 z-40 bg-white flex flex-col gap-3 p-4 overflow-hidden'
             : 'hidden lg:flex lg:w-80 lg:shrink-0 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto flex-col gap-3'
         }
@@ -1061,7 +1126,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
               depuis la barre du bas. Sans le `lg:hidden`, un passage en
               grand écran après ouverture (rotation du téléphone) laisserait
               la grille inerte sans issue visible pour la réactiver. */}
-          {panierOuvert && (
+          {panierOuvert && !grandEcran && (
             <button
               onClick={() => setPanierOuvert(false)}
               className="ml-auto p-1 text-slate-500 hover:text-slate-700"

@@ -337,9 +337,15 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onImport, o
                     <TableCell>
                       {canManageProducts ? (
                         <div className="flex items-center justify-center gap-1">
+                          {/* aria-label et non seulement title : trois
+                              boutons « Réapprovisionner » dans la même ligne
+                              n'ont aucun nom propre une fois le titre retiré
+                              (survol, tactile, lecteur d'écran). Le nom du
+                              produit les distingue. */}
                           <button
                             onClick={() => onRestock(p)}
                             title="Réapprovisionner"
+                            aria-label={`Réapprovisionner ${p.name}`}
                             className="p-1.5 rounded-lg text-emerald-700 hover:bg-emerald-50"
                           >
                             <PackagePlus className="h-4 w-4" />
@@ -347,6 +353,7 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onImport, o
                           <button
                             onClick={() => onEdit(p)}
                             title="Modifier"
+                            aria-label={`Modifier ${p.name}`}
                             className="p-1.5 rounded-lg text-indigo-600 hover:bg-indigo-50"
                           >
                             <Pencil className="h-4 w-4" />
@@ -355,6 +362,7 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onImport, o
                             onClick={() => handleArchive(p)}
                             disabled={deletingId === p.id}
                             title="Archiver"
+                            aria-label={`Archiver ${p.name}`}
                             className="p-1.5 rounded-lg text-red-500 hover:bg-red-50 disabled:opacity-40"
                           >
                             <Trash2 className="h-4 w-4" />
