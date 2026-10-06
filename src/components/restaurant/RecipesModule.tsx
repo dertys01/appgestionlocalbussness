@@ -144,6 +144,22 @@ export function RecipesModule() {
     [lignes]
   );
 
+  /**
+   * Ce qui peut encore entrer dans la recette.
+   *
+   * Les ingrédients DÉJÀ composants en sont retirés. Ils y figuraient, et
+   * add_recipe_ingredient() répond à un doublon par un `ON CONFLICT DO UPDATE`
+   * : choisir « Riz blanc » une seconde fois ne créait pas une deuxième ligne,
+   * il REMPLAÇAIT la quantité de la première par celle du champ — « 1 » par
+   * défaut — sans un mot. Le coût de revient, la marge affichée et la
+   * consommation du stock suivaient, tous trois faux, en deux clics. Un plat à
+   * 0,3 kg de riz pour une portion passait à 1 kg, et personne ne le voyait.
+   */
+  const disponibles = useMemo(() => {
+    const pris = new Set(lignes.map((l) => l.ingredient_id));
+    return catalogue.filter((c) => c.id !== sel && !pris.has(c.id));
+  }, [catalogue, lignes, sel]);
+
   const ajouterOption = async () => {
     if (!sel || !optionNom.trim()) return;
     const prix = lireMontant(optionPrix) ?? 0;
@@ -350,11 +366,9 @@ export function RecipesModule() {
                   className="flex-1 min-w-40 rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                 >
                   <option value="">— Ingrédient —</option>
-                  {catalogue
-                    .filter((c) => c.id !== sel)
-                    .map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
+                  {disponibles.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
                 </select>
                 <Input
                   value={qte}

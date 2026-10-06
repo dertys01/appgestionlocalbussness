@@ -10,10 +10,11 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
  * Sprint 14 écrira dans `sales`.
  */
 
-const { salle, inserts, lignesCommande, modificateurs, updates } = vi.hoisted(() => {
+const { salle, prises, inserts, lignesCommande, modificateurs, updates } = vi.hoisted(() => {
   const inserts: Array<Record<string, unknown>> = [];
   return {
     salle: [] as unknown[],
+    prises: [] as unknown[],
     inserts,
     lignesCommande: [] as unknown[],
     modificateurs: [] as unknown[],
@@ -27,6 +28,10 @@ const chaine = (donnees: unknown, tableCourante = '') => {
   const c: Record<string, unknown> = {};
   c.select = () => c;
   c.eq = () => c;
+  // Les commandes à emporter sont filtrées par .is('table_id', null) puis
+  // .neq('status', 'closed') : la chaîne doit les encaisser sans se rompre.
+  c.is = () => c;
+  c.neq = () => c;
   // Le module enchaîne deux .order() (zone puis nom) : la chaîne doit donc
   // rester elle-même jusqu'au dernier, et se résoudre à l'await. Une promesse
   // dès le premier .order() faisait échouer le deuxième.
@@ -66,7 +71,9 @@ const supabase = {
         ? chaine(lignesCommande, table)
         : table === 'product_modifiers'
           ? chaine(modificateurs, table)
-          : chaine({ id: 'x' }, table),
+          : table === 'restaurant_orders'
+            ? chaine(prises, table)
+            : chaine({ id: 'x' }, table),
   rpc: vi.fn(async (fn: string) => {
     rpcResultats.push(fn);
     if (fn === 'close_table_order') {
@@ -104,7 +111,15 @@ vi.mock('@/components/providers/SupabaseProvider', () => ({
 vi.mock('@/lib/utils/activity', () => ({ logActivity: vi.fn() }));
 
 import { FloorModule } from '@/components/restaurant/FloorModule';
+import { printKitchenTicket } from '@/lib/utils/kitchen';
 import type { Product } from '@/types';
+
+/**
+ * Le ticket de cuisine est le seul endroit où l'impression est observable
+ * depuis la salle : on remplace la fenêtre `blob:` par un espion pour vérifier
+ * CE QUI PART SUR LE PAPIER, et pas seulement que le bouton ne casse pas.
+ */
+vi.mock('@/lib/utils/kitchen', () => ({ printKitchenTicket: vi.fn(() => true) }));
 
 const produits = [
   { id: 'p1', name: 'Poulet braisé', sku: 'POU', price_buy: 2000, price_sell: 4500, stock_qty: 30, min_stock_level: 5, category: 'Plats', unit: 'pce' },
@@ -128,6 +143,16 @@ const table = (over: Record<string, unknown> = {}) => ({
 function definirSalle(...lignes: ReturnType<typeof table>[]) {
   salle.length = 0;
   salle.push(...lignes);
+}
+
+/**
+ * Commandes à emporter en cours. Elles ne sont PAS dans `salle` : la vue
+ * restaurant_floor est pilotée par les tables, c'est précisément pourquoi une
+ * commande sans table disparaissait de l'écran.
+ */
+function definirPrises(...ps: unknown[]) {
+  prises.length = 0;
+  prises.push(...ps);
 }
 
 function definirCommande(...ls: unknown[]) {
@@ -158,6 +183,8 @@ beforeEach(() => {
   acteur.isEmployee = false;
   updates.length = 0;
   inserts.length = 0;
+  prises.length = 0;
+  vi.mocked(printKitchenTicket).mockClear();
 });
 
 describe('FloorModule — la salle', () => {
@@ -410,7 +437,9 @@ fireEvent.click(screen.getAllByText('Poulet braisé')[0]);
     fireEvent.click(screen.getByText('Table 1'));
 
     const champ = await screen.findByLabelText(/Quantité de Poulet braisé/i);
-    expect(champ).toHaveValue(2);
+    // type="text" (et non "number") : la valeur est une chaîne. C'est ce qui
+    // permet à « 2,5 » d'entrer — voir le test suivant.
+    expect(champ).toHaveValue('2');
 
     updates.length = 0;
     fireEvent.blur(champ, { target: { value: '5' } });
@@ -418,6 +447,123 @@ fireEvent.click(screen.getAllByText('Poulet braisé')[0]);
     await waitFor(() =>
       expect(updates.some((u) => u.payload.quantity === 5 && u.id === 'l1')).toBe(true),
     );
+  });
+
+  /**
+   * Trouvé en recette le 05/10/2026.
+   *
+   * Le champ était `type="number"`, et un champ number REJETTE la virgule : il
+   * vide `e.target.value` au lieu de la prendre. « 1,2 » arrivait donc dans le
+   * onBlur sous forme de chaîne vide, `Number('')` vaut 0, et le serveur se
+   * voyait afficher « La quantité doit être un nombre supérieur à zéro » — la
+   * faute à la personne qui n'avait fait que taper comme au clavier de son
+   * téléphone. Or `min="0.25"` disait pourtant que les fractions étaient
+   * attendues. C'est exactement le défaut qui avait été corrigé à la caisse
+   * (POSModule, `type="text" inputMode="decimal"`) et oublié ici.
+   */
+  it('accepte la virgule dans la quantité d\'une ligne', async () => {
+    definirSalle(table({ id: 't1', name: 'Table 1' }));
+    definirCommande(plat);
+    render(<FloorModule products={produits} />);
+
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Table 1'));
+
+    const champ = await screen.findByLabelText(/Quantité de Poulet braisé/i);
+    updates.length = 0;
+    fireEvent.blur(champ, { target: { value: '1,25' } });
+
+    await waitFor(() =>
+      expect(updates.some((u) => u.payload.quantity === 1.25 && u.id === 'l1')).toBe(true),
+    );
+    expect(screen.queryByText(/doit être un nombre supérieur/i)).not.toBeInTheDocument();
+  });
+
+  /**
+   * Trouvé en recette le 05/10/2026.
+   *
+   * Le ticket imprimait TOUTES les lignes de la commande, y compris celles
+   * déjà servies. Deuxième passage sur la même table, la cuisine recevait les
+   * plats cuits une première fois comme neufs et en refaisait autant : de la
+   * nourriture jetée, et des clients qui attendent un plat qu'ils ont déjà
+   * mangé. Le papier doit dire la même chose que send_order_items().
+   */
+  it('n\'imprime en cuisine que ce qui n\'est pas encore parti', async () => {
+    definirSalle(table({ id: 't1', name: 'Table 1' }));
+    definirCommande(
+      plat,
+      { ...plat, id: 'l2', status: 'served', product: { name: 'Riz gras' } },
+    );
+    render(<FloorModule products={produits} />);
+
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Table 1'));
+
+    const imprimer = await screen.findByRole('button', { name: /Imprimer le ticket cuisine/i });
+    fireEvent.click(imprimer);
+
+    await waitFor(() => expect(printKitchenTicket).toHaveBeenCalledTimes(1));
+    const ticket = vi.mocked(printKitchenTicket).mock.calls[0][0];
+    expect(ticket.items).toHaveLength(1);
+    expect(ticket.items[0]).toMatchObject({ product_name: 'Poulet braisé', status: 'new' });
+  });
+
+  /**
+   * La face du test précédent : quand tout est déjà parti, il n'y a rien à
+   * imprimer. Imprimer quand même reviendrait à relancer un plat.
+   */
+  it('refuse le ticket quand la commande est déjà partie en cuisine', async () => {
+    definirSalle(table({ id: 't1', name: 'Table 1' }));
+    definirCommande({ ...plat, status: 'served' });
+    render(<FloorModule products={produits} />);
+
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Table 1'));
+
+    const imprimer = await screen.findByRole('button', { name: /Imprimer le ticket cuisine/i });
+    fireEvent.click(imprimer);
+
+    await expect(
+      screen.findByText(/déjà partis en cuisine/i),
+    ).resolves.toBeInTheDocument();
+    expect(printKitchenTicket).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Trouvé en recette le 05/10/2026.
+   *
+   * Une commande à emporter n'a pas de table, et la vue `restaurant_floor` est
+   * pilotée par les tables : elle n'y figure donc jamais. « Fermer le panneau »
+   * — ou le simple fait de cliquer sur une table — rendait alors la commande
+   * inatteignable à jamais. Ses plats étaient servis, et rien ne pouvait ni
+   * l'ajouter ni la solder.
+   */
+  it('retrouve une commande à emporter fermée du panneau', async () => {
+    // La salle est vide : c'est le cas où la commande orpheline était la plus
+    // invisible — l'écran affichait « Aucune table configurée ».
+    definirSalle();
+    definirPrises({
+      id: 'cmd-7',
+      customer_name: 'Koffi',
+      opened_at: new Date(Date.now() - 12 * 60000).toISOString(),
+      status: 'open',
+      items: [{ quantity: 2, unit_price: 4500, extra_price: 0 }],
+    });
+
+    render(<FloorModule products={produits} />);
+
+    await waitFor(() =>
+      expect(screen.getByText('À emporter en cours')).toBeInTheDocument(),
+    );
+    expect(screen.queryByText('Aucune table configurée')).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole('button', { name: /Reprendre la commande à emporter de Koffi/ }),
+    );
+
+    // Le panneau se rouvre sur la MÊME commande : on n'en a pas créé une autre.
+    expect(screen.getByText(/Aucun plat commandé/)).toBeInTheDocument();
+    expect(inserts.filter((i) => 'table_id' in i)).toHaveLength(0);
   });
 
   /**

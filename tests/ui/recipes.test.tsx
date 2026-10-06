@@ -157,6 +157,31 @@ describe('RecipesModule — le coût de revient d\'un plat', () => {
     }));
   });
 
+  it('ne propose pas un ingrédient déjà dans la recette', async () => {
+    definirPlats(PLAT);
+    definirIngredients({
+      ingredient_id: 'p2',
+      quantity: 0.3,
+      ingredient: { name: 'Riz blanc', unit: 'kg', stock_qty: 50, price_buy: 400 },
+    });
+    render(<RecipesModule />);
+
+    await waitFor(() => expect(screen.getByLabelText(/Plat à composer/i)).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/Plat à composer/i), { target: { value: 'p1' } });
+
+    const select = (await screen.findByLabelText(
+      /Ingrédient à ajouter/i,
+    )) as HTMLSelectElement;
+
+    // « Riz blanc » est déjà composant : il ne reste que le sélecteur vide.
+    // S'il y revenait, add_recipe_ingredient() répond au doublon par un
+    // ON CONFLICT DO UPDATE et REMPLACE la quantité par celle du champ (« 1 »),
+    // sans un mot — 0,3 kg de riz deviennent 1 kg, et le coût de revient, la
+    // marge et la consommation du stock deviennent faux en deux clics.
+    await waitFor(() => expect(select.options).toHaveLength(1));
+    expect(select.options[0].text).toBe('— Ingrédient —');
+  });
+
   it('affiche l\'erreur quand la base refuse une recette circulaire', async () => {
     definirPlats(PLAT);
     definirIngredients();

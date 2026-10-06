@@ -73,6 +73,45 @@ const minutesDepuis = (iso: string | null) => {
   return Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
 };
 
+/**
+ * Une commande à emporter en cours.
+ *
+ * Elle n'a pas de table, et c'est là que se joue le bug qu'elle répare : la vue
+ * `restaurant_floor` est pilotée par les tables (FROM restaurant_tables LEFT
+ * JOIN restaurant_orders), donc une commande sans table n'y apparaît jamais.
+ * Le seul écran qui la connaissait était le panneau ouvert — « Fermer le
+ * panneau », ou le clic sur n'importe quelle table, la rendait alors
+ * inatteignable à jamais. Ses plats étaient servis, sa ligne de commande
+ * existait, et personne ne pouvait plus ni l'ajouter ni la solder : ni vente,
+ * ni stock décrémenté. (Retrouvé en recette le 05/10/2026.)
+ *
+ * Les lignes viennent avec la commande, pour afficher le montant déjà
+ * engagé : c'est ce qui permet de reconnaître la commande dans la liste.
+ */
+interface TakeawayRow {
+  id: string;
+  customer_name: string | null;
+  opened_at: string | null;
+  /**
+   * Serves le même libellé que les tables. `closed` est filtré par la requête
+   * (`.neq('status','closed')`) : il ne vient pas ici, et STATUT_LIBELLE n'a
+   * pas de clé pour.
+   */
+  status: 'open' | 'bill_requested';
+  items: Array<{ quantity: number; unit_price: number; extra_price: number | null }> | null;
+}
+
+/**
+ * Même addition que celle du panneau (`totalLignes`) et de la vue
+ * (`order_total`) : quantité × (prix convenu + supplément du modificateur).
+ * Trois endroits, une seule formule.
+ */
+const totalPrise = (p: TakeawayRow) =>
+  (p.items ?? []).reduce(
+    (n, l) => n + Number(l.quantity) * (Number(l.unit_price) + Number(l.extra_price ?? 0)),
+    0,
+  );
+
 /** getDay() : 0 = dimanche. L'ordre commence donc par lundi, comme un menu. */
 const JOURS = [
   { valeur: 1, court: 'Lun' },
@@ -95,6 +134,7 @@ export function FloorModule({
   const { supabase, ownerId, actorName, user, canManageProducts, isEmployee, org } = useSupabase();
 
   const [tables, setTables] = useState<TableRow[]>([]);
+  const [prises, setPrises] = useState<TakeawayRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -141,14 +181,32 @@ export function FloorModule({
   const loadTables = useCallback(async () => {
     setLoading(true);
     setError('');
-    const { data, error: err } = await db
-      .from('restaurant_floor')
-      .select('id, name, zone, seats, is_active, order_id, status, customer_name, opened_at, amount_paid, order_total')
-      .order('zone')
-      .order('name');
+    // Deux lectures en parallèle : le plan de salle ET les commandes à
+    // emporter, qui n'y figurent pas (voir TakeawayRow). Les faire séquentielles
+    // ajouterait une aller-retour au rafraîchissement le plus fréquent de
+    // l'application.
+    const [plan, emporter] = await Promise.all([
+      db
+        .from('restaurant_floor')
+        .select('id, name, zone, seats, is_active, order_id, status, customer_name, opened_at, amount_paid, order_total')
+        .order('zone')
+        .order('name'),
+      db
+        .from('restaurant_orders')
+        .select('id, customer_name, opened_at, status, items:restaurant_order_items(quantity, unit_price, extra_price)')
+        .is('table_id', null)
+        .neq('status', 'closed')
+        .order('opened_at'),
+    ]);
     setLoading(false);
-    if (err) { setError(err.message); return; }
-    setTables((data ?? []) as TableRow[]);
+    if (plan.error) { setError(plan.error.message); return; }
+    setTables((plan.data ?? []) as TableRow[]);
+    // Une erreur sur la seconde lecture ne doit pas masquer le plan déjà reçu :
+    // on la signale et on laisse la liste vide au pire.
+    if (emporter.error) { setError(emporter.error.message); return; }
+    setPrises(
+      Array.isArray(emporter.data) ? (emporter.data as TakeawayRow[]) : []
+    );
   }, [db]);
 
   const loadLines = useCallback(async (id: string) => {
@@ -550,15 +608,28 @@ export function FloorModule({
    * l'impression a échoué est récupérable, une commande partie sans papier
    * ne l'est pas. Les lignes viennent de l'état affiché, pas d'une requête
    * supplémentaire — ce sont exactement celles que le serveur vient de lire.
+   *
+   * Seules les lignes « à envoyer » partent sur le papier. Trouvé en recette
+   * le 05/10/2026 : le ticket imprimait TOUTES les lignes de la commande,
+   * y compris celles déjà servies. Deuxième passage sur la même table, la
+   * cuisine recevait les plats cuits une première fois comme neufs et en
+   * refaisait autant — de la nourriture jetée, et des clients qui attendent
+   * le plat qu'ils ont déjà mangé. C'est send_order_items() qui marque
+   * « envoyé » : le papier doit dire la même chose qu'elle.
    */
   const imprimerTicket = () => {
     if (!org || !orderId) return;
+    const aEnvoyer = lines.filter((l) => l.status === 'new');
+    if (aEnvoyer.length === 0) {
+      setError('Tous les plats de cette commande sont déjà partis en cuisine : rien à imprimer.');
+      return;
+    }
     const ok = printKitchenTicket({
       orderId,
       tableName: tableOuverte?.name ?? null,
       zone: tableOuverte?.zone || null,
       openedAt: tableOuverte?.opened_at ?? null,
-      items: lines.map((l) => ({
+      items: aEnvoyer.map((l) => ({
         product_name: l.name ?? 'Plat',
         quantity: Number(l.quantity),
         note: l.note,
@@ -608,8 +679,10 @@ export function FloorModule({
       </Card>
     ) : null;
 
-  // ── Aucune table : le module n'a rien à montrer tant que la salle est vide
-  if (!loading && tables.length === 0) {
+  // ── Aucune table : le module n'a rien à montrer tant que la salle est vide.
+  // Les commandes à emporter comptent ici : elles vivent sans table, donc une
+  // salle vide n'implique pas un module vide.
+  if (!loading && tables.length === 0 && prises.length === 0) {
     return (
       <div className="space-y-4">
         {error && (
@@ -746,6 +819,75 @@ export function FloorModule({
       )}
 
       {/* ── À emporter ── */}
+      {prises.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            À emporter en cours
+          </p>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+            {prises.map((p) => {
+              const minutes = minutesDepuis(p.opened_at);
+              const actif = p.id === orderId;
+              return (
+                <button
+                  key={p.id}
+                  aria-label={`Reprendre la commande à emporter${
+                    p.customer_name ? ` de ${p.customer_name}` : ''
+                  }`}
+                  onClick={() => {
+                    // Même geste qu'une tuile de table : carte complète, puis
+                    // on rouvre LA commande, sans en créer une seconde.
+                    setSearch('');
+                    setOuverte({ tableId: '', nom: 'À emporter', client: p.customer_name });
+                    setOrderId(p.id);
+                  }}
+                  disabled={busy}
+                  className={`text-left rounded-xl border-2 p-3 transition-colors disabled:opacity-60 ${
+                    actif
+                      ? 'border-indigo-500 bg-indigo-50'
+                      : p.status === 'bill_requested'
+                        ? 'border-amber-300 bg-amber-50'
+                        : 'border-indigo-200 bg-white hover:border-indigo-300'
+                  }`}
+                >
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-semibold text-slate-800 text-sm truncate">
+                      À emporter
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-1">
+                    <span
+                      className={
+                        p.status === 'bill_requested'
+                          ? 'text-amber-700 font-medium'
+                          : 'text-indigo-600 font-medium'
+                      }
+                    >
+                      {STATUT_LIBELLE[p.status]}
+                    </span>
+                    {minutes !== null && (
+                      <>
+                        <span>·</span>
+                        <Clock className="h-3 w-3" />
+                        <span>{minutes} min</span>
+                      </>
+                    )}
+                  </div>
+                  <div className="mt-1.5 text-sm font-bold text-indigo-600">
+                    {formatCFA(totalPrise(p))}
+                  </div>
+                  {p.customer_name && (
+                    <div className="text-[11px] text-slate-500 truncate mt-0.5">
+                      {p.customer_name}
+                    </div>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
       {peutEncaisser && orderId === null && (
         <button
           onClick={openTakeaway}
@@ -824,12 +966,19 @@ export function FloorModule({
                       )}
                     </span>
                     {/* Quantité modifiable APRÈS l'ajout — voir setLineQty.
-                        Le champ est décimal et borné par le navigateur : « 1,2 »
-                        comme « 1.2 » sont acceptés. */}
+                        type="text" et non "number" : un champ number REJETTE la
+                        virgule, il vide la saisie au lieu de la prendre — exactement
+                        le défaut corrigé à la caisse (POSModule). Ici c'est pire
+                        encore : le champ n'était pas vide, il retombait dans
+                        onBlur → setLineQty('') et affichait « La quantité doit être
+                        un nombre supérieur à zéro » à qui tapait « 1,2 ». Or
+                        min="0.25" disait pourtant que les fractions étaient
+                        attendues. inputMode="decimal" garde le pavé numérique.
+                        Le filtrage est fait par setLineQty, qui refuse tout ce qui
+                        n'est pas un nombre positif. */}
                     <Input
-                      type="number"
-                      min="0.25"
-                      step="0.25"
+                      type="text"
+                      inputMode="decimal"
                       defaultValue={String(l.quantity)}
                       disabled={busy}
                       aria-label={`Quantité de ${l.name}`}
@@ -1003,8 +1152,26 @@ export function FloorModule({
                     const base = jours ?? JOURS.map((x) => x.valeur);
                     const suivant = actif ? base.filter((d) => d !== j.valeur) : [...base, j.valeur];
                     const value = suivant.length === 0 || suivant.length === 7 ? null : suivant;
+                    // Écriture optimiste, mais AVEC retour arrière. Sans lui,
+                    // un échec (réseau, policy) laissait l'écran dire que la
+                    // carte avait changé alors que la base n'avait rien pris :
+                    // le patron croyait son plat retiré du jour, le serveur le
+                    // proposait encore — et le test de recette suivant
+                    // confirmait « carte du jour OK » puisque c'est l'écran qui
+                    // mentait, pas la base.
+                    const avant = platChoisi;
                     setPlatChoisi({ ...platChoisi, menu_days: value });
-                    await db.from('products').update({ menu_days: value }).eq('id', platChoisi.id);
+                    const { error: errJours } = await db
+                      .from('products')
+                      .update({ menu_days: value })
+                      .eq('id', platChoisi.id);
+                    if (errJours) {
+                      setPlatChoisi(avant);
+                      setError(
+                        `La carte du jour n'a pas été enregistrée : ${errJours.message}`,
+                      );
+                      return;
+                    }
                     await onChanged?.();
                   }}
                   className={`rounded-full border px-2.5 py-1 text-xs transition-colors ${

@@ -3436,6 +3436,59 @@ check('25i. une vente sans ingrédient suffisant est refusée', pasStock);
     `SELECT count(*) FROM recipe_ingredients WHERE dish_id = '${RJ}'`, false, PATRON);
 }
 
+// 25n → 25p. Un plat composé d'un AUTRE plat.
+//
+// migration_recipes.sql promet : « Le riz des deux est additionné : vendre un
+// poulet consomme ce que les deux plats demandent. » Le COÛT tient cette
+// promesse — product_cost() est récursif (25c). La CONSOMMATION, elle, ne
+// l'était pas : sale_items_consume_ingredients() ne descendait qu'UN niveau,
+// prenait le plat intermédiaire pour un ingrédient et décrémentait SON stock —
+// dont la valeur naturelle est 0. Deux conséquences, selon que ce stock existe :
+// la vente est REFUSÉE (« Stock insuffisant pour l'ingrédient « Poulet en
+// portion » » — alors que le riz est plein), ou elle passe en décrémentant un
+// plat qui n'existe pas en stock et en laissant le riz intact. Dans les deux
+// cas, l'inventaire ment.
+{
+  const MENU = 'dddddddd-0000-0000-0000-000000000010';
+  const PORT = 'dddddddd-0000-0000-0000-000000000011';
+  const VTE = 'eeeeeeee-0000-0000-0000-000000000009';
+
+  // 25m a laissé le jeton sur un AUTRE acteur (c'est ce que vérifie canRead) :
+  // get_business_owner_id() résoudrait alors un autre tenant, et
+  // add_recipe_ingredient() répondrait « Plat introuvable » pour une raison de
+  // fixture. On se replace sur le patron du restaurant, comme le fait la
+  // section 26 juste après.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${RESTO}', false)`);
+
+  await q(`INSERT INTO products (id, user_id, name, price_buy, price_sell, stock_qty, min_stock_level) VALUES
+    ('${MENU}', '${RESTO}', 'Menu du jour',  0, 3000, 0, 0),
+    ('${PORT}', '${RESTO}', 'Poulet portion', 0, 2000, 0, 0)`);
+  // Deux niveaux : MENU → PORT → riz. Le riz est la seule feuille.
+  await q(`SELECT add_recipe_ingredient('${PORT}', '${RR}', 0.2)`);
+  await q(`SELECT add_recipe_ingredient('${MENU}', '${PORT}', 1)`);
+
+  const rizAvant = await stock(RR);
+  let vendu = true;
+  let refus = '';
+  try {
+    await q(`INSERT INTO sales (id, user_id, total_amount, payment_method, amount_received)
+      VALUES ('${VTE}', '${RESTO}', 3000, 'cash', 3000)`);
+    await q(`INSERT INTO sale_items (sale_id, product_id, product_name, quantity, unit_price, subtotal, unit_cost, list_price)
+      VALUES ('${VTE}', '${MENU}', 'Menu du jour', 1, 3000, 3000, 0, 3000)`);
+  } catch (err) { vendu = false; refus = err.message; }
+  check('25n. la vente d\'un plat composé d\'un autre plat aboutit', vendu,
+    refus.slice(0, 110));
+
+  const rizApres = await stock(RR);
+  check('25o. et la feuille de la recette est consommée (0,2 kg de riz)',
+    rizApres === Math.round((rizAvant - 0.2) * 1000) / 1000,
+    `riz ${rizApres}, avant ${rizAvant}, attendu ${rizAvant - 0.2}`);
+
+  const portStock = await stock(PORT);
+  check('25p. le plat intermédiaire n\'a pas de stock à décrémenter',
+    portStock === 0, `stock ${portStock}, attendu 0`);
+}
+
 // ─── 26. Restaurant : modificateurs, pourboire, réservations ──
 // Les finitions qui font la différence entre « une caisse qui gère des plats »
 // et « une caisse de restaurant ». Trois règles y comptent : le modificateur
