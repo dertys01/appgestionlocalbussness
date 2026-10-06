@@ -27,7 +27,7 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('claim_webhook_event(text,text,text)', '40a1a3cbee1bf96bae5f60debca639fa', '0c164db9340e69ec622cd45bae135cb4'),
     ('close_beta_program()', '28a8854e2d5e4e0ebf74288bfa0a0cae', '5a82cf9f604a045ca4f163abc3cd1650'),
     ('close_table_order(uuid,text,numeric,integer,text,text,numeric)', '0203a702c3229e4d060d929cfb7e1285', '3954e9994a8ec5e873973912f02ebd0a'),
-    ('create_sale(jsonb,text,text,text)', 'da6e0c2f58ec4527db3bff1e630fb9b4', '8a6f6bf553a616318c32fb26b8f05bd0'),
+    ('create_sale(jsonb,text,text,text)', 'd08703ca15f146827f8479ea7e9c9f30', 'c528887ee89306bc0a071f9ea39a08f6'),
     ('current_org_plan()', '85e3ffea01aa25bdc1b405db6e2f8836', '8354e3aaa7ae02d48d1ae89a11c33bb2'),
     ('fill_amount_received()', '35e03e2e5bc95e91ad3d43a5e0c5e8e2', '5e1305ee23c60dc867e4b46cd49f9219'),
     ('freeze_sale_item_cost()', '51ea5fb2804004f581857f43c0702706', '9c10ad43d8f21aed0a3b77accd71c0da'),

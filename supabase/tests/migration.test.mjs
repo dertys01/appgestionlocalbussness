@@ -69,6 +69,9 @@ const ORDER = [
   //precéder le rejouage de DERNIERE_VERSION, qui réinstalle l'ancienne
   // version de get_sales_summary() via migration_sales_summary.sql.
   'migration_ca_caisse.sql',
+  // Facturation : une boutique dont le compteur est désaligné doit pouvoir
+  // vendre. Elle redéfinit create_sale() en entier, donc DERNIÈRE.
+  'migration_facture_sequentielle.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -232,6 +235,11 @@ const DERNIERE_VERSION = [
   // En DERNIÈRE position, comme la règle du dépôt l'impose.
   'migration_security.sql',
   'migration_ca_caisse.sql',
+  // Facturation : redéfinit create_sale() en entier, donc elle ferme la
+  // liste. Sans cela la suite testerait la version antérieure — celle qui
+  // bloque une boutique dont le compteur est désaligné — et les tests 29*
+  // passeraient à vide.
+  'migration_facture_sequentielle.sql',
 ];
 
 console.log(`\n▸ Rejouabilité (${REPLAYABLE.length} migrations incrémentales)`);
@@ -4113,6 +4121,159 @@ const d2 = (await q(`SELECT id::text d FROM customer_debts
     `INSERT INTO credit_payments (debt_id, user_id, amount, day, method)
      VALUES ('${d2}', '${CA}', 100, current_date, 'cash')`,
     false, CAISSER2);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// Facturation séquentielle — une boutique bloquée ne peut plus vendre
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Le scénario reproduit ici est le pire de l'application : le compteur de
+// factures est désaligné, `create_sale()` se prend une violation d'unicité, et
+// le commerçant ne peut plus encaisser QUOI QUE CE SOIT. Aucune quantité, aucun
+// client, aucun montant ne débloque la boutique.
+//
+// Chaque test réfute le mécanisme de blocage, pas seulement le symptôme.
+console.log('\n▸ Facturation : compteur désaligné');
+
+const FB = 'ffffffff-0000-0000-0000-0000000000fb';
+const FB2 = 'ffffffff-0000-0000-0000-000000000fb2';
+const FP1 = 'ffffffff-0000-0000-0000-0000000000f1';
+const FP2 = 'ffffffff-0000-0000-0000-0000000000f2';
+const AN = new Date().getFullYear();
+
+{
+  await q(`INSERT INTO auth.users (id, email) VALUES ('${FB}', 'facture@test.local')`);
+  await q(`INSERT INTO organizations (id, name, slug, plan, timezone)
+    VALUES ('${FB}', 'Boutique facturée', 'boutique-facturee', 'pro', 'Africa/Porto-Novo')`);
+  await q(`INSERT INTO products (id, user_id, name, price_sell, price_buy, stock_qty)
+    VALUES ('${FP1}', '${FB}', 'Article facturé', 2000, 900, 100)`);
+  // La boutique courante doit être FB : create_sale() ne voit que le tenant
+  // de l'appelant, et refuserait un produit qui n'est pas le sien.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${FB}', false)`);
+}
+
+const vendreFB = async (qte = 1) => {
+  const r = await q(
+    `SELECT create_sale('[{"product_id":"${FP1}","quantity":${qte}}]'::jsonb, 'cash')`
+  );
+  return r.rows[0].create_sale;
+};
+const compteurFB = async () =>
+  Number((await q(`SELECT invoice_counter FROM organizations WHERE id='${FB}'`)).rows[0].invoice_counter);
+
+// Une facture saisie à la main, hors de create_sale() : c'est ainsi qu'une
+// boutique se désaligne (rattrapage après incident, restauration, bascule de
+// plan). Le compteur reste à 0, la facture portera le 00005.
+{
+  await q(`INSERT INTO sales (user_id, total_amount, payment_method, invoice_number, amount_received)
+    VALUES ('${FB}', 2000, 'cash', 'FAC-${AN}-00005', 2000)`);
+
+  const vente = await vendreFB();
+  check('29a. une vente aboutit malgré une facture saisie à la main',
+    typeof vente?.invoice_number === 'string', JSON.stringify(vente));
+  check('29b. le numéro évite la facture manuelle',
+    vente?.invoice_number === `FAC-${AN}-00006`, vente?.invoice_number);
+  check('29c. le compteur est remis d\'après la vente',
+    await compteurFB() === 6, `compteur ${await compteurFB()}`);
+}
+
+// Le cas le plus fréquent : le compteur est en RETARD de plusieurs numéros.
+{
+  await q(`UPDATE organizations SET invoice_counter = 1 WHERE id='${FB}'`);
+
+  const vente = await vendreFB();
+  check('29d. une vente aboutit avec le compteur en retard',
+    typeof vente?.invoice_number === 'string', JSON.stringify(vente));
+  check('29e. le numéro reprend après le plus haut déjà émis',
+    vente?.invoice_number === `FAC-${AN}-00007`, vente?.invoice_number);
+  check('29f. le compteur est rattrapé',
+    await compteurFB() === 7, `compteur ${await compteurFB()}`);
+}
+
+// Le compteur en avance (saut volontaire d'une série) doit être respecté :
+// la réparation ne recule JAMAIS un compteur.
+{
+  await q(`UPDATE organizations SET invoice_counter = 50 WHERE id='${FB}'`);
+  const vente = await vendreFB();
+  check('29g. un compteur volontairement avancé n\'est pas reculé',
+    vente?.invoice_number === `FAC-${AN}-00051`, vente?.invoice_number);
+}
+
+// Séquentielité continue : aucune vente ne saute de numéro, sur une série.
+{
+  const numeros = [];
+  for (let i = 0; i < 5; i++) numeros.push((await vendreFB()).invoice_number);
+  const attendus = [52, 53, 54, 55, 56].map((n) => `FAC-${AN}-${String(n).padStart(5, '0')}`);
+  check('29h. la numérotation reste continue sur cinq ventes',
+    JSON.stringify(numeros) === JSON.stringify(attendus), numeros.join(', '));
+}
+
+// Une facture au bon gabarit mais hors suite ne doit pas non plus bloquer.
+{
+  await q(`INSERT INTO sales (user_id, total_amount, payment_method, invoice_number, amount_received)
+    VALUES ('${FB}', 2000, 'cash', 'FAC-${AN}-00060', 2000)`);
+  await q(`UPDATE organizations SET invoice_counter = 2 WHERE id='${FB}'`);
+  const vente = await vendreFB();
+  check('29i. une facture hors suite ne bloque pas la vente',
+    vente?.invoice_number === `FAC-${AN}-00061`, vente?.invoice_number);
+}
+
+// Une facture écrite dans un AUTRE format est ignorée, jamais comptée.
+{
+  await q(`INSERT INTO sales (user_id, total_amount, payment_method, invoice_number, amount_received)
+    VALUES ('${FB}', 2000, 'cash', 'FACTURE-INTERNE-1', 2000)`);
+  const vente = await vendreFB();
+  check('29j. une facture au format étranger est ignorée',
+    vente?.invoice_number === `FAC-${AN}-00062`, vente?.invoice_number);
+}
+
+// Une boutique qui n'a jamais facturé CETTE année repart à 1, même si l'année
+// d'avant est allée très haut : c'est le comportement attendu, et la
+// réparation ne doit surtout pas le « rattraper » vers le haut.
+//
+// Boutique dédiée : celle de 29a-29j a déjà 62 factures cette année, et il est
+// correct qu'elle ne reparte pas à 1. Réutiliser FB rendrait le test faux.
+{
+  await q(`INSERT INTO auth.users (id, email) VALUES ('${FB2}', 'facture2@test.local')`);
+  await q(`INSERT INTO organizations (id, name, slug, plan, timezone)
+    VALUES ('${FB2}', 'Boutique janvier', 'boutique-janvier', 'pro', 'Africa/Porto-Novo')`);
+  await q(`INSERT INTO products (id, user_id, name, price_sell, price_buy, stock_qty)
+    VALUES ('${FP2}', '${FB2}', 'Article de janvier', 2000, 900, 100)`);
+  await q(`INSERT INTO sales (user_id, total_amount, payment_method, invoice_number, amount_received)
+    VALUES ('${FB2}', 2000, 'cash', 'FAC-${AN - 1}-00099', 2000)`);
+  await q(`SELECT set_config('request.jwt.claim.sub', '${FB2}', false)`);
+
+  const nums = [];
+  for (let i = 0; i < 2; i++) {
+    const r = await q(
+      `SELECT create_sale('[{"product_id":"${FP2}","quantity":1}]'::jsonb, 'cash')`
+    );
+    nums.push(r.rows[0].create_sale?.invoice_number);
+  }
+  check('29k. l\'année en cours repart à 1 malgré 99 factures l\'an passé',
+    nums[0] === `FAC-${AN}-00001` && nums[1] === `FAC-${AN}-00002`, nums.join(', '));
+}
+
+// Deux ventes ne doivent pas pouvoir lire le même compteur. La sérialisation
+// repose sur le verrou de la ligne organisation (FOR UPDATE), pris dans la
+// transaction de la vente.
+//
+// Ce harnais tourne sur une seule connexion PGlite : les requêtes y sont
+// sérialisées, donc la concurrence y est INDÉMONTRABLE — un test ici
+// passerait sans rien prouver. Ce qui est vérifiable, c'est que le verrou est
+// pris : la fonction tient la ligne organisation ouverte pendant qu'elle lit le
+// compteur et le réécrit, ce que la migration garantit en réalignant dans le
+// même SELECT ... FOR UPDATE. La preuve de bout en bout demanderait deux
+// connexions, hors de ce harnais.
+
+// Le stock doit être descendu par ces ventes : la réparation ne doit pas
+// court-circuiter l'écriture de la vente, ni laisser la vente sans effets.
+{
+  const restant = Number((await q(`SELECT stock_qty FROM products WHERE id='${FP1}'`)).rows[0].stock_qty);
+  const vendu = 100 - restant;
+  // 29a, 29d, 29g : 1 unité chacune — 29h : 5 — 29i, 29j : 1 chacune.
+  check('29l. le stock a bien été décrémenté par ces ventes',
+    vendu === 10, `${vendu} unité(s) décrémentée(s), attendu 10`);
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
