@@ -218,6 +218,33 @@ isolation entre organisations, droits employé/patron, rate limiting. C'est le
 seul moyen fiable de valider du SQL avant de le pousser en production — un
 parser ne valide ni les policies RLS ni les corps PL/pgSQL.
 
+### APPLY ne dérive pas, et la production non plus
+
+`APPLY_MIGRATIONS.sql` est la version « part de zéro » à coller dans le SQL
+Editor. Aucun test ne l'applique : les harnais lisent les fichiers individuels.
+Rien dans la CI ne l'empêchait donc de dériver — c'est arrivé le 2026-10-06
+(`sale_items_consume_ingredients` modifiée dans `migration_recipes.sql` sans
+régénérer APPLY, CI verte, APPLY avec l'ancienne logique).
+
+`npm run test:sync` ferme ce trou, en trois contrôles purs fichiers :
+
+1. APPLY est exactement ce que produirait sa régénération depuis les fichiers ;
+2. chaque migration a sa section `⬇`, et aucune section n'est orpheline ;
+3. `scripts/audit-prod.sql` (empreintes attendues) n'a pas périmé.
+
+Après avoir modifié une migration :
+
+```bash
+node scripts/regen-apply.mjs && node scripts/gen-audit-prod.mjs
+```
+
+`scripts/audit-prod.sql` s'exécute ensuite sur la base cible (SQL Editor ou
+psql) et compare chaque fonction au dépôt par signature et par empreinte du
+code sans commentaires : `OK` (byte à byte), `FORMAT SEULEMENT` (même logique,
+commentaires ou retours à la ligne différents — sans risque comportemental),
+`★ DIVERGENCE DE LOGIQUE ★` (la base ne fait pas ce que le dépôt dit),
+`MANQUANTE` / `EN PLUS`.
+
 ## Modèle de données
 
 `organizations.id` est l'`auth.users.id` du patron : il sert d'identifiant de
