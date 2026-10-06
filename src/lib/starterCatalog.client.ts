@@ -123,13 +123,22 @@ export async function loadStarterCatalog(
   // l'application sait faire d'une double portion. Elles sont écrites après les
   // recettes, dans le même temps logique : le catalogue est « prêt à servir ».
   let options = 0;
-  const optionsEcrites: { product_id: string; name: string; extra_price: number }[] = [];
+  const optionsEcrites: {
+    owner_id: string;
+    product_id: string;
+    name: string;
+    extra_price: number;
+  }[] = [];
   for (const a of catalogue) {
     if (!a.options?.length) continue;
     const dish = parNom.get(a.name.toLowerCase());
     if (!dish) continue;
     for (const o of a.options) {
-      optionsEcrites.push({ product_id: dish, name: o.name, extra_price: o.extra });
+      // owner_id, comme dans RecipesModule : la policy « modifiers_write »
+      // le compare à get_business_owner_id(). Sans lui, la colonne NOT NULL
+      // sans défaut et le with_check rejettent l'écriture en 403 — et le
+      // catalogue d'exemple se charge, complet et muet, SANS SES OPTIONS.
+      optionsEcrites.push({ owner_id: ownerId, product_id: dish, name: o.name, extra_price: o.extra });
     }
   }
   if (optionsEcrites.length > 0) {
