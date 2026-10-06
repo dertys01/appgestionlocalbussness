@@ -407,11 +407,47 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         if (cible.isContentEditable) return;
       }
       if (e.key.length !== 1 || e.key === ' ') return;
+      // Dialogue ouvert (ajout de produit, reçu de vente) : la frappe lui
+      // appartient. Sans ce garde, taper sur un bouton du dialogue enverrait
+      // le focus derrière la fenêtre, où l'utilisateur ne verrait rien se
+      // passer — et Radix, pare-feu de focus, le renverrait dedans en boucle.
+      if (document.querySelector('[role="dialog"]')) return;
       rechercheRef.current?.focus();
     };
     window.addEventListener('keydown', surFrappe);
     return () => window.removeEventListener('keydown', surFrappe);
   }, []);
+
+  /**
+   * Rendu par tranches, sans clic : la tranche suivante se charge d'elle-même
+   * quand « Afficher plus » entre dans le champ (un peu avant, via
+   * rootMargin). À 200 références, la 150e s'arrêtait sur un bouton toutes
+   * les 60 références — maintenant on défile jusqu'au bout. Le bouton reste
+   * en repli pour le clavier et le lecteur d'écran.
+   *
+   * L'observateur est recréé à chaque tranche : une observation déclenche
+   * toujours une première entrée, ce qui couvre le cas (écran très haut)
+   * où le bouton resterait visible après l'augmentation.
+   *
+   * Garde jsdom : IntersectionObserver n'existe pas là-bas et les tests ne
+   * simulent pas le défilement — ils cliquent sur le bouton, qui reste.
+   */
+  const loadMoreRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (typeof IntersectionObserver === 'undefined') return;
+    const el = loadMoreRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          setVisibleCount((n) => n + PRODUCT_PAGE_SIZE);
+        }
+      },
+      { rootMargin: '300px 0px' },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [visibleCount, filtered.length]);
 
   // Rendu par tranches. La recherche porte sur tout le catalogue : une caissière
   // qui tape « Nokia » doit le trouver même si la carte est à la position 800.
@@ -736,7 +772,13 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           alors sortir du parcours de tabulation et des lecteurs d'écran —
           sinon le clavier saute dans un contenu que l'utilisateur ne voit pas. */}
       <div className="flex-1 space-y-4 pb-24 lg:pb-0" inert={panierOuvert}>
-        <div className="relative">
+        {/* Recherche collante sur grand écran : à 200 références, descendre
+            au produit 150 puis remonter à la recherche pour une autre
+            requête était un aller-retour à chaque frappe. relative reste le
+            socle de l'icône en absolu ; lg:sticky épingle le champ en haut
+            de la colonne, et bg ferme les coins arrondis sur la liste qui
+            défile dessous. */}
+        <div className="relative lg:sticky lg:top-0 z-20 bg-slate-50">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
           <Input
             ref={rechercheRef}
@@ -774,9 +816,13 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         {/* Barre de catégories, collante sous la recherche.
             C'est ce qui remplace le défilement quand le catalogue est grand :
             on choisit un rayon au lieu de parcours 1000 cartes. sticky pour que
-            le filtre reste atteignable au milieu de la liste. */}
+            le filtre reste atteignable au milieu de la liste.
+            lg:top-10 : sur grand écran la recherche est épinglée juste au
+            dessus (h-10 = 40 px) — les deux barres se calent l'une sous
+            l'autre sans se recouvrir. Sur mobile la recherche défile, le
+            top-14 d'origine reste juste. */}
         {categories.length > 1 && (
-          <div className="sticky top-14 lg:top-0 z-10 -mx-1 bg-slate-50/95 backdrop-blur px-1 py-1">
+          <div className="sticky top-14 lg:top-10 z-10 -mx-1 bg-slate-50/95 backdrop-blur px-1 py-1">
             {/* flex-wrap et non overflow-x-auto : en rangée non-wrap, la
                 somme des pastilles (~840 px) devient la largeur minimale de
                 toute la colonne, qui écrase alors le panneau du panier. Le
@@ -973,6 +1019,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
             sur le catalogue entier, pas sur la tranche affichée. */}
         {visibleProducts.length < filtered.length && (
           <button
+            ref={loadMoreRef}
             onClick={() => setVisibleCount((n) => n + PRODUCT_PAGE_SIZE)}
             className="w-full py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-medium text-slate-600 hover:border-indigo-300 hover:text-indigo-600 transition-colors"
           >
@@ -991,12 +1038,17 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           produits — il fallait défiler tout le catalogue pour encaisser.
           lg:shrink-0 : sans ce garde-fou, la colonne produits (flex-1) peut
           comprimer le panneau jusqu'à sa largeur minimale (~135 px), où les
-          libellés client et les boutons de paiement se chevauchent. */}
+          libellés client et les boutons de paiement se chevauchent.
+          lg:sticky : la caisse suit le défilement. Sur 200 produits, atteindre
+          la référence 150 laissait total et « Encaisser » en haut de page —
+          chaque ajout devenait un aller-retour. max-h borné à la fenêtre :
+          les articles défilent à l'intérieur du panneau, le pied (client,
+          total, paiement, bouton) reste toujours visible sans défiler. */}
       <div
         className={
           panierOuvert
             ? 'fixed inset-0 z-40 bg-white flex flex-col gap-3 p-4 overflow-hidden'
-            : 'hidden lg:flex lg:w-80 lg:shrink-0 flex-col gap-3'
+            : 'hidden lg:flex lg:w-80 lg:shrink-0 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:overflow-y-auto flex-col gap-3'
         }
       >
         <div className="flex items-center gap-2 font-semibold text-slate-700">
@@ -1020,11 +1072,11 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           )}
         </div>
 
-        {/* Articles — la zone défilante. En panneau mobile elle remplit la hauteur
-            disponible et laisse le total puis « Encaisser » toujours
-            atteignables en bas ; sur grand écran elle reste bornée pour ne
-            pas pousser le total hors de l'écran. */}
-        <div className="flex-1 space-y-2 overflow-y-auto pr-1 lg:max-h-[45vh]">
+        {/* Articles — la zone défilante. Elle prend la hauteur qu'il reste
+            dans le panneau : plein écran sur mobile, bornée par le max-h du
+            panneau sur grand écran. Total et « Encaisser » restent donc
+            toujours en bas, visibles, sans aller-retour de défilement. */}
+        <div className="flex-1 min-h-0 space-y-2 overflow-y-auto pr-1">
           {cart.length === 0 ? (
             <div className="text-center text-slate-500 py-10 text-sm">
               Cliquez sur un produit pour l&apos;ajouter
