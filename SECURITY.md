@@ -56,6 +56,34 @@ Les clés JWT héritées sont désactivées au niveau du projet
 (*Disable JWT-based API keys*). L'application ne dépend plus d'elles : le
 navigateur utilise la clé publishable, le serveur la secret key.
 
+### Où la clé service role est réellement utilisée
+
+Une clé `service_role` contourne toute la RLS. Elle n'est donc employée que là
+où il n'existe pas de session à utiliser, c'est-à-dire trois cas :
+
+| Route | Pourquoi |
+|---|---|
+| `/api/register` | crée le compte Auth, et le limiteur doit être partagé entre les instances serverless |
+| `/api/invitations/accept` | `redeem_invitation()` est privileged : l'appelant est anonyme, c'est le jeton d'invitation qui fait foi |
+| `/api/stripe/*` | abonnements et webhooks |
+
+L'**écran Équipe et les invitations** n'en ont plus besoin. Ils utilisaient la
+clé pour lire `business_members` — alors que la policy
+`owner_manage_members_select` (`auth.uid() = owner_id`) autorise déjà le patron
+à lire sa propre équipe — et pour écrire dans `employee_invitations`, dont la
+policy est déjà `FOR ALL` sur son propriétaire. Autrement dit, la clé service
+réouvrait exactement ce que `migration_security.sql` avait refermé.
+
+Les deux écritures qui restaient (changer un rôle, retirer un membre) passent
+désormais par `business_members_set_role()` et `business_members_remove()`, en
+SECURITY DEFINER : la table n'a toujours aucune écriture client, et la
+vérification « l'appelant est-il le patron de cette équipe ? » vit dans la
+fonction, où elle ne peut pas être oubliée.
+
+Conséquence pratique : **sans `SUPABASE_SERVICE_ROLE_KEY`, l'application
+démarre, se construit en développement et fonctionne**. Seules l'inscription et
+la facturation répondent 503, ce qui est exact.
+
 ## Ce qui empêche le retour
 
 - **Gitleaks en CI** (`.github/workflows/ci.yml`) : toute nouvelle fuite fait

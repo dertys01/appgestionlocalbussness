@@ -10,7 +10,7 @@
 --    MANQUANTE    = fonction absente de la base
 --    EN PLUS      = fonction présente en base mais pas dans le dépôt
 --
---  42 fonctions · ordre des sections = APPLY_MIGRATIONS.sql
+--  44 fonctions · ordre des sections = APPLY_MIGRATIONS.sql
 -- ============================================================================
 WITH expect(sig, brut_md5, code_md5) AS (
   VALUES
@@ -21,6 +21,8 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('beta_status()', 'a5cc743e43988495523970c1f56252be', 'a6aa4fbce06490cd79aed2131a51154c'),
     ('bump_rate_limit(text,integer,integer)', '8610c404663063367697129f896b24a9', '4dba3acf3685f282fd7b22c011350327'),
     ('business_members_reject_owner_member()', '2cbeac4c9480bd23a8d5ae26669c4036', 'cb4202f1705d555b74cbb106ecf08409'),
+    ('business_members_remove(uuid)', '5f36ed6ff400cc61947a140820c5730f', '3fdd9d32586d3d98153089078ce2dd94'),
+    ('business_members_set_role(uuid,text)', '89a1cd9f06512fb862d59d3a5da9a19b', '89f32a91dcf97b1cae903be3cb2c0c68'),
     ('can_manage_products()', '7c1b153eba2bc02e61338c6b4becb01e', '475b14d5a81518d7f37aa3849484189d'),
     ('check_product_limit()', 'c425ef7076490e9b8cc1e9eeb089ddd0', 'b16a2309f37c3ebf6b5d2196c68d67fc'),
     ('check_product_supplier_tenant()', 'a67a791a03cdd317a211be3c870759e6', '03adf983a5186d2d128430f334e6237f'),
@@ -42,7 +44,7 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('organizations_reject_plan_change()', '9ee6f5d51d38737a7dc107f3f92caf88', 'feb8216cb154d6953576fe38198dc44a'),
     ('pay_customer_debt(uuid,numeric,text,text)', 'c2464b9cb0a7397a2a09d56032533efe', '1c514fcfadaf0642d540b8318727872c'),
     ('product_cost(uuid,integer)', 'd33441e87e3ffd248893a7024af5ff0e', '0f48633b1895a064c9aaa646118ade47'),
-    ('purge_accepted_invitations(integer)', 'f52a5d7351595f4fd16e1bbd9a8d94cf', '25e4947623f1b759a464d8d68b77d4ad'),
+    ('purge_accepted_invitations(uuid,integer)', 'ddeff8d4c129880458a3b22c50c17fc9', '463d9c590e8166ae26d1309daf44b4f8'),
     ('purge_rate_limits()', '4b7a9b9d63f02a306a83ab8f5e29aac7', '809045c7d82f9d32e142716d707faf44'),
     ('record_credit_sale(jsonb,text,text,text,numeric,text)', 'acda71063b51433c825ec6a2ee164349', 'ba220cfe297c4653d6b046cdf8772ff3'),
     ('redeem_invitation(text,uuid,text)', '62597d5a8ef7b127a90c4354397b735e', '152bbebdabb4071781f1003954618caf'),

@@ -56,10 +56,21 @@ export function checkServerEnv(): void {
   const required = [
     'NEXT_PUBLIC_SUPABASE_URL',
     'NEXT_PUBLIC_SUPABASE_ANON_KEY',
-    'SUPABASE_SERVICE_ROLE_KEY',
   ];
   const missing = required.filter((name) => !process.env[name]);
   if (missing.length > 0) {
     throw new Error(`Configuration serveur incomplète : ${missing.join(', ')}`);
+  }
+
+  // La clé service role n'est PAS dans la liste bloquante : sans elle,
+  // l'inscription et la facturation répondent 503, et tout le reste
+  // fonctionne. L'exiger ici ferait échouer le démarrage — donc tout le site —
+  // pour une variable qui n'affecte que deux parcours. Les routes concernées la
+  // lisent au moment de l'appel et disent ce qui manque. Voir SECURITY.md.
+  if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    console.warn(
+      '[config] SUPABASE_SERVICE_ROLE_KEY absente : /api/register, ' +
+      '/api/invitations/accept et /api/stripe/* répondront 503.'
+    );
   }
 }
