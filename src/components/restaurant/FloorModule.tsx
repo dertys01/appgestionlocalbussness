@@ -337,7 +337,14 @@ export function FloorModule({
     // lireMontant('') rend 0 (zéro est une quantité valide ailleurs), donc le
     // cas du champ vide doit être traité avant l'appel.
     const n = qty.trim() === '' ? 1 : lireMontant(qty) ?? 1;
-    if (n <= 0) return;
+    if (n <= 0) {
+      // Jamais un retour muet : le serveur tape « 0 », clique sur
+      // « Ajouter à la commande » et ne voit RIEN arriver — il croit à un
+      // clic raté et recommence. C'est le même message que setLineQty(),
+      // pour que les deux chemins parlent d'une seule voix.
+      setError('La quantité doit être un nombre supérieur à zéro.');
+      return;
+    }
     // Un modificateur choisi (« double portion ») porte son supplément dans
     // extra_price. La colonne est renseignée à l'insertion : la modifier
     // ensuite laisserait un supplément fantôme, et le total affiché par la vue
@@ -499,10 +506,6 @@ export function FloorModule({
       .map((x) => x.p);
   }, [products, search, menuDuJour]);
 
-  // Le supplément des modificateurs compte dans le total affiché : c'est le
-// montant que la table va payer. La commande ne le contient pas encore tant que
-// la ligne n'est pas enregistrée — d'où le double endroit où il est compté
-  // (ligne et total), qui doivent rester d'accord.
   // Le supplément des modificateurs compte dans le total affiché : c'est le
   // montant que la table va payer. Il est figé à l'insertion de la ligne, donc
   // les deux endroits qui l'additionnent (ligne et total) restent d'accord.
