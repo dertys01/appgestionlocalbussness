@@ -197,10 +197,34 @@ CREATE TRIGGER sale_items_apply_recipe_cost
 -- vente, ligne d'en-tête comprise : commander 5 plats dont il manque le poulet
 -- doit échouer, pas créer une vente sans plat.
 --
--- Le même ingrédient peut apparaître dans deux plats vendus sur la même vente :
--- chaque déclencheur le décrémente. L'ordre n'a pas d'importance, l'addition
--- est commutative, et le verrou de ligne de chaque produit sérialise les
--- écritures concurrentes.
+-- LE DÉCRÉMENT EST RÉCURSIF, EXACTEMENT COMME LE COÛT. La première version
+-- ne descendait qu'un niveau : elle prenait le plat intermédiaire pour un
+-- ingrédient et décrémentait SON stock, dont la valeur naturelle est 0.
+-- Deux issues, toutes deux fausses, selon que ce stock existe :
+--   · il vaut 0 (le cas normal d'un plat) → la vente est REFUSÉE, en nommant
+--     un « ingrédient » qui n'en est pas, alors que le riz est plein ;
+--   · il est positif → la vente passe, en décrémentant un plat qui n'existe
+--     pas en stock et en laissant le riz intact : l'inventaire ment.
+-- La promesse écrite plus haut — « vendre un poulet consomme ce que les deux
+-- plats demandent » — n'était tenue que par le COÛT. Vérifié par les tests
+-- 25n / 25o / 25p.
+--
+-- Où s'arrête l'arbre : aux FEUILLES, c'est-à-dire aux produits qui n'ont
+-- pas eux-mêmes de recette. Un produit qui en a une n'est pas du stock, c'est
+-- un plat intermédiaire — même règle que create_sale(), qui ne touche pas au
+-- stock d'un produit récette (migration_weighted_sales.sql). Sans cette
+-- distinction, un menu contenant un plat ferait deux fois le même calcul :
+-- décrémenter l'intermédiaire ET ses propres ingrédients.
+--
+-- La profondeur est bornée à 10, comme dans product_cost(). Les cycles sont
+-- refusés à l'écriture par add_recipe_ingredient(), mais une ligne posée à la
+-- main pourrait en créer un : la borne garantit que le déclencheur termine
+-- toujours, plutôt que de boucler au cœur de la transaction de vente.
+--
+-- Le même ingrédient peut apparaître dans deux plats vendus sur la même
+-- vente : chaque déclencheur le décrémente. L'ordre n'a pas d'importance,
+-- l'addition est commutative, et le verrou de ligne de chaque produit
+-- sérialise les écritures concurrentes.
 CREATE OR REPLACE FUNCTION sale_items_consume_ingredients()
 RETURNS TRIGGER
 LANGUAGE plpgsql
@@ -211,12 +235,28 @@ DECLARE
   v_row     record;
   v_stock   numeric(12,3);
   v_nom     text;
-  v_qte     numeric(12,3);
 BEGIN
   FOR v_row IN
-    SELECT ri.ingredient_id, ri.quantity * NEW.quantity AS needed
-      FROM recipe_ingredients ri
-     WHERE ri.dish_id = NEW.product_id
+    WITH RECURSIVE arbre(ingredient_id, needed, prof) AS (
+      -- Racine : les ingrédients directs, à la quantité VENDUE.
+      SELECT ri.ingredient_id, ri.quantity * NEW.quantity, 1
+        FROM recipe_ingredients ri
+       WHERE ri.dish_id = NEW.product_id
+      UNION ALL
+      -- Descente : un ingrédient qui a lui-même une recette se déplie.
+      SELECT ri.ingredient_id, a.needed * ri.quantity, a.prof + 1
+        FROM recipe_ingredients ri
+        JOIN arbre a ON ri.dish_id = a.ingredient_id
+       WHERE a.prof < 10
+    )
+    -- Seules les feuilles sont consommées : un nœud qui porte une recette
+    -- est un plat, pas un stock.
+    SELECT a.ingredient_id, sum(a.needed) AS needed
+      FROM arbre a
+     WHERE NOT EXISTS (
+       SELECT 1 FROM recipe_ingredients r WHERE r.dish_id = a.ingredient_id
+     )
+     GROUP BY a.ingredient_id
   LOOP
     SELECT p.stock_qty, p.name INTO v_stock, v_nom
       FROM products p
@@ -230,20 +270,18 @@ BEGIN
       CONTINUE;
     END IF;
 
-    v_qte := v_row.needed;
-
-    IF v_stock < v_qte THEN
+    IF v_stock < v_row.needed THEN
       RAISE EXCEPTION 'Stock insuffisant pour l''ingrédient « % » (disponible : %, nécessaire : %)',
-        v_nom, v_stock, v_qte USING ERRCODE = '23514';
+        v_nom, v_stock, v_row.needed USING ERRCODE = '23514';
     END IF;
 
-    UPDATE products SET stock_qty = stock_qty - v_qte WHERE id = v_row.ingredient_id;
+    UPDATE products SET stock_qty = stock_qty - v_row.needed WHERE id = v_row.ingredient_id;
 
     INSERT INTO stock_logs (
       user_id, product_id, product_name, movement_type,
       quantity_change, stock_before, stock_after, reference_id
     )
-    SELECT p.user_id, p.id, p.name, 'sale', -v_qte, v_stock, v_stock - v_qte, NEW.sale_id
+    SELECT p.user_id, p.id, p.name, 'sale', -v_row.needed, v_stock, v_stock - v_row.needed, NEW.sale_id
       FROM products p
      WHERE p.id = v_row.ingredient_id;
 
