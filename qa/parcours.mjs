@@ -107,6 +107,29 @@ async function fermerBoite() {
 }
 
 const texte = () => page.evaluate(() => document.body.innerText);
+
+/**
+ * Attend qu'un texte apparaisse à l'écran, au lieu d'espérer un délai fixe.
+ *
+ * Un délai fixe marche jusqu'au jour où la machine est chargée : le reçu n'est
+ * pas encore monté, `texte()` renvoie le squelette de la page, et le test
+ * échoue sur un écran qui finira par s'afficher — un échec qui ment sur la
+ * cause. Ce même pas instable a fait échouer « le reçu distingue la vente à
+ * crédit » une fois sur quatre, sans qu'aucune ligne de l'application change.
+ *
+ * L'attente est bornée : au terme du délai on rend ce qui a été vu, et
+ * l'assertion échoue donc pour de bon si le texte n'est jamais arrivé.
+ */
+const attendTexte = async (motif, delai = 15000) => {
+  const fin = Date.now() + delai;
+  let vu = '';
+  while (Date.now() < fin) {
+    vu = await texte();
+    if (motif.test(vu)) return vu;
+    await page.waitForTimeout(400);
+  }
+  return vu;
+};
 const panier = () =>
   page.evaluate(() => {
     const el = [...document.querySelectorAll('div')].find((d) =>
@@ -196,9 +219,7 @@ if (cible.index >= 0) {
   );
 
   await page.locator('button:has-text("Encaisser")').first().click();
-  await page.waitForTimeout(4000);
-
-  const recu = await texte();
+  const recu = await attendTexte(/Vente enregistrée/);
   verifie('le reçu confirme la vente', /Vente enregistrée/.test(recu), recu.slice(0, 200));
   verifie('le panier est vidé après la vente', /Cliquez sur un produit/.test(await panier()));
 
@@ -282,8 +303,7 @@ await page.waitForTimeout(400);
 const boutonCredit = await page.locator('button:has-text("Céder à crédit")').first().innerText().catch(() => '');
 verifie('le bouton de crédit annonce le montant', /Céder à crédit\s?\d/.test(boutonCredit), boutonCredit);
 await page.locator('button:has-text("Céder à crédit")').first().click();
-await page.waitForTimeout(4000);
-const recuCredit = await texte();
+const recuCredit = await attendTexte(/Vente cédée à crédit/);
 verifie('le reçu distingue la vente à crédit', /Vente cédée à crédit/.test(recuCredit), recuCredit.slice(0, 200));
 verifie('le reçu annonce le reste à recouvrer', /à recouvrer/.test(recuCredit), recuCredit.slice(0, 300));
 
@@ -296,8 +316,7 @@ verifie(
 );
 
 await onglet('Dettes');
-await page.waitForTimeout(4000);
-const dettes = await texte();
+const dettes = await attendTexte(/Client QA/);
 verifie('la vente à crédit apparaît au carnet de dette', /Client QA/.test(dettes), dettes.slice(0, 300));
 
 // ─── Un règlement de dette change-t-il le CA ? ──────────────────────
@@ -415,17 +434,141 @@ verifie(
 );
 await fermerBoite();
 
-// ─── Restaurant : la salle et les recettes ──────────────────────────
+// ─── Restaurant : la salle, une commande de bout en bout, les recettes ──
 if (PROFIL === 'restaurant') {
   await onglet('Salle');
   await page.waitForTimeout(3000);
   const salle = await texte();
   verifie('la salle affiche des tables', /Table|Terrasse/.test(salle), salle.slice(0, 250));
 
-  const tables = await base('/rest/v1/restaurant_tables?select=id,name,zone,seats');
+  const tables = await base('/rest/v1/restaurant_tables?select=id,name,zone,seats&is_active=eq.true');
   verifie('les tables sont bien en base', tables.length >= 3, JSON.stringify(tables));
   const zones = new Set(tables.map((t) => t.zone));
   verifie('les zones de salle sont définies', zones.size >= 1, [...zones].join(','));
+
+  // ── Une commande, de la table vide à l'addition encaissée ─────────
+  //
+  // C'est le domaine le plus complexe de l'application : une commande vit
+  // dans `restaurant_orders`, ses plats dans `restaurant_order_items`, et sa
+  // clôture écrit une VENTE — sans passer par le panier du point de vente.
+  // Aucun test ne le couvrait jusqu'ici.
+  //
+  // Le parcours lit d'abord les tables libres EN BASE plutôt que de deviner à
+  // l'écran : cliquer une carte déjà occupée n'échouerait pas, elle rouvrirait
+  // la commande d'un autre serveur, et le test passerait à côté de la vente
+  // qu'il prétend vérifier.
+  const commande = await base(
+    '/rest/v1/restaurant_orders?select=id,table_id,status&status=neq.closed'
+  );
+  // Identifiants sans accent : un identifiant accentué est valide en JS mais
+  // se perd au premier copier-coller depuis un terminal à autre jeu de
+  // caractères — c'est exactement ce qui vient de casser ce fichier.
+  const tablesOccupees = new Set(commande.map((o) => o.table_id));
+  const libre = tables.find((t) => !tablesOccupees.has(t.id));
+  if (!libre) {
+    resultats.push('— aucune table libre, la commande n\'a pas été jouée');
+  } else {
+    // Un plat de la carte, choisi en base : la recherche de l'interface ne
+    // propose que les plats servis aujourd'hui, et le test ne doit pas dépendre
+    // du jour de la semaine.
+    // Deux détails font que cette requête soit fausse si on l'écrit
+    // naturellement :
+    //   - `exists=` ne vaut que pour une ressource imbriquée, pas pour une
+    //     table comme ici ;
+    //   - `recipe_ingredients` porte DEUX clés étrangères vers products
+    //     (dish_id et ingredient_id), donc PostgREST refuse de choisir et
+    //     exige une désambiguïsation par colonne.
+    // `!inner` ne garde ensuite que les produits ayant au moins un ingrédient :
+    // c'est ce qui distingue un plat d'un produit vendu à l'unité.
+    const plats = await base(
+      '/rest/v1/products?select=id,name,price_sell,recipe_ingredients!dish_id!inner(ingredient_id)&limit=5'
+    );
+    const plat = Array.isArray(plats) ? plats[0] : null;
+    verifie(
+      'la carte contient des plats (produits avec recette)',
+      Boolean(plat),
+      JSON.stringify(plats).slice(0, 200)
+    );
+
+    await page.locator(`button:has-text("${libre.name}")`).first().click({ timeout: 8000 });
+    await page.waitForTimeout(2000);
+    verifie(
+      `la table « ${libre.name} » s'ouvre`,
+      (await page.locator('input[aria-label="Chercher un plat à commander"]').isVisible().catch(() => false)),
+      libre.name
+    );
+
+    if (plat) {
+      // La commande vient d'être créée par le clic sur la carte : son
+      // identifiant se lit en base, il n'est pas exposé à l'écran.
+      const ouverte = await base(
+        `/rest/v1/restaurant_orders?select=id&table_id=eq.${libre.id}&status=neq.closed`
+      );
+      const commandeOuverte = ouverte[0]?.id;
+      verifie('la commande est ouverte en base', Boolean(commandeOuverte), JSON.stringify(ouverte));
+
+      await page.locator('input[aria-label="Chercher un plat à commander"]').fill(plat.name);
+      await page.waitForTimeout(1200);
+      // Premier clic : sélection et chargement des options. Second clic :
+      // la ligne est créée. Les fusionner en un seul rendrait le test
+      // insensible au premier clic — celui qui perd les options.
+      const cartePlat = page.locator(`button:has-text("${plat.name}")`).last();
+      await cartePlat.click({ timeout: 8000 }).catch(() => {});
+      await page.waitForTimeout(900);
+      const optionnel = await page
+        .locator('button:has-text("Ajouter à la commande")')
+        .isVisible()
+        .catch(() => false);
+      if (optionnel) {
+        await page.locator('button:has-text("Ajouter à la commande")').first().click();
+        await page.waitForTimeout(1500);
+      } else {
+        await cartePlat.click({ timeout: 8000 }).catch(() => {});
+        await page.waitForTimeout(1500);
+      }
+
+      const lignes = commandeOuverte
+        ? await base(
+            `/rest/v1/restaurant_order_items?select=id,quantity,unit_price&order_id=eq.${commandeOuverte}`
+          )
+        : [];
+      verifie(
+        `le plat « ${plat.name} » est bien à la commande`,
+        lignes.length >= 1,
+        `${lignes.length} ligne(s)`
+      );
+    }
+
+    // ── Encaisser l'addition ───────────────────────────────────────
+    const avant = await base('/rest/v1/sales?select=id&order=created_at.desc&limit=1');
+    const boutonEncaisser = page.locator('button:has-text("Encaisser")').first();
+    if (await boutonEncaisser.isVisible().catch(() => false)) {
+      await boutonEncaisser.click();
+      await page.waitForTimeout(4000);
+    }
+    const apresEncaisse = await attendTexte(/Addition encaissée/i);
+    verifie(
+      "l'écran confirme l'addition encaissée",
+      /Addition encaissée/i.test(apresEncaisse),
+      apresEncaisse.slice(0, 250)
+    );
+
+    const apres = await base('/rest/v1/sales?select=id&order=created_at.desc&limit=1');
+    verifie(
+      "la clôture a écrit une vente",
+      Boolean(avant) && Boolean(apres) && avant[0]?.id !== apres[0]?.id,
+      `avant ${avant?.[0]?.id} → après ${apres?.[0]?.id}`
+    );
+
+    const tableLibre = await base(
+      `/rest/v1/restaurant_orders?select=id,status&table_id=eq.${libre.id}&status=neq.closed`
+    );
+    verifie(
+      `la table « ${libre.name} » est libérée après encaissement`,
+      tableLibre.length === 0,
+      `${tableLibre.length} commande(s) encore ouverte(s)`
+    );
+  }
 
   await onglet('Recettes');
   await page.waitForTimeout(3000);
