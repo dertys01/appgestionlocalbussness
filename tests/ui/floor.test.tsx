@@ -644,4 +644,44 @@ fireEvent.click(screen.getAllByText('Poulet braisé')[0]);
     );
     expect(updates.length).toBe(0);
   });
+
+  /**
+   * Trouvé en recette navigateur le 06/10/2026.
+   *
+   * setLineQty refusait déjà une quantité nulle — mais addLine, elle, rendait
+   * en silence : le serveur tapait « 0 », cliquait sur « Ajouter à la
+   * commande », et rien n'arrivait ni n'apparaissait. Un clic raté, à ses
+   * yeux, qui le refaisait en vain. Le message est celui de setLineQty, pour
+   * que les deux chemins parlent d'une seule voix.
+   */
+  it('refuse une quantité nulle ou négative à l\'ajout d\'une ligne', async () => {
+    definirModificateurs();
+    definirSalle(table({ order_id: 'cmd-9', status: 'open' }));
+    definirCommande();
+    inserts.length = 0;
+    render(<FloorModule products={produits} />);
+
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Table 1'));
+    await waitFor(() => expect(screen.getByText(/Fermer le panneau/i)).toBeInTheDocument());
+
+    // Premier clic : sélection du plat, aucune écriture — même garantie que le
+    // test des options.
+    fireEvent.click(screen.getAllByText('Poulet braisé')[0]);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Ajouter à la commande/i })).toBeInTheDocument(),
+    );
+    expect(inserts.filter((i) => 'product_id' in i)).toHaveLength(0);
+
+    fireEvent.change(screen.getByLabelText('Quantité'), { target: { value: '0' } });
+    fireEvent.click(screen.getByRole('button', { name: /Ajouter à la commande/i }));
+    await waitFor(() =>
+      expect(screen.getByText(/quantité doit être un nombre supérieur à zéro/i)).toBeInTheDocument(),
+    );
+
+    // Négatif, même combat : le refus doit être dit, jamais subi en silence.
+    fireEvent.change(screen.getByLabelText('Quantité'), { target: { value: '-2' } });
+    fireEvent.click(screen.getByRole('button', { name: /Ajouter à la commande/i }));
+    await waitFor(() => expect(inserts.filter((i) => 'product_id' in i)).toHaveLength(0));
+  });
 });
