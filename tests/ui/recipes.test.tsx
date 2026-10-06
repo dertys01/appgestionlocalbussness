@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 /**
  * Les recettes : ce qu'un plat coûte vraiment.
@@ -9,11 +9,18 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
  * L'écriture passe par add_recipe_ingredient(), pas par un INSERT direct.
  */
 
-const { plats, ingredients, rpc } = vi.hoisted(() => {
+const { plats, ingredients, rpc, differes } = vi.hoisted(() => {
   const plats: unknown[] = [];
   const ingredients: unknown[] = [];
   const rpc = vi.fn(async () => ({ data: null, error: null }));
-  return { plats, ingredients, rpc };
+  // Mode « recette en attente » : les réponses recipe_ingredients sont retenues
+  // jusqu'à ce que le test les libère, pour observer l'écran entre le choix
+  // d'un plat et le retour de sa recette.
+  const differes = {
+    actif: false,
+    files: [] as Array<{ dish: string; finir: (v: unknown) => void }>,
+  };
+  return { plats, ingredients, rpc, differes };
 });
 
 const chaine = (donnees: unknown) => {
@@ -26,12 +33,31 @@ const chaine = (donnees: unknown) => {
   return c;
 };
 
+// En mode différé, la chaîne des ingrédients ne se résout que quand le test y
+// autorise — avec la recette du PLAT DEMANDÉ, pas une réponse globale : c'est
+// ce qui permet d'envoyer la mauvaise réponse en retard et de vérifier qu'elle
+// n'écrit rien.
+const chaineDifferee = () => {
+  const c: Record<string, unknown> = {};
+  let dish = '';
+  c.select = () => c;
+  c.eq = (_col: string, valeur: string) => {
+    dish = valeur;
+    return c;
+  };
+  c.order = () => c;
+  c.then = (ok: (v: unknown) => unknown) => {
+    differes.files.push({ dish, finir: (v) => { void ok(v); } });
+  };
+  return c;
+};
+
 const supabase = {
   from: (table: string) =>
     table === 'recipe_costs'
       ? chaine(plats)
       : table === 'recipe_ingredients'
-        ? chaine(ingredients)
+        ? (differes.actif ? chaineDifferee() : chaine(ingredients))
         : chaine([{ id: 'p1', name: 'Poulet braisé' }, { id: 'p2', name: 'Riz blanc' }]),
   rpc,
   auth: { getUser: vi.fn() },
@@ -199,5 +225,70 @@ describe('RecipesModule — le coût de revient d\'un plat', () => {
     fireEvent.click(screen.getByRole('button', { name: "Ajouter l'ingrédient" }));
 
     await waitFor(() => expect(screen.getByText(/formerait un cercle/i)).toBeInTheDocument());
+  });
+
+  /**
+   * Trouvé en recette navigateur le 06/10/2026.
+   *
+   * Changer de plat laissait la recette de l'ANCIEN plat affichée sous le titre
+   * du nouveau tant que la requête n'était pas revenue — et, au premier choix,
+   * « Aucun ingrédient. Sans recette… » s'affichait pendant le chargement,
+   * comme si composer ne servait à rien. On vide avant de recharger, on annonce
+   * le chargement, et une réponse qui arrive pour un plat quitté n'écrit rien.
+   */
+  it("ne montre ni l'ancienne recette ni « Aucun ingrédient » pendant le chargement", async () => {
+    differes.actif = true;
+    differes.files.length = 0;
+    definirPlats(PLAT, { ...PLAT, id: 'p2', name: 'Riz gras' });
+    try {
+      render(<RecipesModule />);
+      await waitFor(() => expect(screen.getByLabelText(/Plat à composer/i)).toBeInTheDocument());
+      const selecteur = screen.getByLabelText(/Plat à composer/i);
+
+      fireEvent.change(selecteur, { target: { value: 'p1' } });
+      await waitFor(() => expect(screen.getByText(/Chargement de la recette/i)).toBeInTheDocument());
+      // Le message du bug : jamais pendant le chargement.
+      expect(screen.queryByText(/Aucun ingrédient/i)).toBeNull();
+      await waitFor(() => expect(differes.files).toHaveLength(1));
+
+      // On quitte le plat avant que sa recette n'arrive.
+      fireEvent.change(selecteur, { target: { value: 'p2' } });
+      await waitFor(() => expect(differes.files).toHaveLength(2));
+      expect(differes.files[1].dish).toBe('p2');
+
+      // La réponse périmée du plat quitté finit par arriver : elle ne doit
+      // rien écrire sous le nouveau titre.
+      differes.files[0].finir({
+        data: [
+          {
+            ingredient_id: 'i1',
+            quantity: 1,
+            ingredient: { name: 'Oignon', unit: 'kg', stock_qty: 3, price_buy: 100 },
+          },
+        ],
+        error: null,
+      });
+      await act(async () => {});
+      expect(screen.queryByText('Oignon')).toBeNull();
+      expect(screen.getByText(/Chargement de la recette/i)).toBeInTheDocument();
+
+      // La bonne recette arrive : c'est elle, et elle seule, qui s'affiche.
+      differes.files[1].finir({
+        data: [
+          {
+            ingredient_id: 'i2',
+            quantity: 2,
+            ingredient: { name: 'Poisson fumé', unit: 'pce', stock_qty: 1, price_buy: 500 },
+          },
+        ],
+        error: null,
+      });
+      await screen.findByText('Poisson fumé');
+      expect(screen.queryByText('Oignon')).toBeNull();
+      expect(screen.queryByText(/Chargement de la recette/i)).toBeNull();
+    } finally {
+      differes.actif = false;
+      differes.files.length = 0;
+    }
   });
 });

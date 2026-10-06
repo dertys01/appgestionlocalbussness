@@ -10,6 +10,7 @@ import {
   starterSku,
   fieldExamples,
 } from '@/lib/starterCatalog';
+import { loadStarterCatalog } from '@/lib/starterCatalog.client';
 
 /**
  * Catalogue d'exemple — le premier écran d'une application parle le métier de
@@ -201,6 +202,67 @@ describe('Catalogue d\'exemple — repérage', () => {
       const t = JSON.stringify(e).toLowerCase();
       expect(t).not.toContain('samsung');
       expect(t).not.toContain('iphone');
+    }
+  });
+});
+
+/**
+ * Trouvé en recette navigateur le 06/10/2026.
+ *
+ * Le catalogue se chargeait complet, sans une erreur à l'écran — et SANS SES
+ * OPTIONS : l'insert des modificateurs oubliait owner_id, la policy
+ * « modifiers_write » le compare à get_business_owner_id() et RLS rejetait tout
+ * en 403, silencieusement. Les définitions du catalogue étaient testées (elles
+ * avaient bien des options) — c'est l'ÉCRITURE, elle, ne l'était pas. Ce test
+ * exerce le vrai loader contre une base factice qui enregistre ce qu'on lui
+ * envoie.
+ */
+describe("Catalogue d'exemple — l'écriture réelle en base", () => {
+  it('écrit les options avec leur owner_id, sans quoi la RLS les rejette en 403', async () => {
+    const ecrits: Array<{ table: string; rows: Array<Record<string, unknown>> }> = [];
+    const base = {
+      from: (table: string) => ({
+        // Contrôle « déjà en place » : catalogue vide, on part de zéro.
+        select: () => ({
+          eq: () => ({ like: async () => ({ data: [], error: null }) }),
+        }),
+        insert: (rows: Array<Record<string, unknown>>) => {
+          ecrits.push({ table, rows });
+          if (table === 'products') {
+            return {
+              select: async () => ({
+                data: rows.map((r, i) => ({ id: `p-${i}`, name: r.name as string, sku: r.sku })),
+                error: null,
+              }),
+            };
+          }
+          // product_modifiers : insert attendu directement (await de l'objet).
+          return { error: null };
+        },
+      }),
+      rpc: async () => ({ data: null, error: null }),
+    };
+
+    const resultat = await loadStarterCatalog(
+      base as unknown as Parameters<typeof loadStarterCatalog>[0],
+      'org-1',
+      'restaurant'
+    );
+
+    const options = ecrits.find((e) => e.table === 'product_modifiers');
+    expect(options, "aucune option n'est même montée au client").toBeDefined();
+    expect(options!.rows.length).toBeGreaterThan(0);
+    for (const o of options!.rows) {
+      expect(o.owner_id, `l'option « ${String(o.name)} » est écrite sans owner_id`).toBe('org-1');
+      expect(o.product_id, `l'option « ${String(o.name)} » n'a pas de plat`).toBeTruthy();
+      expect(typeof o.extra_price).toBe('number');
+    }
+    if ('charges' in resultat) {
+      expect(resultat.charges).toBeGreaterThan(0);
+      expect(resultat.recettes).toBeGreaterThan(0);
+      expect(resultat.options).toBe(options!.rows.length);
+    } else {
+      throw new Error(resultat.erreur);
     }
   });
 });
