@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChefHat, Loader2, Plus, Trash2, AlertTriangle } from 'lucide-react';
 
 import { useSupabase } from '@/components/providers/SupabaseProvider';
@@ -55,6 +55,15 @@ export function RecipesModule() {
   const [error, setError] = useState('');
   const [sel, setSel] = useState<string | null>(null);
   const [lignes, setLignes] = useState<IngredientRow[]>([]);
+  // Vrai entre le choix d'un plat et le retour de sa recette. Sans cet état,
+  // « Aucun ingrédient » s'affiche pendant le chargement comme si le plat
+  // n'avait jamais eu de recette — le patron croit alors que composer sert à
+  // rien et s'en va.
+  const [chargementLignes, setChargementLignes] = useState(false);
+  // Miroir de `sel` consultable dans les callbacks : une requête partie pour un
+  // plat qu'on a quitté en chemin ne doit rien écrire (ni lignes, ni options,
+  // ni message d'erreur) sous le plat affiché.
+  const selRef = useRef<string | null>(null);
   const [catalogue, setCatalogue] = useState<Array<{ id: string; name: string }>>([]);
   const [ajout, setAjout] = useState('');
   const [qte, setQte] = useState('1');
@@ -86,6 +95,9 @@ export function RecipesModule() {
       // de la contrainte est donc écrit en clair — il fait partie du schéma.
       .select('ingredient_id, quantity, ingredient:products!recipe_ingredients_ingredient_id_fkey(name, unit, stock_qty, price_buy)')
       .eq('dish_id', platId);
+    // Le plat a changé pendant la requête : ce résultat ne décrit plus rien de
+    // ce qui est à l'écran (et l'erreur, non plus).
+    if (selRef.current !== platId) return;
     if (err) { setError(err.message); return; }
     setLignes(
       ((data ?? []) as Array<{ ingredient_id: string; quantity: number; ingredient: Omit<IngredientRow, 'ingredient_id' | 'quantity'> | null }>)
@@ -122,6 +134,7 @@ export function RecipesModule() {
       if (!id) {
         setLignes([]);
         setOptions([]);
+        setChargementLignes(false);
         return;
       }
       await chargerLignes(id);
@@ -130,7 +143,11 @@ export function RecipesModule() {
         .select('id, name, extra_price')
         .eq('product_id', id)
         .order('name');
+      // Plat quitté en vol : ni les options, ni la fin du chargement ne
+      // concernent plus cet écran.
+      if (selRef.current !== id) return;
       setOptions((data ?? []) as Array<{ id: string; name: string; extra_price: number }>);
+      setChargementLignes(false);
     }, 0);
     return () => clearTimeout(t);
   }, [sel, chargerLignes, client]);
@@ -256,7 +273,17 @@ export function RecipesModule() {
             <select
               id="recipe-dish"
               value={sel ?? ''}
-              onChange={(e) => setSel(e.target.value || null)}
+              onChange={(e) => {
+                const id = e.target.value || null;
+                // On vide AVANT de recharger : sinon les lignes du plat qu'on
+                // quitte restent affichées sous le nouveau titre tant que la
+                // requête n'est pas revenue.
+                selRef.current = id;
+                setLignes([]);
+                setOptions([]);
+                setChargementLignes(id !== null);
+                setSel(id);
+              }}
               className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             >
               <option value="">— Choisir un plat —</option>
@@ -309,10 +336,16 @@ export function RecipesModule() {
             </h3>
 
             {lignes.length === 0 ? (
-              <p className="text-sm text-slate-500 py-2 text-center">
-                Aucun ingrédient. Sans recette, le coût affiché reste le prix
-                d&apos;achat du plat.
-              </p>
+              chargementLignes ? (
+                <p className="text-sm text-slate-500 py-2 text-center">
+                  Chargement de la recette…
+                </p>
+              ) : (
+                <p className="text-sm text-slate-500 py-2 text-center">
+                  Aucun ingrédient. Sans recette, le coût affiché reste le prix
+                  d&apos;achat du plat.
+                </p>
+              )
             ) : (
               <div className="divide-y divide-slate-100 rounded-lg border border-slate-200">
                 {lignes.map((l) => {
