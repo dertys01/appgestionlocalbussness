@@ -152,6 +152,16 @@ export interface Organization {
    * jamais d'un droit ni d'un quota (src/lib/modules.ts).
    */
   domain: 'retail' | 'restaurant';
+  /**
+   * 'beginner' : l'essentiel seulement (caisse, produits, dettes, ventes du
+   * jour, accueil). 'full' : tous les modules. Affichage seulement.
+   * Absent tant que migration_onboarding_mode.sql n'est pas passée.
+   */
+  ui_mode?: 'beginner' | 'full';
+  /** Écran de l'assistant où le patron s'est arrêté (src/lib/onboarding.ts). */
+  onboarding_step?: string | null;
+  /** Les 4 activités de l'inscription — `domain` en est déduit. */
+  business_type?: 'epicerie' | 'boutique' | 'restaurant' | 'autre' | null;
   created_at: string;
   updated_at: string;
 }

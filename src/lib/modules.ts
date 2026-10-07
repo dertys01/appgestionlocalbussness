@@ -71,9 +71,35 @@ export function normalizeDomain(raw: unknown): Domain {
   return raw === 'restaurant' ? 'restaurant' : 'retail';
 }
 
+/**
+ * Mode d'affichage : 'beginner' ne montre que l'essentiel, 'full' tout.
+ *
+ * Il se combine au domaine, il ne le remplace pas : un maquis en mode simple
+ * garde sa Salle, une épicerie en mode simple n'en a jamais eu.
+ */
+export type UiMode = 'beginner' | 'full';
+
+/**
+ * Mode inconnu → complet. C'est le choix qui ne retire rien : une boutique
+ * déjà en service dont la colonne n'est pas encore migrée ne doit pas voir
+ * ses Rapports disparaître.
+ */
+export function normalizeUiMode(raw: unknown): UiMode {
+  return raw === 'beginner' ? 'beginner' : 'full';
+}
+
+/**
+ * Modules retirés en mode simple : ce qui sert à piloter, pas à vendre ni à
+ * récupérer son argent. Les dépenses et la rentabilité vivent dans Rapports.
+ * Les réglages restent : c'est là que se trouve le retour au mode complet.
+ */
+const MASQUES_EN_MODE_SIMPLE: Tab[] = ['reports', 'forecast', 'team', 'recipes'];
+
 /** Modules rendus pour un domaine. Toujours une copie : l'appelant peut trier. */
-export function getEnabledModules(domain: unknown): Tab[] {
-  return [...DOMAIN_MODULES[normalizeDomain(domain)]];
+export function getEnabledModules(domain: unknown, uiMode: unknown = 'full'): Tab[] {
+  const modules = DOMAIN_MODULES[normalizeDomain(domain)];
+  if (normalizeUiMode(uiMode) === 'full') return [...modules];
+  return modules.filter((t) => !MASQUES_EN_MODE_SIMPLE.includes(t));
 }
 
 /**
@@ -84,14 +110,14 @@ export function getEnabledModules(domain: unknown): Tab[] {
  * acceptant des valeurs arbitraires, une simple absence dans la liste ne
  * protège rien si le rendu ne la consulte pas.
  */
-export function isModuleEnabled(domain: unknown, tab: Tab): boolean {
-  return getEnabledModules(domain).includes(tab);
+export function isModuleEnabled(domain: unknown, tab: Tab, uiMode: unknown = 'full'): boolean {
+  return getEnabledModules(domain, uiMode).includes(tab);
 }
 
 /**
  * Onglet de repli quand l'onglet demandé n'appartient pas au domaine : le
  * premier module du domaine, jamais `undefined`.
  */
-export function fallbackTab(domain: unknown): Tab {
-  return getEnabledModules(domain)[0];
+export function fallbackTab(domain: unknown, uiMode: unknown = 'full'): Tab {
+  return getEnabledModules(domain, uiMode)[0];
 }

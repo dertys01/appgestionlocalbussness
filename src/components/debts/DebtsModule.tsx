@@ -9,8 +9,6 @@ import { Input } from '@/components/ui/input';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
 import { readablePlanError } from '@/lib/utils/planErrors';
-import { isFeatureAllowed, PLAN_LABELS } from '@/lib/utils/plans';
-import type { Plan } from '@/types';
 
 interface Debt {
   debt_id: string;
@@ -49,7 +47,7 @@ function daysSince(iso: string | null): number | null {
  * en premier.
  */
 export function DebtsModule() {
-  const { supabase, plan, canManageProducts } = useSupabase();
+  const { supabase, canManageProducts } = useSupabase();
   const [debts, setDebts] = useState<Debt[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -72,8 +70,7 @@ export function DebtsModule() {
     setError('');
     try {
       // Fonction SECURITY INVOKER : l'isolation vient de la RLS de sales et
-      // customer_debts, pas d'un filtre manuel dans la requête. Le plan, lui, est
-      // vérifié en base : le cadenas de l'onglet ne protège rien.
+      // customer_debts, pas d'un filtre manuel dans la requête.
       const { data, error: err } = await supabase.rpc('get_customer_debts');
       if (err) throw new Error(readablePlanError(err.message));
       setDebts((data ?? []) as Debt[]);
@@ -116,24 +113,8 @@ export function DebtsModule() {
     }
   };
 
+  // Plus de cadenas : le carnet est gratuit (migration_onboarding_mode.sql).
   const total = debts.reduce((s, d) => s + Number(d.total_due), 0);
-  const bloque = !isFeatureAllowed(plan as Plan, 'reports');
-
-  if (bloque) {
-    return (
-      <Card className="border-amber-200">
-        <CardContent className="p-6 text-center space-y-2">
-          <Handshake className="w-8 h-8 text-amber-400 mx-auto" />
-          <p className="text-sm text-slate-600">
-            Le carnet de dette est disponible à partir du plan {PLAN_LABELS.starter}.
-          </p>
-          <p className="text-xs text-slate-500">
-            Il fait partie des rapports, comme la rentabilité et le résultat net.
-          </p>
-        </CardContent>
-      </Card>
-    );
-  }
 
   return (
     <div className="space-y-4">

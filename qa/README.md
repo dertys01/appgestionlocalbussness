@@ -142,3 +142,27 @@ s'encombrer, et il faut la reseed de temps en temps.
 
 Un `npm test` vert ne dit pas que l'application est utilisable : il dit que la
 logique est cohérente. Ces deux scripts disent la seconde chose.
+## `onboarding.mjs` — le premier lancement
+
+Crée un compte neuf et joue l'assistant jusqu'à la première vente, à 375 px :
+capture de chaque écran, débordement horizontal, erreurs HTTP et JS, mode
+simple puis bascule en mode complet.
+
+```bash
+QA_BASE=http://localhost:3001 node qa/onboarding.mjs [epicerie|boutique|restaurant|autre] [exemples|mes-produits]
+```
+
+L'inscription est limitée à quelques comptes par heure et par adresse IP.
+Au-delà, rejouez sur un compte existant dont l'onboarding a été remis à zéro
+(`onboarding_done = false`, `onboarding_step = 'business'`) avec
+`QA_EMAIL=<email> QA_PASSWORD=<mot de passe>`.
+
+## `scripts/supabase-sql.mjs` — SQL sur la base de recette
+
+Applique une migration ou une requête via l'API de gestion Supabase. Demande
+`SUPABASE_ACCESS_TOKEN` (jeton personnel) dans `.env.local`.
+
+```bash
+node scripts/supabase-sql.mjs supabase/migration_x.sql
+node scripts/supabase-sql.mjs --query "SELECT count(*) FROM organizations"
+```

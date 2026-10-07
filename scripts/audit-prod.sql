@@ -35,7 +35,7 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('freeze_sale_item_cost()', '51ea5fb2804004f581857f43c0702706', '9c10ad43d8f21aed0a3b77accd71c0da'),
     ('get_business_owner_id()', 'f1a35c5ce9ed572c1a3313ba0be69fb7', '6cd22294040166c9e6714901940420d2'),
     ('get_cash_flow(date,date)', 'd10976d2751a09b723cf67184725b566', '35094efd447bccb61360005a3876c9ca'),
-    ('get_customer_debts()', 'c3d998d63acfc08888cc6ede9c230b94', 'c2926d43fc98290f23da39c1d7bab549'),
+    ('get_customer_debts()', '1167942d7e174732e05ba3854db67b1a', 'cbf003dd943e7232899d57267a5412ff'),
     ('get_product_profitability()', '3c326bb6148f64e6b04a147c9af1de34', '5fcbcc2842acd55de605b58ab8f4e1f1'),
     ('get_sales_summary(date,date,text)', 'b20ea71234701f0c5cf9c570040027b2', '874d04e131374a05e6e53a23fa2a78bf'),
     ('get_top_products(date,date,text,integer)', '03bcc22bb85b632d90912b919ad92c0d', '7487786d4255660fe52e807dc79f60b1'),

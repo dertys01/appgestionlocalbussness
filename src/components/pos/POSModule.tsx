@@ -28,6 +28,7 @@ import { logActivity } from '@/lib/utils/activity';
 import { printReceipt } from '@/lib/utils/print';
 import { loadDishIds } from '@/lib/utils/dishes';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
+import { isFeatureAllowed } from '@/lib/utils/plans';
 import type { Product, CartItem } from '@/types';
 
 interface POSModuleProps {
@@ -45,6 +46,12 @@ interface POSModuleProps {
    * d'onglet) et le produit réapparaît dans un panier vide.
    */
   onAddToCartHandled?: () => void;
+  /**
+   * Le reçu de vente vient d'être fermé. Sert à la caisse guidée de
+   * l'onboarding : les félicitations attendent que le patron ait vu son reçu,
+   * au lieu de le lui retirer des yeux à la seconde où la vente passe.
+   */
+  onReceiptClosed?: () => void;
 }
 
 type PaymentMethod = 'cash' | 'momo' | 'credit';
@@ -97,8 +104,8 @@ function readableSaleError(message: string): string {
   return "La vente n'a pas été enregistrée. Aucune modification n'a été appliquée.";
 }
 
-export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToCartHandled }: POSModuleProps) {
-  const { supabase, ownerId, actorName, org } = useSupabase();
+export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToCartHandled, onReceiptClosed }: POSModuleProps) {
+  const { supabase, ownerId, actorName, org, plan } = useSupabase();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [scanError, setScanError] = useState('');
   const [search, setSearch] = useState('');
@@ -189,6 +196,10 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
     setCheckoutError('');
   }, [cart, paymentMethod, clientName, clientPhone, advance, advanceMethod, amountGiven]);
   const [receipt, setReceipt] = useState<ReceiptState | null>(null);
+  const fermerRecu = () => {
+    setReceipt(null);
+    onReceiptClosed?.();
+  };
   /**
    * Sur mobile, le panier est un panneau plein écran plutôt qu'une colonne
    * sous la grille. En colonne il arrivait après les produits : avec 40
@@ -326,7 +337,9 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
    * commerce qu'elle n'informerait.
    */
   const chargerPlusVendus = useCallback(async () => {
-    if (!ownerId) return;
+    // Sans le plan, on n'appelle même pas : la base répondrait 403 à chaque
+    // ouverture de la caisse, une erreur réseau pour rien dans la console.
+    if (!ownerId || !isFeatureAllowed(plan, 'forecast')) return;
     try {
       const { data, error } = await supabase.rpc('get_units_sold_since', { p_days: 30 });
       if (error || !data) return;
@@ -338,7 +351,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
     } catch {
       // plan gratuit ou starter : pas de classement, sans le dire.
     }
-  }, [supabase, ownerId]);
+  }, [supabase, ownerId, plan]);
 
   useEffect(() => {
     void chargerPlusVendus();
@@ -1531,7 +1544,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
       </div>
 
       {/* ── Modal reçu ── */}
-      <Dialog open={!!receipt} onOpenChange={() => setReceipt(null)}>
+      <Dialog open={!!receipt} onOpenChange={(ouvert) => { if (!ouvert) fermerRecu(); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle className={`flex items-center gap-2 ${receipt?.isCredit ? 'text-amber-700' : 'text-emerald-700'}`}>
@@ -1617,14 +1630,14 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
               ) : (
                 <button
                   className="text-xs text-slate-500 flex items-center justify-center gap-1"
-                  onClick={() => setReceipt(null)}
+                  onClick={fermerRecu}
                 >
                   <FileText className="h-3 w-3" />
                   Facture normalisée — Plan Pro uniquement
                 </button>
               )}
 
-              <Button variant="ghost" onClick={() => setReceipt(null)} className="w-full gap-2 text-slate-500">
+              <Button variant="ghost" onClick={fermerRecu} className="w-full gap-2 text-slate-500">
                 <X className="h-4 w-4" />
                 Fermer
               </Button>

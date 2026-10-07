@@ -30,7 +30,9 @@ import { RestockModal } from '@/components/products/RestockModal';
 import { ProductImportModal } from '@/components/inventory/ProductImportModal';
 import { BarcodeScanner } from '@/components/scanner/BarcodeScanner';
 import { SettingsModule } from '@/components/settings/SettingsModule';
-import { OnboardingWizard } from '@/components/onboarding/OnboardingWizard';
+import { OnboardingWizard, type OnboardingExit } from '@/components/onboarding/OnboardingWizard';
+import { GuidedCash } from '@/components/onboarding/GuidedCash';
+import { normalizeOnboardingStep } from '@/lib/onboarding';
 import { OrgLoadFailed } from '@/components/onboarding/OrgLoadFailed';
 import { OrgSetupRequired } from '@/components/onboarding/OrgSetupRequired';
 import { DashboardTab } from '@/components/dashboard/DashboardTab';
@@ -73,6 +75,10 @@ export default function HomePage() {
    * n'a plus d'effet.
    */
   const [menuOuvert, setMenuOuvert] = useState(false);
+  // Écran 4 de l'onboarding → la caisse guidée. Local et non en base : après un
+  // rechargement, le patron revoit la consigne « Faites votre première
+  // vente » avant la caisse, ce qui ne coûte qu'un clic.
+  const [caisseGuidee, setCaisseGuidee] = useState(false);
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [restockProduct, setRestockProduct] = useState<Product | null>(null);
   // Même règle que canManageProducts : un prédicat nommé rend les sites
@@ -125,9 +131,31 @@ export default function HomePage() {
 
   if (!user) return <LoginPage />;
 
-  // Onboarding : nouveau compte sans org ou onboarding non terminé
+  // Onboarding : tant qu'il n'est pas terminé, aucune navigation — l'assistant
+  // ou la caisse guidée, rien d'autre. Un menu à neuf entrées est exactement ce
+  // qui fait fermer l'application avant la première vente.
   if (!isEmployee && org && !org.onboarding_done) {
-    return <OnboardingWizard onComplete={fetchProducts} />;
+    const finirOnboarding = (exit: OnboardingExit) => {
+      if (exit === 'debts') setTab('debts');
+      else if (exit === 'add-product') { setTab('inventory'); openAdd(); }
+      else setTab('dashboard');
+    };
+    if (caisseGuidee && normalizeOnboardingStep(org.onboarding_step) === 'first_sale') {
+      return (
+        <GuidedCash
+          products={products}
+          onProductsChanged={fetchProducts}
+          onSkip={() => setTab('dashboard')}
+        />
+      );
+    }
+    return (
+      <OnboardingWizard
+        onProductsChanged={fetchProducts}
+        onGoToCash={() => setCaisseGuidee(true)}
+        onFinish={finirOnboarding}
+      />
+    );
   }
 
   // Org absente = register interrompu avant la création de l'org
@@ -147,7 +175,9 @@ export default function HomePage() {
     { key: 'pos',       label: 'Vente',      icon: ShoppingCart,    locked: false },
     { key: 'inventory', label: 'Stock',      icon: Package,         locked: false },
     { key: 'sales',     label: 'Ventes',     icon: History,         locked: false },
-    { key: 'debts',     label: 'Dettes',     icon: Handshake,       locked: !isFeatureAllowed(plan, 'reports') },
+    // Dettes : gratuites depuis migration_onboarding_mode.sql — récupérer son
+    // argent n'est pas un avantage payant.
+    { key: 'debts',     label: 'Dettes',     icon: Handshake,       locked: false },
     { key: 'reports',   label: 'Rapports',   icon: BarChart2,       locked: !isFeatureAllowed(plan, 'reports') },
     { key: 'forecast',  label: 'Prévisions', icon: Brain,           locked: !isFeatureAllowed(plan, 'forecast') },
     // Salle : module restaurant, donc filtré comme les autres. La caisse
@@ -157,14 +187,16 @@ export default function HomePage() {
     { key: 'team',      label: 'Équipe',     icon: Users,           locked: false },
   ];
 
-  const modulesActifs = getEnabledModules(org?.domain);
+  // Domaine ET mode : un maquis en mode simple garde sa Salle mais pas ses
+  // Recettes ; une boutique en mode simple n'a ni Rapports ni Équipe.
+  const modulesActifs = getEnabledModules(org?.domain, org?.ui_mode);
   const NAV_ITEMS = ALL_NAV_ITEMS.filter((i) => modulesActifs.includes(i.key));
 
   // Onglet demandé hors domaine (lien, onglet mémorisé d'une autre activité) :
   // on retombe sur le premier module du domaine plutôt que d'afficher un
   // écran qui ne fait pas partie de l'application de ce client.
   if (!modulesActifs.includes(tab) && modulesActifs.length > 0) {
-    setTab(fallbackTab(org?.domain));
+    setTab(fallbackTab(org?.domain, org?.ui_mode));
   }
 
   return (

@@ -75,6 +75,9 @@ const ORDER = [
   // Équipe : gestion des membres sans clé service role. Ne dépend que des
   // fonctions de migration_team.sql / migration_security.sql.
   'migration_equipe_sans_service_role.sql',
+  // Onboarding guidé et mode simple : ui_mode, onboarding_step,
+  // business_type, et le carnet de dettes rendu au plan gratuit.
+  'migration_onboarding_mode.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -247,6 +250,11 @@ const DERNIERE_VERSION = [
   // dernières réinstallées, sinon la rejouabilité laisserait la version
   // d'avant — qui ne vérifie pas l'appelant.
   'migration_equipe_sans_service_role.sql',
+  // get_customer_debts() sans verrou de plan : migration_ca_caisse.sql, rejouée
+  // juste au-dessus, réinstalle la version réservée au Starter. Et
+  // migration_security.sql révoque les droits de colonne d'organizations — le
+  // GRANT de ui_mode doit donc repasser après elle, comme en production.
+  'migration_onboarding_mode.sql',
 ];
 
 console.log(`\n▸ Rejouabilité (${REPLAYABLE.length} migrations incrémentales)`);
@@ -1939,9 +1947,17 @@ await q(`SELECT create_sale(
   await q(`SELECT record_credit_sale(
              '[{"product_id":"f0f0f0f0-0000-4000-8000-00000000000b","quantity":1}]'::jsonb,
              'Débiteur gratuit','+229 95 00 00 00',null)`);
+  //
+  // Règle inversée par migration_onboarding_mode.sql : récupérer son argent
+  // n'est pas un avantage payant. Le carnet est l'un des trois piliers du mode
+  // simple, celui d'une boutique gratuite. Les rapports (16d) restent payants.
   let msg = '';
-  try { await q(`SELECT * FROM get_customer_debts()`); } catch (e) { msg = e.message; }
-  check('16e. carnet de dette refusé en plan gratuit', /plan starter/i.test(msg), msg || 'RENVOYÉ !');
+  let lignes = [];
+  try {
+    lignes = (await q(`SELECT name FROM get_customer_debts()`)).rows;
+  } catch (e) { msg = e.message; }
+  check('16e. carnet de dette lisible en plan gratuit',
+    msg === '' && lignes.some((l) => l.name === 'Débiteur gratuit'), msg || `${lignes.length} ligne(s)`);
 }
 
 {
@@ -4520,6 +4536,78 @@ await canRead('30q. un patron ne voit pas l\'équipe d\'un autre',
   `SELECT count(*) FROM business_members WHERE owner_id='${EQ_AUTRUI}'`, false, EQ);
 await canRead('30r. un employé voit son propre lien',
   `SELECT count(*) FROM business_members WHERE member_id='${EQ_CALC}'`, true, EQ_CALC);
+
+// ─── 31. Onboarding guidé et mode simple ──────────────────────
+// Trois invariants : (1) les boutiques déjà en service gardent l'interface
+// complète, seules les inscriptions à venir naissent en mode simple ; (2) le
+// patron peut écrire les trois colonnes de l'assistant — sans le GRANT de
+// colonne, l'assistant se bloquait sur « permission denied » ; (3) une boutique
+// gratuite lit son carnet de dettes.
+console.log('\n▸ Onboarding guidé et mode simple');
+{
+  // Les sections précédentes ont rejoué migration_security.sql, qui révoque
+  // les droits de colonne d'organizations. En production la migration passe
+  // après elle : on remet la base dans cet ordre.
+  await e(readSql('migration_onboarding_mode.sql'));
+
+  // (1) Simuler le déploiement sur une base en service : la colonne n'existe
+  // pas encore et des boutiques sont déjà inscrites.
+  await e(`ALTER TABLE organizations DROP COLUMN IF EXISTS ui_mode CASCADE`);
+  const existantes = Number((await q(`SELECT count(*) FROM organizations`)).rows[0].count);
+  await e(readSql('migration_onboarding_mode.sql'));
+  const enComplet = Number((await q(
+    `SELECT count(*) FROM organizations WHERE ui_mode = 'full'`)).rows[0].count);
+  check('31a. les boutiques existantes restent en mode complet',
+    existantes > 0 && enComplet === existantes, `${enComplet}/${existantes}`);
+
+  const NEUVE = '31313131-3131-3131-3131-313131313131';
+  await q(`INSERT INTO auth.users (id, email) VALUES ('${NEUVE}', 'neuve@test.ci') ON CONFLICT DO NOTHING`);
+  await q(`INSERT INTO organizations (id, name, slug) VALUES ('${NEUVE}', 'Boutique neuve', 'boutique-neuve')`);
+  const mode = (await q(`SELECT ui_mode, plan FROM organizations WHERE id='${NEUVE}'`)).rows[0];
+  check('31b. une inscription neuve naît en mode simple', mode.ui_mode === 'beginner', mode.ui_mode);
+
+  // Le rejeu ne doit faire basculer personne.
+  await e(readSql('migration_onboarding_mode.sql'));
+  const apresRejeu = (await q(`SELECT ui_mode FROM organizations WHERE id='${NEUVE}'`)).rows[0].ui_mode;
+  const completsApres = Number((await q(
+    `SELECT count(*) FROM organizations WHERE ui_mode = 'full'`)).rows[0].count);
+  check('31c. le rejeu ne change le mode de personne',
+    apresRejeu === 'beginner' && completsApres === enComplet, `${apresRejeu}, ${completsApres} complets`);
+
+  // (2) Le patron écrit les colonnes de l'assistant, en rôle authenticated.
+  await canWrite('31d. le patron enregistre son activité et l\'étape de l\'assistant',
+    `UPDATE organizations SET business_type = 'epicerie', onboarding_step = 'samples' WHERE id = '${NEUVE}'`,
+    true, NEUVE);
+  await canWrite('31e. le patron passe en mode complet',
+    `UPDATE organizations SET ui_mode = 'full' WHERE id = '${NEUVE}'`, true, NEUVE);
+  await canWrite('31f. … et revient en mode simple',
+    `UPDATE organizations SET ui_mode = 'beginner' WHERE id = '${NEUVE}'`, true, NEUVE);
+  await canWrite('31g. un autre patron ne change pas le mode de cette boutique',
+    `UPDATE organizations SET ui_mode = 'full' WHERE id = '${NEUVE}'`, false, AUTRE_PATRON);
+
+  // Les CHECK : une valeur inventée est refusée, même par le superuser.
+  for (const [label, sql] of [
+    ['31h. ui_mode inconnu refusé', `UPDATE organizations SET ui_mode = 'expert' WHERE id = '${NEUVE}'`],
+    ['31i. activité inconnue refusée', `UPDATE organizations SET business_type = 'grossiste' WHERE id = '${NEUVE}'`],
+    ['31j. étape inconnue refusée', `UPDATE organizations SET onboarding_step = 'fin' WHERE id = '${NEUVE}'`],
+  ]) {
+    let refuse = false;
+    try { await q(sql); } catch { refuse = true; }
+    check(label, refuse);
+  }
+
+  // (3) Le carnet de dettes en plan gratuit : l'appel ne lève plus.
+  check('31k. la boutique de test est bien en plan gratuit', mode.plan === 'free', mode.plan);
+  await q(`SELECT set_config('request.jwt.claim.sub', '${NEUVE}', false)`);
+  await e('SET ROLE authenticated');
+  let erreur = '';
+  try { await q(`SELECT count(*) FROM get_customer_debts()`); } catch (err) { erreur = err.message; }
+  await e('RESET ROLE');
+  check('31l. une boutique gratuite lit son carnet de dettes', erreur === '', erreur);
+  const def = (await q(
+    `SELECT pg_get_functiondef(oid) AS d FROM pg_proc WHERE proname = 'get_customer_debts'`)).rows[0].d;
+  check('31m. get_customer_debts() n\'exige plus le plan Starter', !def.includes('require_feature'));
+}
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
 process.exit(failures ? 1 : 0);

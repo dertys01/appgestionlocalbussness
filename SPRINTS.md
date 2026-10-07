@@ -1044,6 +1044,59 @@ Règle d'or retenue : un module d'un autre domaine **n'est pas rendu**, pas masq
 Chaque sprint est livrable indépendamment : un restaurant peut s'arrêter après le 14
 et encaisser en salle ; le 15 est un gain de pilotage, le 16 du confort.
 
+## Sprints 17 à 21 — Plan de lancement
+
+Référence : `PLAN-TRAVAIL-GESTIONLOCAL.md` (05/10/2026). Ses sprints 12 à 16 sont
+**renumérotés 17 à 21** ici, les numéros 12 à 16 étant déjà ceux du parcours
+restaurant. Correspondance : 12 → 17, 13 → 18, 14 → 19, 15 → 20, 16 → 21.
+
+Décisions prises à l'audit du 07/10/2026 :
+
+- **Vouvoiement.** Les textes du plan tutoient ; ils sont repris mot pour mot, au
+  vouvoiement — la forme de respect attendue d'un fournisseur par un commerçant,
+  et celle du reste de l'application.
+- **`onboarding_done` est conservée** : la colonne `onboarding_completed` du plan
+  ferait double emploi.
+- **`business_type` (4 activités) se déduit en `domain` (2 affichages)** :
+  épicerie, boutique, autre → `retail` ; restaurant → `restaurant`. Le domaine
+  reste le seul à décider des modules.
+- **Le carnet de dettes devient gratuit.** Il est l'un des trois piliers du mode
+  simple ; les rapports (rentabilité, charges, trésorerie) restent payants.
+- **Prix, nombre d'utilisateurs du Starter et prestataire Mobile Money** : à
+  décider au Sprint 19, après une évaluation marketing.
+
+### Sprint 17 — Onboarding premier lancement (plan : 12)
+
+| | |
+|---|---|
+| **Objectif** | Une boutique neuve fait sa première vente en ≤ 4 minutes |
+| **Parcours** | Bienvenue → type de commerce (4 cartes) → 3 produits d'exemple (ou « mes propres produits » : nom, prix, stock) → consigne « Faites votre première vente » → **la vraie caisse, sans navigation** → félicitations (dettes / ajouter des produits / tableau de bord) |
+| **SQL** | `migration_onboarding_mode.sql` : `onboarding_step` (reprise après rechargement), `business_type` |
+| **Règle** | Les exemples ont du **stock** — `create_sale()` refuserait sinon la première vente. SKU `DEMO-xx`, retirables d'un clic depuis le Stock. Écrits une seule fois, même au second passage |
+| **Code** | `src/lib/onboarding.ts` (données), `OnboardingWizard.tsx` réécrit, `GuidedCash.tsx`, `POSModule` gagne `onReceiptClosed` (les félicitations attendent la fermeture du reçu) |
+| **Tests** | `tests/ui/onboarding.test.tsx` — 10 tests du parcours critique |
+
+### Sprint 18 — Mode simple (plan : 13)
+
+| | |
+|---|---|
+| **Objectif** | Cacher la complexité par défaut |
+| **SQL** | `organizations.ui_mode` : la colonne naît à `'full'` (**les boutiques existantes gardent tout**), puis le défaut passe à `'beginner'` pour les inscriptions à venir. `GRANT INSERT/UPDATE` de colonne, sans lequel l'assistant se bloquait en « permission denied » |
+| **Modules** | Mode simple = Accueil, Vente, Stock, Ventes, Dettes, Paramètres (+ Salle en restaurant). Masqués : Rapports (dont Dépenses et Rentabilité), Prévisions, Équipe, Recettes |
+| **Bascule** | Paramètres → Affichage → « Passer en mode complet », réversible |
+| **Tests** | Section 31 du harnais (13 contrôles : boutiques existantes en complet, inscription neuve en simple, rejeu sans effet, droits, CHECK, dettes en gratuit) · 4 tests `modules.test.ts` |
+
+### Sprints 19 à 21 — à venir
+
+- **19 — Freemium** (plan : 14) : limites des 3 plans **côté serveur** (aujourd'hui
+  seuls les produits le sont ; employés, historique et export ne sont bloqués que
+  par l'écran), nouveaux prix Stripe, page tarifs, essai de 14 jours, prestataire
+  Mobile Money.
+- **20 — Tableau de bord du jour + caisse mobile** (plan : 15) : CA encaissé, nombre
+  de ventes, dettes à recouvrer, stock bas ; vérification à 375 px.
+- **21 — Rétention** (plan : 16) : la relance WhatsApp existe déjà (vérifier les 2
+  clics) ; export des dettes, PDF/Excel.
+
 ## Garde-fous permanents
 
 - `bump_rate_limit()` doit rester en **`SECURITY DEFINER`**.
@@ -1067,6 +1120,12 @@ et encaisser en salle ; le 15 est un gain de pilotage, le 16 du confort.
 - La recherche `GET /admin/users?email=` de ce GoTrue **ignore** le paramètre : ne pas
   « simplifier » la pagination de `invitations/accept`.
 - Aucune suppression de données sans afficher la liste et obtenir le feu vert.
+- **`migration_onboarding_mode.sql` passe en production AVANT le code** qui
+  l'utilise : sans les colonnes, l'assistant ne peut pas enregistrer son étape et
+  le carnet de dettes d'une boutique gratuite affiche une erreur de plan.
+- Une colonne d'affichage ajoutée à `organizations` ne naît **jamais** avec le
+  défaut destiné aux nouveaux comptes : `ADD COLUMN ... DEFAULT` remplit toutes
+  les lignes existantes.
 - **Le serveur OpenCode de cette machine est exposé sur le réseau local**
   (`hostname 0.0.0.0`, port `49374`, IP `192.168.8.110`) depuis le 03/10/2026, pour
   piloter les tâches depuis l'application Android. Décision du mainteneur, prise en
@@ -1081,6 +1140,8 @@ et encaisser en salle ; le 15 est un gain de pilotage, le 16 du confort.
 
 | Date | Commit | Objet |
 |---|---|---|
+| 07/10/2026 | — | **Recette navigateur des sprints 17-18**, build de production, téléphone 375 px, base de recette migrée par `scripts/supabase-sql.mjs` : épicerie + exemples, restaurant + exemples, boutique + « mes propres produits » — **21/21 et 22/22 contrôles**, rechargement en cours d'assistant, aucun débordement, aucune erreur HTTP ni JS. Compte existant : menu complet, pas d'assistant. **Défaut trouvé et corrigé** : la caisse appelait `get_units_sold_since()` (« + vendus », plan Pro) sur tous les plans — un 403 à chaque ouverture de caisse en gratuit ; l'appel n'est plus fait sans le plan. Outil : `qa/onboarding.mjs` |
+| 07/10/2026 | — | **Sprints 17 et 18 — onboarding guidé et mode simple.** Assistant en 5 écrans (textes du plan au vouvoiement), 3 exemples par activité avec stock, première vente sur la vraie caisse sans navigation, félicitations après fermeture du reçu. `ui_mode` : boutiques existantes en complet, nouvelles en simple, bascule dans Paramètres. Carnet de dettes rendu au plan gratuit (`get_customer_debts()` sans `require_feature`, test 16e inversé). Section 31 du harnais (13 contrôles) · tests UI **209 → 223** · migrations **34 → 35** |
 | 04/10/2026 | — | **L'onglet Paramètres n'ouvrait pas, pour tout le monde et dans les deux domaines.** La garde de `page.tsx` — « un onglet hors domaine retombe sur l'accueil » — rejetait `'settings'`, absent de `DOMAIN_MODULES` : le bouton changeait l'onglet et la même passe de rendu le remettait sur Accueil. L'écran était dans le code et inatteignable à la souris — donc **la bascule de domaine, promise comme réversible, ne l'était pas**. `'settings'` rejoint les modules communs, 2 tests. Trouvé en cherchant les exemples par domaine |
 | 04/10/2026 | — | **Catalogue d'exemple par domaine** — plus aucune référence téléphonique hors d'un vieux gabarit CSV. 19 articles d'épicerie-quincaillerie (prix d'achat réels, 5 catégories) ou 17 de maquis (9 ingrédients + 4 plats **avec recettes** + 4 boissons), chargé en un clic à l'écran de bienvenue, aperçu des catégories avant de choisir, retrait en un clic depuis le Stock — bannière tant qu'il en reste. Chaque article porte un SKU `DEMO-xx`, seul moyen de les retrouver. Les exemples des champs de saisie (nom, SKU, catégorie, fournisseur) et le gabarit d'import CSV suivent le domaine. 13 tests |
 | 04/10/2026 | — | **Base de caisse, les trois défauts de la recette vente corrigés** : (1) `get_sales_summary` comptait `SUM(total_amount)` là où les deux autres écrans comptaient `SUM(amount_received)` — même jour, même boutique, **42 300 F contre 34 300 F**, l'écart valant exactement la dette non réglée, alors que l'écran Dettes promet par écrit la base encaissée. Les trois lisent maintenant la même fonction. Second volet : un règlement de dette en espèces n'entrait dans **aucun** total (le CA baissait le jour où un client payait en liquide) — `credit_payments.sale_id` rattache le règlement à la vente, `gesture_id` garde un geste ventilé en un seul versement annoncé au client. (2) Une vente espèces payée 3 000 sur 5 500 était comptée entièrement encaissée et `amountGiven` n'était pas transmis : l'écran ne propose plus l'impasse, il renvoie vers Crédit, qui exige nom + téléphone. (3) `pay_customer_debt` demande le moyen et le module Dettes envoyait `'cash'` en dur : une boutique Orange Money comptait son MoMo dans « Espèces ». Sélecteur à côté du montant. 20 tests SQL, 18 tests UI |

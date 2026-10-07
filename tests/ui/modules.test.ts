@@ -6,6 +6,7 @@ import {
   getEnabledModules,
   isModuleEnabled,
   fallbackTab,
+  normalizeUiMode,
   type Domain,
 } from '@/lib/modules';
 
@@ -83,6 +84,43 @@ describe('domaines d\'activité', () => {
     const tous: string[] = ['dashboard', 'pos', 'inventory', 'sales', 'debts', 'reports', 'forecast', 'team'];
     for (const t of tous) {
       expect(modules.includes(t as never)).toBe(isModuleEnabled('restaurant', t as never));
+    }
+  });
+});
+/**
+ * Mode simple (Sprint 18) : un nouveau compte ne voit que Caisse, Produits,
+ * Dettes, Ventes du jour et Accueil — plus les réglages, où se trouve le
+ * retour au mode complet.
+ */
+describe('mode simple', () => {
+  it('ne garde que l\'essentiel en commerce', () => {
+    expect(getEnabledModules('retail', 'beginner')).toEqual(
+      ['dashboard', 'pos', 'inventory', 'sales', 'debts', 'settings']
+    );
+  });
+
+  it('garde la Salle d\'un maquis, pas ses Recettes', () => {
+    const m = getEnabledModules('restaurant', 'beginner');
+    expect(m).toContain('floor');
+    expect(m).not.toContain('recipes');
+    expect(m).not.toContain('reports');
+    expect(m).not.toContain('team');
+  });
+
+  it('un mode inconnu ou absent vaut le mode complet', () => {
+    // Une boutique en service avant la migration n'a pas la colonne : elle ne
+    // doit pas perdre ses Rapports le jour du déploiement.
+    for (const raw of [undefined, null, '', 'expert']) {
+      expect(normalizeUiMode(raw)).toBe('full');
+      expect(getEnabledModules('retail', raw)).toEqual(getEnabledModules('retail'));
+    }
+  });
+
+  it('le repli reste l\'accueil, et les réglages restent atteignables', () => {
+    for (const d of ['retail', 'restaurant'] as const) {
+      expect(fallbackTab(d, 'beginner')).toBe('dashboard');
+      expect(isModuleEnabled(d, 'settings', 'beginner')).toBe(true);
+      expect(isModuleEnabled(d, 'reports', 'beginner')).toBe(false);
     }
   });
 });

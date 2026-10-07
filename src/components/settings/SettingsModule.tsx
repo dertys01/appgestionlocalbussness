@@ -8,7 +8,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { PLAN_LABELS, PLAN_LIMITS } from '@/lib/utils/plans';
-import { normalizeDomain, DOMAIN_LABELS, DOMAIN_DESCRIPTIONS, type Domain } from '@/lib/modules';
+import { normalizeDomain, normalizeUiMode, DOMAIN_LABELS, DOMAIN_DESCRIPTIONS, type Domain, type UiMode } from '@/lib/modules';
 import type { Plan } from '@/types';
 
 const PLANS: { id: Plan; price: string; features: string[] }[] = [
@@ -64,6 +64,25 @@ export function SettingsModule() {
     setSavingDomain(null);
     if (error) { setDomainError(error.message); return; }
     setDomain(d);
+    await refreshOrg();
+  };
+
+  // Mode d'affichage : simple (l'essentiel) ou complet. Réversible, comme le
+  // domaine, et pour la même raison : il ne touche à aucune donnée.
+  const uiMode = normalizeUiMode(org?.ui_mode);
+  const [savingMode, setSavingMode] = useState(false);
+  const [modeError, setModeError] = useState('');
+
+  const changeMode = async (m: UiMode) => {
+    if (m === uiMode) return;
+    setSavingMode(true);
+    setModeError('');
+    const { error } = await supabase
+      .from('organizations')
+      .update({ ui_mode: m } as Record<string, unknown>)
+      .eq('id', org?.id);
+    setSavingMode(false);
+    if (error) { setModeError(error.message); return; }
     await refreshOrg();
   };
 
@@ -255,6 +274,36 @@ export function SettingsModule() {
                 </p>
               )}
               {domainError && <p className="text-red-600 text-sm">{domainError}</p>}
+            </CardContent>
+          </Card>
+
+          {/* Mode d'affichage — discret, sous le domaine : la plupart des
+              boutiques n'en auront jamais besoin. */}
+          <Card className="border-slate-200">
+            <CardContent className="p-5 space-y-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-semibold text-slate-800 text-sm">Affichage</h3>
+                <Badge className="bg-slate-100 text-slate-700">
+                  {uiMode === 'beginner' ? 'Mode simple' : 'Mode complet'}
+                </Badge>
+              </div>
+              <p className="text-xs text-slate-500">
+                {uiMode === 'beginner'
+                  ? 'Seul l’essentiel est affiché : caisse, produits, dettes et ventes. Le mode complet ajoute les rapports, les dépenses, la rentabilité et l’équipe.'
+                  : 'Tous les écrans sont affichés. Le mode simple ne garde que la caisse, les produits, les dettes et les ventes.'}
+                {' '}Vos données ne changent pas.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => changeMode(uiMode === 'beginner' ? 'full' : 'beginner')}
+                disabled={savingMode}
+                className="gap-2"
+              >
+                {savingMode && <Loader2 className="h-4 w-4 animate-spin" />}
+                {uiMode === 'beginner' ? 'Passer en mode complet' : 'Revenir au mode simple'}
+              </Button>
+              {modeError && <p className="text-red-600 text-sm">{modeError}</p>}
             </CardContent>
           </Card>
 
