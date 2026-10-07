@@ -7,6 +7,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
 import { readablePlanError } from '@/lib/utils/planErrors';
+import { isFeatureAllowed } from '@/lib/utils/plans';
 import { addDays, localTimeZone, parseISODate, todayISO } from '@/lib/utils/period';
 import type { Sale, SaleItem } from '@/types';
 
@@ -77,7 +78,14 @@ function heure(iso: string): string {
  * verrouillé serait pire que pas d'écran du tout.
  */
 export function DailyJournal() {
-  const { supabase } = useSupabase();
+  const { supabase, plan } = useSupabase();
+  /**
+   * Marge et résultat net : plan Starter. Sans lui, on ne les demande même pas
+   * à la base (elle répondrait 403), et l'écran ne montre que ce qui sert au
+   * soir d'une boutique gratuite — encaissé et nombre de ventes — sans bandeau
+   * de refus sur un écran essentiel.
+   */
+  const avecMarge = isFeatureAllowed(plan, 'reports');
 
   const [day, setDay] = useState<string>(() => todayISO());
   const [loading, setLoading] = useState(false);
@@ -111,7 +119,9 @@ export function DailyJournal() {
 
     try {
       const [flowRes, sumRes, salesRes, expRes] = await Promise.all([
-        supabase.rpc('get_cash_flow', { p_from: day, p_to: day }),
+        avecMarge
+          ? supabase.rpc('get_cash_flow', { p_from: day, p_to: day })
+          : Promise.resolve({ data: null, error: null }),
         supabase.rpc('get_sales_summary', { p_from: day, p_to: day, p_tz: localTimeZone() }),
         supabase
           .from('sales')
@@ -124,7 +134,7 @@ export function DailyJournal() {
 
       if (flowRes.error) {
         setFlowError(readablePlanError(flowRes.error.message));
-      } else {
+      } else if (avecMarge) {
         setFlow(((flowRes.data as CashFlowDay[]) ?? [])[0] ?? null);
       }
 
@@ -141,7 +151,7 @@ export function DailyJournal() {
     } finally {
       setLoading(false);
     }
-  }, [day, supabase]);
+  }, [day, supabase, avecMarge]);
 
   useEffect(() => {
     charger();
@@ -222,46 +232,68 @@ export function DailyJournal() {
             <div className="mt-1 text-xl font-bold text-slate-800 tabular-nums">
               {formatCFA(Number(summary?.revenue ?? flow?.revenue ?? 0))}
             </div>
-            <div className="truncate text-[11px] text-slate-500">
+            {/* Pas de truncate : à 375 px, la carte fait la moitié de l'écran et
+                « · MoMo … » disparaissait. Le texte passe à la ligne. */}
+            <div className="text-[11px] text-slate-500">
               Espèces {formatCFA(Number(summary?.cash ?? 0))} · MoMo {formatCFA(Number(summary?.momo ?? 0))}
             </div>
           </CardContent>
         </Card>
 
-        <Card className="border-slate-200">
-          <CardContent className="p-4">
-            <div className="text-xs text-slate-500">Marge brute</div>
-            <div className="mt-1 text-xl font-bold text-slate-800 tabular-nums">
-              {marge === null ? '—' : formatCFA(marge)}
-            </div>
-            <div className="truncate text-[11px] text-slate-500">{tauxMarge}</div>
-          </CardContent>
-        </Card>
+        {avecMarge ? (
+          <>
+            <Card className="border-slate-200">
+              <CardContent className="p-4">
+                <div className="text-xs text-slate-500">Marge brute</div>
+                <div className="mt-1 text-xl font-bold text-slate-800 tabular-nums">
+                  {marge === null ? '—' : formatCFA(marge)}
+                </div>
+                <div className="truncate text-[11px] text-slate-500">{tauxMarge}</div>
+              </CardContent>
+            </Card>
 
-        <Card className="border-slate-200">
-          <CardContent className="p-4">
-            <div className="text-xs text-slate-500">Charges</div>
-            <div className="mt-1 text-xl font-bold text-slate-800 tabular-nums">
-              {formatCFA(totalCharges)}
-            </div>
-            <div className="truncate text-[11px] text-slate-500">
-              {expenses.length} saisie{expenses.length > 1 ? 's' : ''}
-            </div>
-          </CardContent>
-        </Card>
+            <Card className="border-slate-200">
+              <CardContent className="p-4">
+                <div className="text-xs text-slate-500">Charges</div>
+                <div className="mt-1 text-xl font-bold text-slate-800 tabular-nums">
+                  {formatCFA(totalCharges)}
+                </div>
+                <div className="truncate text-[11px] text-slate-500">
+                  {expenses.length} saisie{expenses.length > 1 ? 's' : ''}
+                </div>
+              </CardContent>
+            </Card>
 
-        <Card className="border-slate-200">
-          <CardContent className="p-4">
-            <div className="text-xs text-slate-500">Résultat net</div>
-            <div className="mt-1 text-xl font-bold text-slate-800 tabular-nums">
-              {flow === null ? '—' : formatCFA(Number(flow.net))}
-            </div>
-            <div className="truncate text-[11px] text-slate-500">
-              {flow === null ? '' : 'après charges et coût d’achat'}
-            </div>
-          </CardContent>
-        </Card>
+            <Card className="border-slate-200">
+              <CardContent className="p-4">
+                <div className="text-xs text-slate-500">Résultat net</div>
+                <div className="mt-1 text-xl font-bold text-slate-800 tabular-nums">
+                  {flow === null ? '—' : formatCFA(Number(flow.net))}
+                </div>
+                <div className="truncate text-[11px] text-slate-500">
+                  {flow === null ? '' : 'après charges et coût d’achat'}
+                </div>
+              </CardContent>
+            </Card>
+          </>
+        ) : (
+          <Card className="border-slate-200">
+            <CardContent className="p-4">
+              <div className="text-xs text-slate-500">Ventes</div>
+              <div className="mt-1 text-xl font-bold text-slate-800 tabular-nums">
+                {Number(summary?.tx ?? sales.length)}
+              </div>
+              <div className="truncate text-[11px] text-slate-500">enregistrées ce jour</div>
+            </CardContent>
+          </Card>
+        )}
       </div>
+
+      {!avecMarge && (
+        <p className="text-xs text-slate-500">
+          La marge et le résultat net du jour sont inclus à partir du plan Starter.
+        </p>
+      )}
 
       {flowError && (
         <p className="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
@@ -365,42 +397,44 @@ export function DailyJournal() {
           </CardContent>
         </Card>
 
-        {/* Charges du jour */}
-        <Card className="border-slate-200">
-          <CardContent className="p-4 space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="font-semibold text-slate-700">Charges du jour</h3>
-              {!loading && expenses.length > 0 && (
-                <span className="text-xs tabular-nums text-slate-500">{formatCFA(totalCharges)}</span>
-              )}
-            </div>
-
-            {loading ? (
-              <p className="py-6 text-center text-xs text-slate-400">Chargement…</p>
-            ) : expenses.length === 0 ? (
-              <EmptyState
-                icon={Wallet}
-                title="Aucune charge ce jour-là"
-                hint="Saisissez une charge depuis Rapports → Charges : elle sera rattachée à ce jour."
-                className="py-6"
-              />
-            ) : (
-              <div className="divide-y divide-slate-100">
-                {expenses.map((e) => (
-                  <div key={e.id} className="flex items-center gap-3 py-2.5">
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm text-slate-700">{e.label}</div>
-                      <div className="truncate text-[11px] text-slate-400">{e.category}</div>
-                    </div>
-                    <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-800">
-                      −{formatCFA(Number(e.amount))}
-                    </span>
-                  </div>
-                ))}
+        {/* Charges du jour — avec le plan qui permet de les saisir (Rapports → Charges). */}
+        {avecMarge && (
+          <Card className="border-slate-200">
+            <CardContent className="p-4 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="font-semibold text-slate-700">Charges du jour</h3>
+                {!loading && expenses.length > 0 && (
+                  <span className="text-xs tabular-nums text-slate-500">{formatCFA(totalCharges)}</span>
+                )}
               </div>
-            )}
-          </CardContent>
-        </Card>
+
+              {loading ? (
+                <p className="py-6 text-center text-xs text-slate-400">Chargement…</p>
+              ) : expenses.length === 0 ? (
+                <EmptyState
+                  icon={Wallet}
+                  title="Aucune charge ce jour-là"
+                  hint="Saisissez une charge depuis Rapports → Charges : elle sera rattachée à ce jour."
+                  className="py-6"
+                />
+              ) : (
+                <div className="divide-y divide-slate-100">
+                  {expenses.map((e) => (
+                    <div key={e.id} className="flex items-center gap-3 py-2.5">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm text-slate-700">{e.label}</div>
+                        <div className="truncate text-[11px] text-slate-400">{e.category}</div>
+                      </div>
+                      <span className="shrink-0 text-sm font-semibold tabular-nums text-slate-800">
+                        −{formatCFA(Number(e.amount))}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </div>
     </div>
   );

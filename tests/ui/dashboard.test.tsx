@@ -72,26 +72,59 @@ describe('DashboardTab — boutique neuve (0 produit)', () => {
 });
 
 describe('DashboardTab — boutique en activité', () => {
-  it('retrouve les trois cartes dès qu’un produit existe', () => {
-    renderTab([product()]);
+  const today = { revenue: 42300, cash: 30000, momo: 12300, sales: 7, debtTotal: 15500, debtClients: 2 };
 
-    expect(screen.getByText('Produits')).toBeInTheDocument();
-    expect(screen.getByText('Valeur stock')).toBeInTheDocument();
-    expect(screen.getByText('Stock critique')).toBeInTheDocument();
+  it('montre la journée : encaissé, ventes, à recouvrer', () => {
+    render(
+      <DashboardTab products={[product()]} canManageProducts onNewSale={vi.fn()} onAddProduct={vi.fn()}
+        onRestock={vi.fn()} today={today} onOpenDebts={vi.fn()} />
+    );
+    expect(screen.getByText(/Encaissé aujourd/)).toBeInTheDocument();
+    expect(screen.getByText(/42\s?300 F/)).toBeInTheDocument();
+    expect(screen.getByText(/Espèces 30\s?000 F · Mobile Money 12\s?300 F/)).toBeInTheDocument();
+    expect(screen.getByText('7')).toBeInTheDocument();
+    expect(screen.getByText(/15\s?500 F/)).toBeInTheDocument();
+    expect(screen.getByText('2 clients')).toBeInTheDocument();
     expect(screen.queryByText(/Bienvenue — vos trois premiers pas/)).toBeNull();
   });
 
-  it('compte le stock critique au-dessus du seuil, pas tous les produits', () => {
+  it('n\u2019affiche pas de faux zéros pendant le chargement', () => {
+    renderTab([product()]);
+    // « 0 F » encaissé avant la réponse se lirait « vous n'avez rien vendu ».
+    expect(screen.queryByText('0 F')).toBeNull();
+    expect(screen.getAllByText('…').length).toBeGreaterThan(0);
+  });
+
+  it('la carte des dettes ouvre l\u2019écran Dettes', () => {
+    const onOpenDebts = vi.fn();
+    render(
+      <DashboardTab products={[product()]} canManageProducts onNewSale={vi.fn()} onAddProduct={vi.fn()}
+        onRestock={vi.fn()} today={today} onOpenDebts={onOpenDebts} />
+    );
+    fireEvent.click(screen.getByRole('button', { name: /À recouvrer/ }));
+    expect(onOpenDebts).toHaveBeenCalledTimes(1);
+  });
+
+  it('ne parle de stock bas que s\u2019il y en a, et compte les bons produits', () => {
+    const { unmount } = renderTabRendu([product()]);
+    expect(screen.queryByText(/Stock bas/)).toBeNull();
+    unmount();
+
     renderTab([
       product(),
       product({ id: 'p2', name: 'Huile 1 L', stock_qty: 1, min_stock_level: 3 }),
       product({ id: 'p3', name: 'Sucre 1 kg', stock_qty: 1, min_stock_level: 3 }),
     ]);
-
     // les deux produits sous le seuil, jamais « 3 »
-    expect(screen.getByText('À réapprovisionner')).toBeInTheDocument();
+    expect(screen.getByText(/Stock bas — 2 produits à réapprovisionner/)).toBeInTheDocument();
     expect(screen.getByText('Huile 1 L')).toBeInTheDocument();
     expect(screen.getByText('Sucre 1 kg')).toBeInTheDocument();
     expect(screen.queryByText('Riz 1 kg')).toBeNull();
   });
 });
+
+function renderTabRendu(products: Product[]) {
+  return render(
+    <DashboardTab products={products} canManageProducts onNewSale={vi.fn()} onAddProduct={vi.fn()} onRestock={vi.fn()} />
+  );
+}

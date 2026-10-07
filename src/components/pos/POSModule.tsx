@@ -832,7 +832,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
           <Input
             ref={rechercheRef}
-            placeholder="Rechercher un produit, une variante ou un prix..."
+            placeholder="Rechercher un produit ou un prix"
             aria-label="Rechercher un produit, une variante ou un prix"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -934,7 +934,11 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
             onChange={(e) => setTri(e.target.value as typeof tri)}
             className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-500 bg-white focus:outline-none focus:ring-2 focus:ring-indigo-500"
           >
-            <option value="frequence">Les plus vendus</option>
+            {/* Sans le classement (plan Pro), ce tri garde l'ordre du
+                catalogue : l'appeler « les plus vendus » serait faux. */}
+            <option value="frequence">
+              {isFeatureAllowed(plan, 'forecast') ? 'Les plus vendus' : 'Ordre du catalogue'}
+            </option>
             <option value="nom">Nom A–Z</option>
             <option value="prixAsc">Prix croissant</option>
             <option value="prixDesc">Prix décroissant</option>

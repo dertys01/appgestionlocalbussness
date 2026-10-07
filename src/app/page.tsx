@@ -39,6 +39,7 @@ import { DashboardTab } from '@/components/dashboard/DashboardTab';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { useProducts } from '@/lib/hooks/useProducts';
+import { useToday } from '@/lib/hooks/useToday';
 import { isFeatureAllowed } from '@/lib/utils/plans';
 import type { NavItem, Product, ReportView, Tab } from '@/types';
 import { getEnabledModules, fallbackTab } from '@/lib/modules';
@@ -51,6 +52,8 @@ export default function HomePage() {
   // voir en fermant la boutique) ; l'historique complet reste à un clic.
   const [salesView, setSalesView] = useState<'journal' | 'historique'>('journal');
   const { products, loadingProducts, productsError, fetchProducts } = useProducts();
+  // Relu à chaque retour sur l'accueil : c'est ce qui le met à jour après une vente.
+  const { today, todayError } = useToday(tab === 'dashboard' && !!org?.onboarding_done);
   const [showScanner, setShowScanner] = useState(false);
   const [showInventoryCount, setShowInventoryCount] = useState(false);
   const [scanNotFound, setScanNotFound] = useState('');
@@ -262,6 +265,9 @@ export default function HomePage() {
               onNewSale={() => setTab('pos')}
               onAddProduct={openAdd}
               onRestock={openRestock}
+              today={today}
+              todayError={todayError}
+              onOpenDebts={modulesActifs.includes('debts') ? () => setTab('debts') : undefined}
             />
           )}
 

@@ -11,6 +11,8 @@ const { rpc, from, supabase } = vi.hoisted(() => {
   return { rpc, from, supabase: { rpc, from } };
 });
 
+const acces = vi.hoisted(() => ({ plan: 'pro' }));
+
 vi.mock('@/components/providers/SupabaseProvider', () => ({
   useSupabase: () => ({
     supabase,
@@ -18,7 +20,7 @@ vi.mock('@/components/providers/SupabaseProvider', () => ({
     ownerId: 'org-1',
     actorName: 'Recette',
     user: { id: 'user-1' },
-    plan: 'pro',
+    get plan() { return acces.plan; },
   }),
 }));
 
@@ -177,6 +179,26 @@ describe('Journal du jour', () => {
     // KPI Charges + total de section : les deux affichent la somme des
     // charges saisies, puisque get_cash_flow est refusée.
     expect((await screen.findAllByText(affiche(5000))).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('plan gratuit : encaissé et nombre de ventes, sans appel refusé ni bandeau', async () => {
+    acces.plan = 'free';
+    try {
+      rpc.mockImplementation(() => Promise.resolve({ data: SUMMARY, error: null }));
+      render(<DailyJournal />);
+
+      expect(await screen.findByText(affiche(45000))).toBeInTheDocument();
+      expect(screen.getByText('enregistrées ce jour')).toBeInTheDocument();
+      // La base n'est même pas sollicitée : elle répondrait 403.
+      expect(rpc.mock.calls.map((c) => c[0])).not.toContain('get_cash_flow');
+      expect(screen.queryByText(/nécessite le plan/)).toBeNull();
+      expect(screen.queryByText('Marge brute')).toBeNull();
+      // Les charges se saisissent dans Rapports, payant et masqué en mode simple.
+      expect(screen.queryByText('Charges du jour')).toBeNull();
+      expect(screen.getByText(/inclus à partir du plan Starter/)).toBeInTheDocument();
+    } finally {
+      acces.plan = 'pro';
+    }
   });
 
   it('jour sans activité : états vides explicites, pas un écran blanc', async () => {

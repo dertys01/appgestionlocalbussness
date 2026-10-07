@@ -166,3 +166,12 @@ Applique une migration ou une requête via l'API de gestion Supabase. Demande
 node scripts/supabase-sql.mjs supabase/migration_x.sql
 node scripts/supabase-sql.mjs --query "SELECT count(*) FROM organizations"
 ```
+
+## `accueil.mjs` — la journée d'un compte existant
+
+Accueil, Journal du jour et caisse, à la largeur voulue : chiffres affichés,
+débordement, libellé du tri, erreurs HTTP et JS.
+
+```bash
+QA_PASSWORD=<mot de passe> node qa/accueil.mjs <email> 375 gratuit
+```

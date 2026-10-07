@@ -1,10 +1,11 @@
 'use client';
 
 import { useMemo } from 'react';
-import { Package, TrendingUp, AlertTriangle, ShoppingCart } from 'lucide-react';
+import { Package, AlertTriangle, ShoppingCart, Wallet, Handshake, Receipt, ChevronRight } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { formatCFA } from '@/lib/utils/currency';
+import { formatCFA, formatQty } from '@/lib/utils/currency';
+import type { Today } from '@/lib/hooks/useToday';
 import type { Product } from '@/types';
 
 interface DashboardTabProps {
@@ -13,25 +14,47 @@ interface DashboardTabProps {
   onNewSale: () => void;
   onAddProduct: () => void;
   onRestock: (product: Product) => void;
+  /** Chiffres du jour ; null pendant le chargement. */
+  today?: Today | null;
+  todayError?: string;
+  onOpenDebts?: () => void;
 }
 
-export function DashboardTab({ products, canManageProducts, onNewSale, onAddProduct, onRestock }: DashboardTabProps) {
+/**
+ * L'accueil : la journée en trois secondes.
+ *
+ * Trois questions, dans l'ordre où le commerçant se les pose : combien
+ * ai-je encaissé, combien de ventes, qui me doit de l'argent. Le stock bas
+ * n'apparaît que s'il y en a — une alerte toujours affichée n'alerte plus.
+ *
+ * La valeur du stock et le nombre de produits ont quitté les cartes : ce
+ * sont des chiffres d'inventaire, pas de la journée. Ils restent en pied de
+ * page, pour qui les cherche.
+ */
+export function DashboardTab({
+  products, canManageProducts, onNewSale, onAddProduct, onRestock, today = null, todayError = '', onOpenDebts,
+}: DashboardTabProps) {
   const totalProducts = products.length;
-  const lowStockCount = useMemo(
-    () => products.filter((p) => p.stock_qty < p.min_stock_level).length,
+  const stockBas = useMemo(
+    () => products.filter((p) => p.stock_qty < p.min_stock_level),
     [products]
   );
   const totalStockValue = useMemo(
     () => products.reduce((s, p) => s + p.price_sell * p.stock_qty, 0),
     [products]
   );
+  const dateDuJour = new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
+  const chiffre = (v: string) => (today ? v : '…');
 
   return (
     <div className="space-y-4">
-      <h2 className="text-xl font-bold text-slate-800">Tableau de bord</h2>
+      <div>
+        <h2 className="text-xl font-bold text-slate-800">Aujourd&apos;hui</h2>
+        <p className="text-sm text-slate-500 first-letter:uppercase">{dateDuJour}</p>
+      </div>
 
       {totalProducts === 0 ? (
-        /* Boutique neuve : les trois cartes afficheraient 0, 0 F et 0 — aucune
+        /* Boutique neuve : les cartes afficheraient 0 partout — aucune
             information, et aucune indication de par où commencer. On les
             remplace par l'ordre des opérations ; elles réapparaissent dès le
             premier produit ajouté. */
@@ -70,34 +93,66 @@ export function DashboardTab({ products, canManageProducts, onNewSale, onAddProd
           </CardContent>
         </Card>
       ) : (
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-        <Card className="border-slate-200">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 text-slate-500 text-sm mb-1">
-              <Package className="h-4 w-4" /> Produits
-            </div>
-            <div className="text-2xl font-bold text-slate-800">{totalProducts}</div>
-          </CardContent>
-        </Card>
-        <Card className="border-slate-200">
-          <CardContent className="p-4">
-            <div className="flex items-center gap-2 text-slate-500 text-sm mb-1">
-              <TrendingUp className="h-4 w-4" /> Valeur stock
-            </div>
-            <div className="text-xl font-bold text-indigo-600">{formatCFA(totalStockValue)}</div>
-          </CardContent>
-        </Card>
-        <Card className={`col-span-2 sm:col-span-1 ${lowStockCount > 0 ? 'border-red-200 bg-red-50' : 'border-slate-200'}`}>
-          <CardContent className="p-4">
-            <div className={`flex items-center gap-2 text-sm mb-1 ${lowStockCount > 0 ? 'text-red-600' : 'text-slate-500'}`}>
-              <AlertTriangle className="h-4 w-4" /> Stock critique
-            </div>
-            <div className={`text-2xl font-bold ${lowStockCount > 0 ? 'text-red-600' : 'text-slate-800'}`}>
-              {lowStockCount}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+        <div className="grid grid-cols-2 gap-3">
+          {/* Le chiffre qui compte : ce qui est réellement rentré. */}
+          <Card className="col-span-2 border-emerald-200 bg-emerald-50">
+            <CardContent className="p-4">
+              <div className="flex items-center gap-2 text-emerald-800 text-sm mb-1">
+                <Wallet className="h-4 w-4" /> Encaissé aujourd&apos;hui
+              </div>
+              <div className="text-3xl font-bold text-emerald-800 tabular-nums" aria-live="polite">
+                {chiffre(formatCFA(today?.revenue ?? 0))}
+              </div>
+              {today && (today.cash > 0 || today.momo > 0) && (
+                <p className="mt-1 text-xs text-emerald-800/80 tabular-nums">
+                  Espèces {formatCFA(today.cash)} · Mobile Money {formatCFA(today.momo)}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200">
+            <CardContent className="p-4">
+              <div className="flex items-center gap-2 text-slate-500 text-sm mb-1">
+                <Receipt className="h-4 w-4" /> Ventes
+              </div>
+              <div className="text-2xl font-bold text-slate-800 tabular-nums">
+                {chiffre(String(today?.sales ?? 0))}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className={today && today.debtTotal > 0 ? 'border-amber-200 bg-amber-50' : 'border-slate-200'}>
+            <CardContent className="p-0">
+              <button
+                type="button"
+                onClick={onOpenDebts}
+                disabled={!onOpenDebts}
+                className="w-full p-4 text-left disabled:cursor-default"
+                aria-label={today ? `À recouvrer : ${formatCFA(today.debtTotal)}, voir les dettes` : 'À recouvrer'}
+              >
+                <span className={`flex items-center gap-2 text-sm mb-1 ${today && today.debtTotal > 0 ? 'text-amber-800' : 'text-slate-500'}`}>
+                  <Handshake className="h-4 w-4" /> À recouvrer
+                  {onOpenDebts && <ChevronRight className="h-4 w-4 ml-auto" />}
+                </span>
+                <span className={`block text-lg font-bold tabular-nums ${today && today.debtTotal > 0 ? 'text-amber-800' : 'text-slate-800'}`}>
+                  {chiffre(formatCFA(today?.debtTotal ?? 0))}
+                </span>
+                {today && today.debtClients > 0 && (
+                  <span className="block text-xs text-amber-800/80">
+                    {today.debtClients} client{today.debtClients > 1 ? 's' : ''}
+                  </span>
+                )}
+              </button>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+
+      {todayError && (
+        <p className="text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+          Chiffres du jour indisponibles : {todayError}
+        </p>
       )}
 
       <div className={`grid gap-3 ${canManageProducts ? 'grid-cols-2' : 'grid-cols-1'}`}>
@@ -113,22 +168,24 @@ export function DashboardTab({ products, canManageProducts, onNewSale, onAddProd
         )}
       </div>
 
-      {lowStockCount > 0 && (
+      {stockBas.length > 0 && (
         <div className="space-y-2">
           <h3 className="font-semibold text-red-600 flex items-center gap-2 text-sm">
-            <AlertTriangle className="h-4 w-4" /> À réapprovisionner
+            <AlertTriangle className="h-4 w-4" /> Stock bas — {stockBas.length} produit{stockBas.length > 1 ? 's' : ''} à réapprovisionner
           </h3>
-          {products.filter((p) => p.stock_qty < p.min_stock_level).map((p) => (
+          {stockBas.map((p) => (
             <Card key={p.id} className="border-red-200 bg-red-50">
-              <CardContent className="p-3 flex justify-between items-center">
-                <div>
-                  <div className="font-medium text-slate-800 text-sm">{p.name}</div>
-                  <div className="text-xs text-red-600">Stock : {p.stock_qty} / min {p.min_stock_level}</div>
+              <CardContent className="p-3 flex justify-between items-center gap-3">
+                <div className="min-w-0">
+                  <div className="font-medium text-slate-800 text-sm truncate">{p.name}</div>
+                  <div className="text-xs text-red-600">
+                    Stock : {formatQty(p.stock_qty)} / min {formatQty(p.min_stock_level)}
+                  </div>
                 </div>
                 {canManageProducts && (
                   <button
                     onClick={() => onRestock(p)}
-                    className="text-xs bg-emerald-700 text-white px-3 py-1.5 rounded-lg font-medium hover:bg-emerald-800"
+                    className="shrink-0 text-xs bg-emerald-700 text-white px-3 py-2 rounded-lg font-medium hover:bg-emerald-800"
                   >
                     Réappro.
                   </button>
@@ -137,6 +194,12 @@ export function DashboardTab({ products, canManageProducts, onNewSale, onAddProd
             </Card>
           ))}
         </div>
+      )}
+
+      {totalProducts > 0 && (
+        <p className="text-xs text-slate-500 text-center">
+          {totalProducts} produit{totalProducts > 1 ? 's' : ''} · valeur du stock {formatCFA(totalStockValue)}
+        </p>
       )}
     </div>
   );

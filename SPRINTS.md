@@ -1086,14 +1086,25 @@ Décisions prises à l'audit du 07/10/2026 :
 | **Bascule** | Paramètres → Affichage → « Passer en mode complet », réversible |
 | **Tests** | Section 31 du harnais (13 contrôles : boutiques existantes en complet, inscription neuve en simple, rejeu sans effet, droits, CHECK, dettes en gratuit) · 4 tests `modules.test.ts` |
 
-### Sprints 19 à 21 — à venir
+### Sprint 20 — Tableau de bord du jour et caisse mobile (plan : 15)
+
+Fait **avant le 19** : celui-ci attend l'évaluation marketing des prix.
+
+| | |
+|---|---|
+| **Objectif** | La journée comprise en 3 secondes, sur téléphone |
+| **Accueil** | « Aujourd'hui » : **encaissé** (espèces / Mobile Money), **nombre de ventes**, **à recouvrer** (montant + clients, ouvre les Dettes), stock bas **seulement s'il y en a**. Mêmes sources que le Journal (`get_sales_summary`) et les Dettes (`get_customer_debts`) : un seul chiffre par notion. « … » pendant le chargement, jamais un faux « 0 F ». Nombre de produits et valeur du stock en pied de page |
+| **Journal du jour, plan gratuit** | Plus d'appel à `get_cash_flow()` (403) ni de bandeau « nécessite le plan Starter » sur un écran essentiel : encaissé + nombre de ventes, une ligne discrète pour la marge. La carte « Charges du jour », qui renvoyait vers Rapports (masqué et payant), n'apparaît qu'avec le plan |
+| **Caisse** | Tri « Les plus vendus » renommé « Ordre du catalogue » sans le classement (plan Pro) ; placeholder de recherche qui tient à 375 px |
+| **Code** | `src/lib/hooks/useToday.ts`, `DashboardTab.tsx`, `DailyJournal.tsx`, `POSModule.tsx` |
+| **Tests** | `dashboard.test.tsx` réécrit (journée, pas de faux zéro, dettes cliquables, stock bas), `daily-journal.test.tsx` + plan gratuit · `qa/accueil.mjs` |
+
+### Sprints 19 et 21 — à venir
 
 - **19 — Freemium** (plan : 14) : limites des 3 plans **côté serveur** (aujourd'hui
   seuls les produits le sont ; employés, historique et export ne sont bloqués que
   par l'écran), nouveaux prix Stripe, page tarifs, essai de 14 jours, prestataire
   Mobile Money.
-- **20 — Tableau de bord du jour + caisse mobile** (plan : 15) : CA encaissé, nombre
-  de ventes, dettes à recouvrer, stock bas ; vérification à 375 px.
 - **21 — Rétention** (plan : 16) : la relance WhatsApp existe déjà (vérifier les 2
   clics) ; export des dettes, PDF/Excel.
 
@@ -1140,6 +1151,7 @@ Décisions prises à l'audit du 07/10/2026 :
 
 | Date | Commit | Objet |
 |---|---|---|
+| 07/10/2026 | — | **Sprint 20 — accueil du jour et caisse mobile.** Encaissé, ventes, à recouvrer, stock bas ; Journal du jour sans refus de plan en gratuit ; tri de caisse honnête. Recette navigateur gratuit 375 px + Pro 375/1280 px : 0 débordement, **0 erreur HTTP** (le 403 de `get_cash_flow` sur chaque ouverture du journal gratuit a disparu). Au passage : un `~/package-lock.json` vide faisait croire à Next.js que le projet commençait au dossier personnel — supprimé · tests UI **223 → 226** |
 | 07/10/2026 | — | **Recette navigateur des sprints 17-18**, build de production, téléphone 375 px, base de recette migrée par `scripts/supabase-sql.mjs` : épicerie + exemples, restaurant + exemples, boutique + « mes propres produits » — **21/21 et 22/22 contrôles**, rechargement en cours d'assistant, aucun débordement, aucune erreur HTTP ni JS. Compte existant : menu complet, pas d'assistant. **Défaut trouvé et corrigé** : la caisse appelait `get_units_sold_since()` (« + vendus », plan Pro) sur tous les plans — un 403 à chaque ouverture de caisse en gratuit ; l'appel n'est plus fait sans le plan. Outil : `qa/onboarding.mjs` |
 | 07/10/2026 | — | **Sprints 17 et 18 — onboarding guidé et mode simple.** Assistant en 5 écrans (textes du plan au vouvoiement), 3 exemples par activité avec stock, première vente sur la vraie caisse sans navigation, félicitations après fermeture du reçu. `ui_mode` : boutiques existantes en complet, nouvelles en simple, bascule dans Paramètres. Carnet de dettes rendu au plan gratuit (`get_customer_debts()` sans `require_feature`, test 16e inversé). Section 31 du harnais (13 contrôles) · tests UI **209 → 223** · migrations **34 → 35** |
 | 04/10/2026 | — | **L'onglet Paramètres n'ouvrait pas, pour tout le monde et dans les deux domaines.** La garde de `page.tsx` — « un onglet hors domaine retombe sur l'accueil » — rejetait `'settings'`, absent de `DOMAIN_MODULES` : le bouton changeait l'onglet et la même passe de rendu le remettait sur Accueil. L'écran était dans le code et inatteignable à la souris — donc **la bascule de domaine, promise comme réversible, ne l'était pas**. `'settings'` rejoint les modules communs, 2 tests. Trouvé en cherchant les exemples par domaine |
