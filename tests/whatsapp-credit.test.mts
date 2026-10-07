@@ -81,3 +81,23 @@ describe('Reçu WhatsApp — vente à crédit', () => {
     assert.match(url, /^https:\/\/wa\.me\/\?text=/);
   });
 });
+
+// Depuis fin 2024 un mobile béninois s'écrit 01 + 8 chiffres. Un lien wa.me
+// sans indicatif ne mène nulle part : la relance échouait sans rien dire.
+describe('Lien WhatsApp — numéro béninois', () => {
+  const numero = (tel: string) =>
+    generateWhatsAppReceiptLink({ ...base, paymentMethod: 'cash' }, tel).split('?')[0];
+
+  it('ajoute l\'indicatif au format actuel à 10 chiffres', () => {
+    assert.equal(numero('01 97 00 00 01'), 'https://wa.me/2290197000001');
+  });
+
+  it('ajoute l\'indicatif à l\'ancien format à 8 chiffres', () => {
+    assert.equal(numero('97000001'), 'https://wa.me/22997000001');
+  });
+
+  it('laisse un numéro déjà international tel quel', () => {
+    assert.equal(numero('+229 01 97 00 00 01'), 'https://wa.me/2290197000001');
+    assert.equal(numero('+225 07 07 07 07 07'), 'https://wa.me/2250707070707');
+  });
+});

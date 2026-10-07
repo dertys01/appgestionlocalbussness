@@ -78,6 +78,8 @@ const ORDER = [
   // Onboarding guidé et mode simple : ui_mode, onboarding_step,
   // business_type, et le carnet de dettes rendu au plan gratuit.
   'migration_onboarding_mode.sql',
+  // normalize_phone() connaît les numéros béninois à 10 chiffres (01…).
+  'migration_telephone_benin.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -255,6 +257,9 @@ const DERNIERE_VERSION = [
   // migration_security.sql révoque les droits de colonne d'organizations — le
   // GRANT de ui_mode doit donc repasser après elle, comme en production.
   'migration_onboarding_mode.sql',
+  // normalize_phone() : migration_credit_fns.sql, rejouée plus haut, réinstalle
+  // la version qui ne préfixe que les numéros à 8 chiffres.
+  'migration_telephone_benin.sql',
 ];
 
 console.log(`\n▸ Rejouabilité (${REPLAYABLE.length} migrations incrémentales)`);
@@ -4118,9 +4123,10 @@ for (const qte of [2, 1]) {
     '[{"product_id":"eeeeeeee-0000-0000-0000-0000000000e1","quantity":${qte}}]'::jsonb,
     'Client Test', '0102030405', NULL, 0)`);
 }
-// 10 chiffres : normalize_phone() ne préfixe que les numéros à 8 chiffres.
+// 10 chiffres en 01 : numéro béninois actuel, préfixé de 229
+// (migration_telephone_benin.sql).
 const d2 = (await q(`SELECT id::text d FROM customer_debts
-  WHERE user_id='${CA}' AND phone='0102030405'`)).rows[0].d;
+  WHERE user_id='${CA}' AND phone='2290102030405'`)).rows[0].d;
 {
 
   const avant = (await q(`SELECT payments_count::text p, sales_count::text n
@@ -4607,6 +4613,33 @@ console.log('\n▸ Onboarding guidé et mode simple');
   const def = (await q(
     `SELECT pg_get_functiondef(oid) AS d FROM pg_proc WHERE proname = 'get_customer_debts'`)).rows[0].d;
   check('31m. get_customer_debts() n\'exige plus le plan Starter', !def.includes('require_feature'));
+}
+
+// ─── 32. Numéros béninois à 10 chiffres ────────────────────────
+// Depuis fin 2024, un mobile béninois s'écrit 01 + 8 chiffres. Sans indicatif,
+// le lien wa.me de la relance ne mène nulle part.
+console.log('\n▸ Téléphone béninois à 10 chiffres');
+{
+  const n = async (v) => (await q(`SELECT normalize_phone('${v}') AS n`)).rows[0].n;
+  check('32a. « 01 97 00 00 01 » reçoit l\'indicatif', (await n('01 97 00 00 01')) === '2290197000001');
+  check('32b. « +229 01 97 00 00 01 » reste tel quel', (await n('+229 01 97 00 00 01')) === '2290197000001');
+  check('32c. l\'ancien format à 8 chiffres est toujours préfixé', (await n('97000001')) === '22997000001');
+  check('32d. un numéro ivoirien international n\'est pas touché', (await n('+225 07 07 07 07 07')) === '2250707070707');
+
+  // Réparation des lignes existantes, et le cas qui doit rester intact.
+  const TEL = '32323232-3232-3232-3232-323232323232';
+  await q(`INSERT INTO auth.users (id, email) VALUES ('${TEL}', 'tel@test.ci') ON CONFLICT DO NOTHING`);
+  await q(`INSERT INTO organizations (id, name, slug) VALUES ('${TEL}', 'Boutique tel', 'boutique-tel')`);
+  await q(`INSERT INTO customer_debts (user_id, phone, name) VALUES
+    ('${TEL}', '0196000001', 'Ancien format'),
+    ('${TEL}', '0196000002', 'Doublon'),
+    ('${TEL}', '2290196000002', 'Déjà international')`);
+  await e(readSql('migration_telephone_benin.sql'));
+  const fiches = (await q(`SELECT name, phone FROM customer_debts WHERE user_id='${TEL}' ORDER BY name`)).rows;
+  const tel = (nom) => fiches.find((f) => f.name === nom)?.phone;
+  check('32e. une fiche enregistrée sans indicatif est corrigée', tel('Ancien format') === '2290196000001', tel('Ancien format'));
+  check('32f. une fiche qui créerait un doublon est laissée telle quelle',
+    tel('Doublon') === '0196000002' && tel('Déjà international') === '2290196000002', JSON.stringify(fiches));
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);

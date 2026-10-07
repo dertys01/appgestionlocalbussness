@@ -1,14 +1,15 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { ChevronDown, ChevronUp, CreditCard, Handshake, Smartphone, RefreshCw, Download, Receipt } from 'lucide-react';
+import { ChevronDown, ChevronUp, CreditCard, Handshake, Smartphone, RefreshCw, Receipt, FileSpreadsheet, FileText } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { PeriodPicker } from '@/components/ui/PeriodPicker';
-import { formatCFA } from '@/lib/utils/currency';
+import { formatCFA, formatQty } from '@/lib/utils/currency';
+import { imprimerRapport } from '@/lib/utils/rapport';
 import { toCSV, downloadCSV } from '@/lib/utils/export';
 import { isFeatureAllowed, PLAN_LIMITS, PLAN_LABELS } from '@/lib/utils/plans';
 import { addDays, localTimeZone, rangeFromDays, todayISO, toISODate, type DateRange } from '@/lib/utils/period';
@@ -21,7 +22,7 @@ interface SaleWithItems extends Sale {
 const PAGE_SIZE = 20;
 
 export function SalesHistory() {
-  const { supabase, plan } = useSupabase();
+  const { supabase, plan, org } = useSupabase();
   const [sales, setSales] = useState<SaleWithItems[]>([]);
   // Compte de la période, demandé au serveur en même temps que la page. Il ne
   // se déduit plus de sales.length, qui ne vaut désormais que le lot courant.
@@ -127,34 +128,77 @@ export function SalesHistory() {
   // de la période entière serait un export tronqué en silence, pire que pas
   // d'export du tout. Un export complet demande par définition toutes les
   // lignes — c'est l'utilisateur qui le déclenche, une fois.
-  const handleExportCsv = async () => {
+  /** Toutes les ventes de la période (pas seulement la page affichée). */
+  const ventesDeLaPeriode = async () => {
+    const { from, to } = bornes(filter);
+    const { data, error: exportErr } = await supabase
+      .from('sales')
+      .select('*, sale_items(*)')
+      .gte('created_at', from.toISOString())
+      .lte('created_at', to.toISOString())
+      .order('created_at', { ascending: false });
+    if (exportErr) throw new Error(exportErr.message);
+    const ventes = (data as SaleWithItems[]) ?? [];
+    return { from, to, ventes };
+  };
+
+  const libellePaiement = (s: SaleWithItems) =>
+    s.payment_method === 'momo' ? 'MoMo'
+      : s.payment_method === 'credit' ? (s.settled ? 'Crédit soldé' : 'Crédit')
+      : 'Espèces';
+  const articles = (s: SaleWithItems) =>
+    s.sale_items.map((i) => `${formatQty(Number(i.quantity))} x ${i.product_name}`).join(' | ');
+
+  const exporter = async (format: 'excel' | 'pdf') => {
     setExporting(true);
+    setError('');
     try {
-      const { from, to } = bornes(filter);
-      const { data, error: exportErr } = await supabase
-        .from('sales')
-        .select('*, sale_items(*)')
-        .gte('created_at', from.toISOString())
-        .lte('created_at', to.toISOString())
-        .order('created_at', { ascending: false });
-
-      if (exportErr) throw new Error(exportErr.message);
-
-      const rows = ((data as SaleWithItems[]) ?? []).map((s) => ({
-        date: new Date(s.created_at).toLocaleString('fr-FR'),
-        montant: s.total_amount,
-        paiement: s.payment_method === 'momo' ? 'MoMo'
-          : s.payment_method === 'credit' ? (s.settled ? 'Crédit soldé' : 'Crédit')
-          : 'Espèces',
-        articles: s.sale_items.map((i) => `${i.quantity}x ${i.product_name}`).join(' | '),
-      }));
-      const csv = toCSV(rows, [
-        { key: 'date',     label: 'Date' },
-        { key: 'montant',  label: 'Montant (F)' },
-        { key: 'paiement', label: 'Paiement' },
-        { key: 'articles', label: 'Articles' },
-      ]);
-      downloadCSV(csv, `ventes-${new Date().toISOString().slice(0, 10)}.csv`);
+      const { from, to, ventes } = await ventesDeLaPeriode();
+      if (format === 'excel') {
+        const csv = toCSV(
+          ventes.map((s) => ({
+            date: new Date(s.created_at).toLocaleString('fr-FR'),
+            montant: s.total_amount,
+            encaisse: s.amount_received,
+            paiement: libellePaiement(s),
+            client: s.client_name ?? '',
+            articles: articles(s),
+          })),
+          [
+            { key: 'date',     label: 'Date' },
+            { key: 'montant',  label: 'Montant (F)' },
+            { key: 'encaisse', label: 'Encaissé (F)' },
+            { key: 'paiement', label: 'Paiement' },
+            { key: 'client',   label: 'Client' },
+            { key: 'articles', label: 'Articles' },
+          ],
+          // Séparateur d'Excel en français : avec ',' tout tenait dans une colonne.
+          ';',
+        );
+        downloadCSV(csv, `ventes-${filter.from}-au-${filter.to}.csv`);
+      } else {
+        const jour = (d: Date) => d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+        const ok = imprimerRapport({
+          titre: 'Ventes',
+          boutique: org?.name ?? '',
+          periode: toISODate(from) === toISODate(to) ? `le ${jour(from)}` : `du ${jour(from)} au ${jour(to)}`,
+          colonnes: [
+            { label: 'Date', insecable: true }, { label: 'Articles' }, { label: 'Paiement' },
+            { label: 'Montant', droite: true }, { label: 'Encaissé', droite: true },
+          ],
+          lignes: ventes.map((s) => [
+            new Date(s.created_at).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }),
+            articles(s), libellePaiement(s),
+            formatCFA(Number(s.total_amount)), formatCFA(Number(s.amount_received)),
+          ]),
+          total: [
+            `${ventes.length} vente${ventes.length > 1 ? 's' : ''}`, '', '',
+            formatCFA(ventes.reduce((t, s) => t + Number(s.total_amount), 0)),
+            formatCFA(ventes.reduce((t, s) => t + Number(s.amount_received), 0)),
+          ],
+        });
+        if (!ok) setError('Votre navigateur a bloqué la fenêtre du PDF : autorisez les fenêtres pour ce site, puis réessayez.');
+      }
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -217,18 +261,20 @@ export function SalesHistory() {
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
           Actualiser
         </button>
-        {isFeatureAllowed(plan, 'exportCsv') && totalRows > 0 && (
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={handleExportCsv}
-            disabled={exporting}
-            className="gap-2 border-slate-200"
-          >
-            <Download className="h-4 w-4" />
-            {exporting ? 'Export…' : 'CSV'}
-          </Button>
-        )}
+        {totalRows > 0 && (isFeatureAllowed(plan, 'exportCsv') ? (
+          <>
+            <Button variant="outline" size="sm" onClick={() => exporter('excel')} disabled={exporting}
+              className="gap-2 border-slate-200 h-10 sm:h-8">
+              <FileSpreadsheet className="h-4 w-4" /> Excel
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => exporter('pdf')} disabled={exporting}
+              className="gap-2 border-slate-200 h-10 sm:h-8">
+              <FileText className="h-4 w-4" /> PDF
+            </Button>
+          </>
+        ) : (
+          <span className="text-xs text-slate-500">Export Excel et PDF : plan Starter</span>
+        ))}
       </div>
 
       {/* Liste des ventes */}

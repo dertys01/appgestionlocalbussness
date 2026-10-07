@@ -40,7 +40,7 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('get_sales_summary(date,date,text)', 'b20ea71234701f0c5cf9c570040027b2', '874d04e131374a05e6e53a23fa2a78bf'),
     ('get_top_products(date,date,text,integer)', '03bcc22bb85b632d90912b919ad92c0d', '7487786d4255660fe52e807dc79f60b1'),
     ('get_units_sold_since(integer)', '8f74000cae984ddf44cf1a6a78ffe3e2', '6b45edfae71cd3b4be3816ad3c959550'),
-    ('normalize_phone(text)', '6a691216268ac03ba30a1dab6da138cc', '45978e9a1d57ea9c68d8c97e76076c8f'),
+    ('normalize_phone(text)', '560e755f78d2debe862a2814cddae112', '3f8addb8c5e4fbf0ace0ccbceeeda9cc'),
     ('organizations_reject_plan_change()', '9ee6f5d51d38737a7dc107f3f92caf88', 'feb8216cb154d6953576fe38198dc44a'),
     ('pay_customer_debt(uuid,numeric,text,text)', 'c2464b9cb0a7397a2a09d56032533efe', '1c514fcfadaf0642d540b8318727872c'),
     ('product_cost(uuid,integer)', 'd33441e87e3ffd248893a7024af5ff0e', '0f48633b1895a064c9aaa646118ade47'),

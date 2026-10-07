@@ -1,4 +1,5 @@
 import { formatCFA } from './currency';
+import { whatsappNumber } from './phone';
 
 interface SaleItem {
   product_name: string;
@@ -111,7 +112,7 @@ function lien(message: string, phone?: string): string {
   // s'ouvrait mais sans message prérempli. La barre oblique est obligatoire,
   // y compris quand aucun destinataire n'est fourni.
   const base = phone
-    ? `https://wa.me/${phone.replace(/[^\d]/g, '')}`
+    ? `https://wa.me/${whatsappNumber(phone)}`
     : 'https://wa.me/';
   return `${base}?text=${encoded}`;
 }

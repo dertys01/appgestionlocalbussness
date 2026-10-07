@@ -11,9 +11,18 @@ function escapeCell(value: unknown): string {
   return `"${safe.replace(/"/g, '""')}"`;
 }
 
-export function toCSV(rows: Record<string, unknown>[], columns: { key: string; label: string }[]): string {
-  const header = columns.map((c) => `"${c.label.replace(/"/g, '""')}"`).join(',');
-  const lines = rows.map((row) => columns.map((c) => escapeCell(row[c.key])).join(','));
+/**
+ * `separateur` : ',' par défaut (gabarit d'import, outils anglo-saxons). Les
+ * exports destinés à Excel passent ';' — c'est le séparateur d'Excel en
+ * français : avec ',', tout le fichier s'ouvre dans une seule colonne.
+ */
+export function toCSV(
+  rows: Record<string, unknown>[],
+  columns: { key: string; label: string }[],
+  separateur: ',' | ';' = ',',
+): string {
+  const header = columns.map((c) => `"${c.label.replace(/"/g, '""')}"`).join(separateur);
+  const lines = rows.map((row) => columns.map((c) => escapeCell(row[c.key])).join(separateur));
   return [header, ...lines].join('\n');
 }
 

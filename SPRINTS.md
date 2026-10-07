@@ -1099,14 +1099,22 @@ Fait **avant le 19** : celui-ci attend l'évaluation marketing des prix.
 | **Code** | `src/lib/hooks/useToday.ts`, `DashboardTab.tsx`, `DailyJournal.tsx`, `POSModule.tsx` |
 | **Tests** | `dashboard.test.tsx` réécrit (journée, pas de faux zéro, dettes cliquables, stock bas), `daily-journal.test.tsx` + plan gratuit · `qa/accueil.mjs` |
 
-### Sprints 19 et 21 — à venir
+### Sprint 21 — Rétention : relance WhatsApp et exports (plan : 16)
 
-- **19 — Freemium** (plan : 14) : limites des 3 plans **côté serveur** (aujourd'hui
-  seuls les produits le sont ; employés, historique et export ne sont bloqués que
-  par l'écran), nouveaux prix Stripe, page tarifs, essai de 14 jours, prestataire
-  Mobile Money.
-- **21 — Rétention** (plan : 16) : la relance WhatsApp existe déjà (vérifier les 2
-  clics) ; export des dettes, PDF/Excel.
+| | |
+|---|---|
+| **Relance** | Déjà en 2 gestes (« Relancer » → « Envoyer » dans WhatsApp, message pré-rempli). **Défaut trouvé** : depuis fin 2024 les mobiles béninois ont 10 chiffres (01 + 8), et `normalize_phone()` ne préfixait 229 qu'aux numéros à 8 chiffres — le lien `wa.me/0197…` ne menait nulle part. `migration_telephone_benin.sql` : nouvelle règle + réparation des fiches et ventes existantes (sauf si cela créerait un doublon de client). Côté application, `whatsappNumber()` applique la même règle aux liens de relance et de reçu |
+| **Exports** | Dettes et Ventes (historique) : **Excel** (CSV au séparateur `;`, celui d'Excel en français — avec `,` tout tenait dans une colonne) et **PDF** (rapport A4 imprimable, « Enregistrer en PDF » d'Android et des ordinateurs, sans bibliothèque). Liste entière, pas la page affichée. Plan Starter ; en gratuit, une phrase calme à la place des boutons |
+| **Code** | `src/lib/utils/phone.ts`, `rapport.ts`, `export.ts` (séparateur), `DebtsModule.tsx`, `SalesHistory.tsx` |
+| **Tests** | Section 32 du harnais (6 contrôles), 3 tests de lien WhatsApp, `tests/ui/exports.test.tsx` (7) · `qa/exports.mjs` |
+| **Hors périmètre** | Mode hors ligne de la caisse (optionnel au plan) : un chantier à part entière — file d'attente des ventes, conflits de stock au retour du réseau |
+
+### Sprint 19 — Freemium (plan : 14), à venir
+
+Limites des 3 plans **côté serveur** (aujourd'hui seuls les produits le sont ;
+employés, historique et export ne sont bloqués que par l'écran), nouveaux prix
+Stripe, page tarifs, essai de 14 jours, prestataire Mobile Money. Démarre par
+l'évaluation marketing des prix.
 
 ## Garde-fous permanents
 
@@ -1151,6 +1159,7 @@ Fait **avant le 19** : celui-ci attend l'évaluation marketing des prix.
 
 | Date | Commit | Objet |
 |---|---|---|
+| 07/10/2026 | — | **Sprint 21 — relance et exports.** Numéros béninois à 10 chiffres : la relance WhatsApp menait à un numéro inexistant pour tout client saisi au format actuel — règle corrigée en base et dans l'application, 4 fiches et 4 ventes réparées en recette. Excel (`;`) et PDF A4 pour les dettes et les ventes. Recette navigateur 375 px sur deux comptes : liens de relance internationaux, Excel en colonnes, PDF lisible et sans débordement, 0 erreur · migrations **35 → 36** · tests UI **226 → 233** |
 | 07/10/2026 | — | **Sprint 20 — accueil du jour et caisse mobile.** Encaissé, ventes, à recouvrer, stock bas ; Journal du jour sans refus de plan en gratuit ; tri de caisse honnête. Recette navigateur gratuit 375 px + Pro 375/1280 px : 0 débordement, **0 erreur HTTP** (le 403 de `get_cash_flow` sur chaque ouverture du journal gratuit a disparu). Au passage : un `~/package-lock.json` vide faisait croire à Next.js que le projet commençait au dossier personnel — supprimé · tests UI **223 → 226** |
 | 07/10/2026 | — | **Recette navigateur des sprints 17-18**, build de production, téléphone 375 px, base de recette migrée par `scripts/supabase-sql.mjs` : épicerie + exemples, restaurant + exemples, boutique + « mes propres produits » — **21/21 et 22/22 contrôles**, rechargement en cours d'assistant, aucun débordement, aucune erreur HTTP ni JS. Compte existant : menu complet, pas d'assistant. **Défaut trouvé et corrigé** : la caisse appelait `get_units_sold_since()` (« + vendus », plan Pro) sur tous les plans — un 403 à chaque ouverture de caisse en gratuit ; l'appel n'est plus fait sans le plan. Outil : `qa/onboarding.mjs` |
 | 07/10/2026 | — | **Sprints 17 et 18 — onboarding guidé et mode simple.** Assistant en 5 écrans (textes du plan au vouvoiement), 3 exemples par activité avec stock, première vente sur la vraie caisse sans navigation, félicitations après fermeture du reçu. `ui_mode` : boutiques existantes en complet, nouvelles en simple, bascule dans Paramètres. Carnet de dettes rendu au plan gratuit (`get_customer_debts()` sans `require_feature`, test 16e inversé). Section 31 du harnais (13 contrôles) · tests UI **209 → 223** · migrations **34 → 35** |

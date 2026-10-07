@@ -28,7 +28,7 @@ function fmtCFA(n: number) {
  * du JavaScript dans cette origine et pourrait voler la session Supabase
  * (stockée en localStorage). Toute donnée saisie par l'utilisateur passe ici.
  */
-function escapeHtml(value: unknown): string {
+export function escapeHtml(value: unknown): string {
   return String(value ?? '').replace(/[&<>"']/g, (c) => {
     switch (c) {
       case '&': return '&amp;';

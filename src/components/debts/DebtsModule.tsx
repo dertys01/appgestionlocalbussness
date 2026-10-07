@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { RefreshCw, MessageCircle, Loader2, Handshake, TrendingUp, X } from 'lucide-react';
+import { RefreshCw, MessageCircle, Loader2, Handshake, TrendingUp, X, FileSpreadsheet, FileText } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Button } from '@/components/ui/button';
@@ -9,6 +9,10 @@ import { Input } from '@/components/ui/input';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
 import { readablePlanError } from '@/lib/utils/planErrors';
+import { whatsappNumber } from '@/lib/utils/phone';
+import { isFeatureAllowed } from '@/lib/utils/plans';
+import { downloadCSV, toCSV } from '@/lib/utils/export';
+import { imprimerRapport } from '@/lib/utils/rapport';
 
 interface Debt {
   debt_id: string;
@@ -47,7 +51,7 @@ function daysSince(iso: string | null): number | null {
  * en premier.
  */
 export function DebtsModule() {
-  const { supabase, canManageProducts } = useSupabase();
+  const { supabase, canManageProducts, plan, org } = useSupabase();
   const [debts, setDebts] = useState<Debt[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -116,6 +120,55 @@ export function DebtsModule() {
   // Plus de cadenas : le carnet est gratuit (migration_onboarding_mode.sql).
   const total = debts.reduce((s, d) => s + Number(d.total_due), 0);
 
+  // Exports : la liste ENTIÈRE, pas la page affichée (PAGE premières dettes).
+  // Plan Starter, comme l'export des ventes.
+  const peutExporter = isFeatureAllowed(plan, 'exportCsv');
+  const jourFichier = new Date().toISOString().slice(0, 10);
+  const dateCourte = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('fr-FR') : '');
+
+  const exporterExcel = () => {
+    const csv = toCSV(
+      debts.map((d) => ({
+        client: d.name ?? '',
+        tel: prettyPhone(d.phone),
+        du: Number(d.total_due),
+        verse: Number(d.total_paid),
+        ventes: d.sales_count,
+        depuis: dateCourte(d.oldest_sale_at),
+        dernier: dateCourte(d.last_payment_at),
+      })),
+      [
+        { key: 'client', label: 'Client' },
+        { key: 'tel', label: 'Téléphone' },
+        { key: 'du', label: 'Reste dû (F)' },
+        { key: 'verse', label: 'Déjà versé (F)' },
+        { key: 'ventes', label: 'Ventes à crédit' },
+        { key: 'depuis', label: 'Plus ancienne vente' },
+        { key: 'dernier', label: 'Dernier versement' },
+      ],
+      ';',
+    );
+    downloadCSV(csv, `dettes-${jourFichier}.csv`);
+  };
+
+  const exporterPdf = () => {
+    const ok = imprimerRapport({
+      titre: 'Dettes clients',
+      boutique: org?.name ?? '',
+      periode: `au ${new Date().toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}`,
+      colonnes: [
+        { label: 'Client' }, { label: 'Téléphone', insecable: true }, { label: 'Depuis le', insecable: true },
+        { label: 'Déjà versé', droite: true }, { label: 'Reste dû', droite: true },
+      ],
+      lignes: debts.map((d) => [
+        d.name ?? 'Client sans nom', prettyPhone(d.phone), dateCourte(d.oldest_sale_at),
+        formatCFA(Number(d.total_paid)), formatCFA(Number(d.total_due)),
+      ]),
+      total: [`${debts.length} client${debts.length > 1 ? 's' : ''}`, '', '', '', formatCFA(total)],
+    });
+    if (!ok) setError('Votre navigateur a bloqué la fenêtre du PDF : autorisez les fenêtres pour ce site, puis réessayez.');
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -145,6 +198,21 @@ export function DebtsModule() {
             </span>
           </CardContent>
         </Card>
+      )}
+
+      {debts.length > 0 && (
+        peutExporter ? (
+          <div className="flex gap-2">
+            <Button variant="outline" size="sm" onClick={exporterExcel} className="gap-2 h-10 sm:h-8">
+              <FileSpreadsheet className="h-4 w-4" /> Excel
+            </Button>
+            <Button variant="outline" size="sm" onClick={exporterPdf} className="gap-2 h-10 sm:h-8">
+              <FileText className="h-4 w-4" /> PDF
+            </Button>
+          </div>
+        ) : (
+          <p className="text-xs text-slate-500">L&apos;export Excel et PDF est inclus à partir du plan Starter.</p>
+        )
       )}
 
       {error && (
@@ -324,5 +392,5 @@ function reminderLink(d: Debt): string {
       : `Vous me devez ${formatCFA(d.total_due)}${depuis} pour vos achats.`,
     `Passez me payer quand vous pouvez. Merci !`,
   ].join('\n');
-  return `https://wa.me/${d.phone.replace(/[^\d]/g, '')}?text=${encodeURIComponent(message)}`;
+  return `https://wa.me/${whatsappNumber(d.phone)}?text=${encodeURIComponent(message)}`;
 }

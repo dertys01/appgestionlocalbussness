@@ -175,3 +175,12 @@ débordement, libellé du tri, erreurs HTTP et JS.
 ```bash
 QA_PASSWORD=<mot de passe> node qa/accueil.mjs <email> 375 gratuit
 ```
+
+## `exports.mjs` — relance et exports
+
+Liens « Relancer » au format international, Excel des dettes et des ventes
+(séparateur `;`), PDF lisible à 375 px. Compte en plan Starter ou Pro.
+
+```bash
+QA_PASSWORD=<mot de passe> node qa/exports.mjs <email>
+```
