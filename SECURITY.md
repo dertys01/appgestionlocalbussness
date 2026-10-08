@@ -65,6 +65,8 @@ où il n'existe pas de session à utiliser, c'est-à-dire trois cas :
 |---|---|
 | `/api/register` | crée le compte Auth, et le limiteur doit être partagé entre les instances serverless |
 | `/api/invitations/accept` | `redeem_invitation()` est privileged : l'appelant est anonyme, c'est le jeton d'invitation qui fait foi |
+| `/api/payments/order` | `payment_orders` n'a **aucune écriture client** (INSERT/UPDATE/DELETE révoqués) : la commande naît ici, après `requirePatron()` |
+| `/api/payments/callback/[provider]` | appelant anonyme — le fournisseur appelle sans session ; `activate_prepaid_plan()` est la seule écriture possible d'un plan payant |
 | `/api/stripe/*` | abonnements et webhooks |
 
 L'**écran Équipe et les invitations** n'en ont plus besoin. Ils utilisaient la
@@ -81,8 +83,35 @@ vérification « l'appelant est-il le patron de cette équipe ? » vit dans la
 fonction, où elle ne peut pas être oubliée.
 
 Conséquence pratique : **sans `SUPABASE_SERVICE_ROLE_KEY`, l'application
-démarre, se construit en développement et fonctionne**. Seules l'inscription et
-la facturation répondent 503, ce qui est exact.
+démarre, se construit en développement et fonctionne**. Seules l'inscription,
+la facturation et les paiements répondent 503, ce qui est exact.
+
+## Ce que le freemium a ajouté (Sprint 19)
+
+Le dépôt est **public** : c'est la donnée qui doit être protégée, pas le code.
+
+- **Ni prix ni quota dans le dépôt.** Les valeurs vivent dans
+  `NEXT_PUBLIC_PLANS_CONFIG` (`.env.local` + dashboard du déploiement, lues au
+  build) et dans `plan_config`, table **vide dans le dépôt** remplie par
+  `npm run sync:plans`. Un garde-fou refuse tout commit contenant une valeur
+  d'offre. `plan_config` est soumis à RLS et révoqué de `anon` comme
+  d'authenticated : le navigateur n'y touche pas, ce sont les fonctions
+  SECURITY DEFINER qui la lisent.
+- **`payment_orders`** : SELECT limité à `user_id = auth.uid()` — le patron
+  voit ses commandes, l'employé rien ; toute écriture passe par les routes
+  avec la clé service.
+- **`activate_prepaid_plan()`** : SECURITY DEFINER, exécutable par
+  `service_role` uniquement, idempotente (pending → paid atomiquement),
+  prolongation ajoutée à la fin de la période en cours — jamais un remplacement
+  silencieux.
+- **Le callback fournisseur** échoue fermé : le domaine appelant doit être
+  celui du fournisseur configuré. Le parcours sandbox ne s'active qu'avec
+  `PAYMENTS_SANDBOX=1`, vérifié à la création comme au callback.
+- **L'essai de 14 jours** : `start_free_trial()`, une seule fois par
+  organisation, déclenché par un bouton — jamais automatique à l'inscription.
+- **Échec = fail-open assumé** : sans configuration, pas de quota (les quotas
+  ne se devinent jamais) et pas de prix vendus — d'où l'ordre de déploiement
+  ci-dessous, qui n'est pas une recommandation.
 
 ## Ce qui empêche le retour
 
@@ -107,3 +136,28 @@ quelle boutique. Le réflexe, dans l'ordre :
 4. Purger l'historique.
 5. Auditer ce qui a pu être lu : ventes, dettes, contacts. Et prévenir les
    personnes concernées — c'est la partie qu'on oublie toujours.
+
+## Déployer une mise à jour (runbook)
+
+Ordre **non négociable** — l'étape 4 sans les étapes 1-3 ne casse rien, mais
+applique la code sans quotas ; les étapes 1-3 sans la 4 non plus, pour la
+même raison. Les deux moitiés vont ensemble.
+
+1. `node scripts/supabase-sql.mjs supabase/migration_trial.sql`
+2. `node scripts/supabase-sql.mjs supabase/migration_mobilemoney.sql`
+3. `node scripts/supabase-sql.mjs supabase/migration_plan_config.sql`
+4. `npm run sync:plans` — **sans lui, aucun quota n'est appliqué** (fail-open
+   documenté dans `migration_plan_config.sql`).
+5. Vercel : `NEXT_PUBLIC_PLANS_CONFIG` identique à `.env.local`, puis
+   redéployer — les variables `NEXT_PUBLIC_*` sont lues **au build**, un
+   changement de dashboard ne se répercute pas sur un déploiement existant.
+6. Push : Vercel déploie.
+
+Contrôles après déploiement : `plan_config` renvoie 9 lignes,
+`/tarifs` affiche les prix (jamais « — »), `current_org_plan()` répond.
+
+Côté paiements, tant que les clés fournisseur n'arrivent pas :
+`PAYMENTS_PROVIDER` absent (donc sandbox) **sans** `PAYMENTS_SANDBOX` — la
+commande répond 503, ce qui est exact. **`PAYMENTS_SANDBOX=1` ne doit jamais
+exister sur un déploiement réel** ; les clés FedaPay/PayDunya, quand elles
+arriveront, vivent dans le dashboard et `.env.local`, nulle part ailleurs.
