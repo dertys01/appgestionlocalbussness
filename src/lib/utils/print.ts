@@ -1,5 +1,7 @@
 import type { CartItem, Organization } from '@/types';
 import { formatQty } from '@/lib/utils/currency';
+import { planEffectif } from '@/lib/utils/plans';
+import { piedDiffusion } from '@/lib/utils/whatsapp';
 
 interface PrintData {
   items: CartItem[];
@@ -87,9 +89,19 @@ export function printReceipt(data: PrintData) {
     `<p>${escapeHtml(data.clientName)}</p>`,
   ].join('') : '';
 
-  const footer = !isNormalized
-    ? `<div class="divider"></div><p class="center mt8">Merci de votre visite !</p>`
-    : '';
+  // P4 : le pied de diffusion n'existe que sur le gratuit — au plan * effectif, l'essai compte comme Starter et ne porte donc pas la marque.
+  // Ligne vide retirée : en HTML, le séparateur est déjà le passage à la ligne.
+  const diffusion = piedDiffusion(
+    planEffectif(data.org.plan, data.org.trial_ends_at, data.org.plan_valid_until),
+  );
+  const footer = [
+    !isNormalized
+      ? `<div class="divider"></div><p class="center mt8">Merci de votre visite !</p>`
+      : '',
+    ...diffusion
+      .filter(Boolean)
+      .map((l) => `<p class="center label">${escapeHtml(l)}</p>`),
+  ].join('');
 
   const html = [
     `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8">`,

@@ -11,6 +11,8 @@ import { formatCFA } from '@/lib/utils/currency';
 import { readablePlanError } from '@/lib/utils/planErrors';
 import { whatsappNumber } from '@/lib/utils/phone';
 import { isFeatureAllowed } from '@/lib/utils/plans';
+import { piedDiffusion } from '@/lib/utils/whatsapp';
+import type { Plan } from '@/types';
 import { downloadCSV, toCSV } from '@/lib/utils/export';
 import { imprimerRapport } from '@/lib/utils/rapport';
 
@@ -286,7 +288,7 @@ export function DebtsModule() {
                       moyen occupent la rangée du dessous, en pleine largeur. */}
                   <div className="flex flex-wrap gap-2">
                     <a
-                      href={reminderLink(d)}
+                      href={reminderLink(d, plan)}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="order-1 shrink-0 inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#25D366] hover:bg-[#1ebe5d] text-white text-xs font-medium px-3 h-11 sm:h-9"
@@ -380,8 +382,11 @@ export function DebtsModule() {
  * sont arrivés — passe pour un oubli, alors que c'est une vente à moitié
  * réglée. Le client le comprend, et répond « je les ai déjà donnés » ; le
  * commerçant doit alors vérifier. Mieux vaut l'écrire.
+ *
+ * Exportée pour le test : c'est aussi le seul message du produit qui part
+ * sans reçu (le pied de diffusion P4 y est vérifié).
  */
-function reminderLink(d: Debt): string {
+export function reminderLink(d: Debt, plan: Plan): string {
   const age = daysSince(d.oldest_sale_at);
   const depuis = age !== null && age >= 7 ? ` depuis ${age} jours` : '';
   const message = [
@@ -391,6 +396,7 @@ function reminderLink(d: Debt): string {
       ? `Vous avez déjà versé ${formatCFA(d.total_paid)}. Il vous reste ${formatCFA(d.total_due)}${depuis} à régler.`
       : `Vous me devez ${formatCFA(d.total_due)}${depuis} pour vos achats.`,
     `Passez me payer quand vous pouvez. Merci !`,
+    ...piedDiffusion(plan),
   ].join('\n');
   return `https://wa.me/${whatsappNumber(d.phone)}?text=${encodeURIComponent(message)}`;
 }

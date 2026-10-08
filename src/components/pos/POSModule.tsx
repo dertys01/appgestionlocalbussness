@@ -770,6 +770,9 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           paymentMethod,
           date: new Date(),
           businessName: org?.name,
+          // Plan effectif (useSupabase) : le pied de diffusion P4 ne s'affiche
+          // que sur le gratuit.
+          plan,
           // Acompte et reste dû, pour que le message dise la vérité au client.
           // Les deux sont calculés plus haut : sur un crédit, advanceAmount est l'acompte
           // saisi et remaining ce qui reste — les deux viennent du même calcul

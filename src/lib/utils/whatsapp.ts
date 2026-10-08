@@ -1,5 +1,17 @@
+import type { Plan } from '@/types';
 import { formatCFA } from './currency';
 import { whatsappNumber } from './phone';
+
+/**
+ * Pied de page de diffusion (évaluation §6, P4) : les reçus et relances du
+ * plan gratuit portent « Envoyé avec GestionLocal », retiré dès le Starter —
+ * un client qui paie n'a pas à voir la marque d'un outil gratuit sur ses
+ * documents. Renvoie des lignes prêtes pour un message WhatsApp (séparateur
+ * compris) ; un écran HTML filtre la ligne vide et enveloppe le reste.
+ */
+export function piedDiffusion(plan?: Plan | null): string[] {
+  return plan === 'free' ? ['', 'Envoyé avec GestionLocal'] : [];
+}
 
 interface SaleItem {
   product_name: string;
@@ -19,6 +31,11 @@ interface SaleReceipt {
   advance?: number;
   /** En crédit : ce qui reste à recouvrer. */
   due?: number;
+  /**
+   * Plan effectif du point de vente (planEffectif(), essai compris). Le pied
+   * de diffusion ne s'affiche que si c'est 'free' ; absent = pas de pied.
+   */
+  plan?: Plan;
 }
 
 /**
@@ -31,7 +48,7 @@ interface SaleReceipt {
  */
 export function generateWhatsAppReceiptLink(receipt: SaleReceipt, phone?: string): string {
   const { items, total, paymentMethod, date, businessName = 'Notre Boutique',
-    advance = 0, due = 0 } = receipt;
+    advance = 0, due = 0, plan } = receipt;
 
   const dateStr = date.toLocaleDateString('fr-FR', {
     day: '2-digit',
@@ -84,6 +101,7 @@ export function generateWhatsAppReceiptLink(receipt: SaleReceipt, phone?: string
       reste > 0
         ? `Merci de passer régler quand vous pouvez. 🙏`
         : `Merci pour votre achat ! 🙏`,
+      ...piedDiffusion(plan),
     ].join('\n');
 
     return lien(message, phone);
@@ -101,6 +119,7 @@ export function generateWhatsAppReceiptLink(receipt: SaleReceipt, phone?: string
     `💳 Paiement : ${paymentLabel}`,
     ``,
     `Merci pour votre achat ! 🙏`,
+    ...piedDiffusion(plan),
   ].join('\n');
 
   return lien(message, phone);
