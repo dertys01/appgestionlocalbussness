@@ -163,6 +163,23 @@ export interface Organization {
   /** Les 4 activités de l'inscription — `domain` en est déduit. */
   business_type?: 'epicerie' | 'boutique' | 'restaurant' | 'autre' | null;
   /**
+   * Essai Starter de 14 jours (migration_trial.sql) : NULL = jamais démarré.
+   * `plan` reste 'free' — seul le webhook Stripe le change — et c'est
+   * current_org_plan() côté base, planEffectif() côté écran, qui traduit
+   * l'essai en plan utile. Les deux colonnes n'ont aucun GRANT d'écriture
+   * client : start_free_trial() est la seule porte.
+   */
+  trial_started_at?: string | null;
+  trial_ends_at?: string | null;
+  /**
+   * Fin de la période prépayée Mobile Money (migration_mobilemoney.sql) :
+   * NULL = aucune fin (gratuit, ou abonnement Stripe en cours). Absente de
+   * tout GRANT d'écriture client — seul activate_prepaid_plan() l'écrit.
+   * planEffectif() la traduit en plan « free » écoulé, comme
+   * current_org_plan() en base.
+   */
+  plan_valid_until?: string | null;
+  /**
    * Dernier relevé d'ouverture (P2/P3, migration_display_mode.sql) :
    * 'standalone' = application installée, 'navigateur' ; NULL = jamais
    * relevé (aucun défaut — le mode ne se remplit qu'à l'ouverture par le

@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { modeOuverture } from '@/lib/pwa/installation';
+import { planEffectif } from '@/lib/utils/plans';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
 import type { Organization, Plan } from '@/types';
 
@@ -68,7 +69,14 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
       setOrgError(null);
       if (data) {
         setOrg(data as Organization);
-        setPlan((data as Organization).plan);
+        // Plan EFFECTIF : un essai Starter actif rend le plan utile 'starter',
+        // alors que organizations.plan dit encore 'free' (le brut reste
+        // l'affaire du webhook Stripe). Miroir de current_org_plan() en base.
+        setPlan(planEffectif(
+          (data as Organization).plan,
+          (data as Organization).trial_ends_at,
+          (data as Organization).plan_valid_until,
+        ));
         return data as Organization;
       }
       return null;

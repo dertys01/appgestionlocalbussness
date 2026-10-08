@@ -70,7 +70,8 @@ export function checkServerEnv(): void {
   if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
     console.warn(
       '[config] SUPABASE_SERVICE_ROLE_KEY absente : /api/register, ' +
-      '/api/invitations/accept et /api/stripe/* répondront 503.'
+      '/api/invitations/accept, /api/stripe/* et /api/payments/* ' +
+      'répondront 503.'
     );
   }
 }

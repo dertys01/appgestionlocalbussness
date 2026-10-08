@@ -1,38 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { randomBytes, createHash } from 'crypto';
-import { PLAN_LIMITS } from '@/lib/utils/plans';
+import { PLAN_LIMITS, planEffectif } from '@/lib/utils/plans';
 import { serverError } from '@/lib/utils/server';
 import { z } from 'zod';
 import type { Plan } from '@/types';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { clientFor, readUser } from '@/lib/utils/user-client';
+import { requirePatron } from '@/lib/utils/user-client';
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL?.replace(/\/$/, '');
 
 const INVITATION_DAYS = 7;
 const MAX_PENDING = 20;
 
-// Un·e employé·e ne gère pas l'équipe : get_business_owner_id() renverrait son
-// patron, la vérification doit donc porter sur l'identité du patron lui-même.
-//
-// Le contrôle compare l'identifiant renvoyé par get_business_owner_id() à celui
-// de l'appelant : identiques si et seulement si l'appelant est un patron. La
-// fonction voit le tenant réel même sous RLS, là où une lecture directe de
-// `business_members` ne verrait rien et laisserait passer tout le monde.
-async function requirePatron(req: NextRequest) {
-  const user = await readUser(req);
-  if (!user) return { error: 'Non authentifié', status: 401 } as const;
-
-  const db = clientFor(req);
-  const { data: patron, error: errPatron } = await db.rpc('get_business_owner_id');
-  if (errPatron) throw errPatron;
-
-  if (patron !== user.id) {
-    return { error: 'Seul le patron peut inviter des employés', status: 403 } as const;
-  }
-
-  return { user, db } as const;
-}
+// Seul·e le·la patron·ne invite : requirePatron() (user-client.ts) compare
+// l'identité de l'appelant à get_business_owner_id() — partagé avec les
+// routes Mobile Money, qui posent la même question pour un autre geste.
+const MSG_PATRON = 'Seul le patron peut inviter des employés';
 
 /**
  * Combien de postes sont occupés : membres de l'équipe + invitations en attente.
@@ -52,7 +35,7 @@ async function postesOccupes(db: SupabaseClient, ownerId: string) {
 // GET : invitations en attente du patron
 export async function GET(req: NextRequest) {
   try {
-    const auth = await requirePatron(req);
+    const auth = await requirePatron(req, MSG_PATRON);
     if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
     // `employee_invitations` porte une policy FOR ALL sur `auth.uid() =
@@ -91,7 +74,7 @@ export async function GET(req: NextRequest) {
 // POST : le patron invite un employé et reçoit le lien à lui transmettre
 export async function POST(req: NextRequest) {
   try {
-    const auth = await requirePatron(req);
+    const auth = await requirePatron(req, MSG_PATRON);
     if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
     const parsedBody = z
@@ -156,11 +139,15 @@ export async function POST(req: NextRequest) {
     // La limite du plan compte les invitations en attente comme des postes
     // occupés : sinon on promet plus de caisses que le plan n'en autorise.
     const [{ data: org }, occupes] = await Promise.all([
-      auth.db.from('organizations').select('plan').eq('id', auth.user.id).maybeSingle(),
+      auth.db.from('organizations').select('plan, trial_ends_at, plan_valid_until').eq('id', auth.user.id).maybeSingle(),
       postesOccupes(auth.db, auth.user.id),
     ]);
 
-    const plan = (org?.plan ?? 'free') as Plan;
+    // Plan EFFECTIF : pendant l'essai de 14 jours, le plan utile est starter.
+    // check_employee_limit() en base pense pareil — si cette couche restait sur
+    // le plan brut, elle refuserait un poste que le trigger accepterait (ou
+    // l'inverse). Le refus principal reste le trigger ; celui-ci est la politesse.
+    const plan = planEffectif((org?.plan ?? 'free') as Plan, org?.trial_ends_at, org?.plan_valid_until);
     const limit = PLAN_LIMITS[plan].employees;
     if (limit !== Infinity && occupes >= limit) {
       return NextResponse.json(
@@ -205,7 +192,7 @@ export async function POST(req: NextRequest) {
 // DELETE : révoquer une invitation (le lien ne fonctionne plus)
 export async function DELETE(req: NextRequest) {
   try {
-    const auth = await requirePatron(req);
+    const auth = await requirePatron(req, MSG_PATRON);
     if ('error' in auth) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
     const id = req.nextUrl.searchParams.get('id');

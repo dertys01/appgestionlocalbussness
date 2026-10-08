@@ -11,6 +11,7 @@ import {
   fieldExamples,
 } from '@/lib/starterCatalog';
 import { loadStarterCatalog } from '@/lib/starterCatalog.client';
+import { PLAN_LIMITS } from '@/lib/utils/plans';
 
 /**
  * Catalogue d'exemple — le premier écran d'une application parle le métier de
@@ -156,10 +157,12 @@ it('ne met pas deux fois le même nom d\'option sur un même plat', () => {
 });
 
 it('tient dans le quota du plan gratuit', () => {
-    // check_product_limit() refuse la 31e ligne en plan gratuit : un catalogue
-    // d'exemple plus long que le quota rendrait l'assistant inutilisable.
-    expect(starterCount('restaurant')).toBeLessThanOrEqual(30);
-    expect(starterCount('retail')).toBeLessThanOrEqual(30);
+    // check_product_limit() refuse au-delà du quota du plan gratuit : un
+    // catalogue d'exemple plus long que le quota rendrait l'assistant
+    // inutilisable. Le quota lui-même vit hors du dépôt — le test compare au
+    // quota lu, jamais à un nombre écrit ici.
+    expect(starterCount('restaurant')).toBeLessThanOrEqual(PLAN_LIMITS.free.products);
+    expect(starterCount('retail')).toBeLessThanOrEqual(PLAN_LIMITS.free.products);
   });
 
   it('les deux domaines ont des catalogues différents', () => {

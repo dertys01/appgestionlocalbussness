@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { Eye, EyeOff } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -176,6 +177,14 @@ export function LoginPage() {
             </button>
           </div>
         )}
+
+        {/* Les formules, avant même l'inscription : on décide de s'engager en
+            voyant ce que contient chaque plan, pas après avoir créé un compte. */}
+        <p className="text-center mb-4">
+          <Link href="/tarifs" className="text-sm text-indigo-600 hover:text-indigo-800 underline">
+            Voir les formules et l&apos;essai de 14 jours →
+          </Link>
+        </p>
 
         <Card className="border-slate-200 shadow-md">
           <CardContent className="p-6">

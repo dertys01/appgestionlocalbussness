@@ -1142,17 +1142,34 @@ Fait **avant le 19** : celui-ci attend l'évaluation marketing des prix.
 | **Recette** | Build + serveur de production : manifeste JSON servi, `/sw.js` en `no-store`, icône `200 image/png`, head avec `manifest` + `apple-touch-icon` + `theme-color`. Dans Chrome : service worker **actif** sur le scope `/`, **0 erreur console**. Chaîne complète `npm test` au vert, tests UI **233 → 248** |
 | **Hors périmètre** | Mode hors ligne (P7, à décider sur la mesure du pilote), notifications push, score Lighthouse |
 
-### Sprint 19 — Freemium (plan : 14), à venir
+### Sprint 19 — Freemium (plan : 14)
 
-Limites des 3 plans **côté serveur** (aujourd'hui seuls les produits le sont ;
-employés, historique et export ne sont bloqués que par l'écran), prix retenus
-dans l'évaluation marketing (**valeurs à prendre hors du dépôt, jamais écrites
-ici**), page tarifs, essai de 14 jours, prestataire Mobile Money.
+| | |
+|---|---|
+| **Objectif** | Des limites que le **serveur** fait respecter, une offre tarifaire qui ne fuit pas du dépôt public, et une voie de paiement là où la cible paie réellement |
+| **Limites serveur** | `migration_plan_config.sql` : table `plan_config` (**vide dans le dépôt**, remplie par `npm run sync:plans` — `scripts/sync-plan-config.mjs`, `--dry-run`), quotas produit et employé par triggers (`check_product_limit` / `check_employee_limit`, qui comptent aussi les invitations en attente), fenêtre d'historique posée sur la politique `SELECT` de `sales` via `within_plan_history()` (SECURITY DEFINER pour lire en anon) — **les dettes échappent à la fenêtre** (`OR NOT settled`) : récupérer son argent n'est pas un avantage payant. Fail-open partout : aucune ligne de quota posée = rien ne se bloque, le mécanisme ne devine jamais de valeur |
+| **Export** | Constat : il n'existe **aucune route d'export** — les exports sont construits côté client à partir de données déjà fenêtrées par le serveur (historique borné à la fenêtre du plan, rapports verrouillés par `require_feature('reports')`, catalogue borné par le quota). Le sprint pose donc le test du verrou **en base** (`require_feature('exportCsv')` refusé en gratuit, ouvert pendant l'essai, refermé à l'expiration — contrôle 36g) : c'est ce verrou qu'appelleront les routes d'export du Sprint 21, et rien, ici, ne se bloque plus « que par l'écran » |
+| **Valeurs hors dépôt** | Prix et quotas ne vivent que dans l'environnement : `NEXT_PUBLIC_PLANS_CONFIG` (`.env.local` gitignoré + variables de déploiement). Le dépôt ne contient que le mécanisme de lecture (`src/lib/utils/plans.ts`) ; les tests tournent sur une fixture fausse par construction |
+| **Essai 14 jours** | `migration_trial.sql` : colonnes `trial_*` **sans GRANT d'écriture client**, `start_free_trial()` SECURITY DEFINER (patron, plan gratuit, une fois pour toujours), `current_org_plan()` conscient de l'essai. Bouton « Démarrer l'essai — 14 jours, sans carte » dans Paramètres → Abonnement — **jamais automatique à l'inscription** |
+| **Page tarifs** | `/tarifs` publique (composant serveur + metadata), lien depuis la connexion ; tout ce qui y est chiffré vient de la configuration |
+| **Mobile Money** | Périodes prépayées (1, 3 ou 12 mois) : `migration_mobilemoney.sql` — `payment_orders` (INSERT/UPDATE/DELETE **révoqués** côté navigateur, SELECT limité à ses propres commandes), `organizations.plan_valid_until` **sans défaut** (une colonne d'organisation avec défaut remplit toutes les lignes), `activate_prepaid_plan()` en service_role : **seule** porte d'activation, idempotente (webhook rejoué ≠ période doublée), prolongation depuis la **fin** de la période en cours. Échéance lue sans cron : `current_org_plan()` côté base, `planEffectif()` côté écran — période finie = retour au gratuit, essai résiduel jamais touché. Prestataires dans `src/lib/payments/` : **bac à sable local complet** (`PAYMENTS_SANDBOX=1`, chemin de redirection relatif), FedaPay et PayDunya en squelette qui **refusent** — aucun appel réseau avant les clés et l'essai de prestataire annoncé. Routes : `POST /api/payments/order` (montant **recalculé en serveur** — un « montant: 1 » reçoit le prix réel ou une 503), `GET /api/payments/order` (état), `POST /api/payments/callback/[provider]` (passerelle de l'URL = passerelle configurée, fail closed, confirmation en session propriétaire) |
+| **Code** | `src/lib/utils/plans.ts` (`montantPeriode`, `planEffectif` daté), `src/lib/payments/*`, `src/app/api/payments/*`, `src/app/paiement/sandbox/[ref]`, `src/app/tarifs`, `SettingsModule` (bloc période prépayée), lien `/tarifs` depuis `LoginPage`, `requirePatron` mutualisé dans `user-client.ts` |
+| **Tests** | Harnais : section **36** (**15 contrôles** — quotas, fail-open, essai, invitations, fenêtre + dettes, verrou d'export en base, rejeu) et section **37** (**9 contrôles** — activation, idempotence, prolongation, échéance, essai non parasité, privilèges des commandes, activation hors navigateur, employé aveugle, double rejeu). UI : `plans-config` (7), `settings-trial` (5), `tarifs` (4), `payments` (8) — **253 → 277** |
+| **Déploiement** | Migrations **40 → 41**, dans l'ORDER : `trial` → `mobilemoney` → `plan_config`. En prod : appliquer les trois **puis** `npm run sync:plans` (sans cette copie, aucun quota n'est posé), le code seulement après les migrations. Variables : `PAYMENTS_PROVIDER` / `PAYMENTS_SANDBOX` — **jamais `1` sur un déploiement réel**, la confirmation locale reste fermée |
 
 ## Garde-fous permanents
 
 - `bump_rate_limit()` doit rester en **`SECURITY DEFINER`**.
-- `supabase/migration_security.sql` doit rester la **dernière** migration du dépôt.
+- `supabase/migration_security.sql` **n'est plus la dernière** migration du
+  dépôt : le Sprint 19 a posé `migration_trial.sql`,
+  `migration_mobilemoney.sql` puis `migration_plan_config.sql` après elle —
+  nouvelles migrations, **toujours ajoutées à la fin de l'ORDER**. Ce qui
+  compte n'est pas sa position mais l'ordre des **rejeux** : la section 19
+  rejoue security (elle y re-colle ses policies), et la section 36 rejoue
+  `migration_plan_config.sql` derrière pour remettre la fenêtre
+  d'historique. Un fichier qui redéfinit une policy posée par security doit
+  être rejoué encore après elle dans le harnais, sinon la section 19
+  mesure une base qu'aucun déploiement ne ressemble à.
 - La clé **`anon`** ne doit appeler que `get_business_owner_id()` et
   `can_manage_products()` — les deux helpers des policies RLS. Toute nouvelle fonction
   qui ne doit pas être exposée sans session doit en être consciente dès sa création, et
@@ -1166,6 +1183,13 @@ ici**), page tarifs, essai de 14 jours, prestataire Mobile Money.
 - **Le dépôt GitHub est `PUBLIC`.** Aucun prix d'achat, aucune marge, aucun
   fichier client : `import-local/` est gitignoré. Vérifier `visibility` avant
   d'ajouter un fichier de données.
+- **Les valeurs de l'offre (prix, quotas) n'existent dans aucun fichier du
+  dépôt** — ni code, ni SPRINTS, ni test (la fixture des tests est fausse
+  par construction, et doit l'être visiblement). Elles ne vivent que dans les
+  environnements : `NEXT_PUBLIC_PLANS_CONFIG` (`.env.local` gitignoré et
+  variables de déploiement), recopiées en base par `npm run sync:plans`.
+  Toute addition se vérifie par un grep sur le diff avant le commit — et les
+  entrées du journal mentionnent les mécanismes, jamais les chiffres.
 - Un **bouton dont le libellé est masqué** (`hidden sm:inline`) doit porter un
   `aria-label` : sous ce seuil il ne reste qu'une icône, qui n'a pas de nom
   accessible.
@@ -1197,6 +1221,7 @@ ici**), page tarifs, essai de 14 jours, prestataire Mobile Money.
 
 | Date | Commit | Objet |
 |---|---|---|
+| 08/10/2026 | — | **Sprint 19 — freemium : les limites passent côté serveur, et une voie Mobile Money.** `plan_config` (quotas posés par `npm run sync:plans`, fail-open quand aucune ligne n'est posée), triggers produit/employé qui comptent les invitations en attente, fenêtre d'historique sur `sales` **avec exception des dettes** (`OR NOT settled`) ; le verrou d'export est désormais testé **en base** (36g : `require_feature('exportCsv')` refusé en gratuit, ouvert en essai, refermé à l'expiration) — les données d'export étant déjà fenêtrées par la politique, les routes viendront au Sprint 21. Prix et quotas sortis du dépôt : `NEXT_PUBLIC_PLANS_CONFIG` en environnement seul, `.env.local` gitignoré. Essai 14 jours en **bouton explicite** (`start_free_trial` : patron, plan gratuit, une fois — jamais automatique à l'inscription), page publique `/tarifs` liée depuis la connexion. Mobile Money : commandes prépayées 1/3/12 mois avec montant **recalculé côté serveur**, `activate_prepaid_plan()` service_role idempotente (prolongation depuis la fin de période), `plan_valid_until` qui éteint le plan **sans cron** (`current_org_plan()` / `planEffectif()`), prestataires FedaPay et PayDunya en squelette qui **refusent** — aucun appel réseau avant les clés et l'essai de prestataire —, bac à sable local (`PAYMENTS_SANDBOX=1`, fermé par défaut) avec page de confirmation. Sections **36** (15 contrôles) et **37** (9 contrôles) du harnais · migrations **40 → 41** · tests UI **253 → 277** |
 | 08/10/2026 | — | **Caisse — « Reprendre la dernière vente » rafraîchi et refermable.** Le bandeau ne bougeait pas après une vente validée et clôturée : il n'était rafraîchi qu'indirectement, par un effet accroché à la référence du tableau `products` que le parent régénère au rechargement du catalogue — un échec ou un retard de ce rechargement, et l'ancienne vente restait affichée. Le POS recharge désormais sa dernière vente **lui-même** à chaque encaissement (`create_sale` a commité avant de renvoyer, la requête voit la vente immédiatement). Bouton **X** ajouté : la fermeture tient jusqu'au rechargement de la caisse, elle ne revient pas après chaque vente · tests UI **251 → 253** |
 | 08/10/2026 | — | **Mode d'ouverture dans la mesure (P2 × P3).** `organizations.display_mode` : `'standalone'` (app installée) ou `'navigateur'`, NULL = jamais relevé — sans défaut, CHECK sur les deux valeurs, GRANT colonne par colonne (vérifié en prod : authenticated écrit, anon non). Le client le relève au login du patron, **seulement si le mode a changé** ; `get_activation_funnel()` reste intact, `npm run stats:activation` le jointure et affiche « Ouverture de l'application » + la colonne Mode du détail. Section 34 du harnais, **7 contrôles** dont un GRANT **à froid** (la section 4 re-grante les tables) · migrations **37 → 38** · tests UI **248 → 251** |
 | 08/10/2026 | — | **Application installable (P2 — évaluation marketing).** Manifeste (`src/app/manifest.ts`, `display: standalone`, couleurs de la marque), icônes 192/512/masquable + `apple-touch-icon` générées par `npm run icons:gen` (vérifiées sur disque par les tests), service worker **limité à `/_next/static/`** — jamais l'API ni les ventes, le mode hors ligne reste P7 — avec `no-cache` sur `/sw.js`, bannière d'invitation sur l'accueil (prompt natif capté au montage du layout, consigne iOS, refus mémorisé). Recette serveur de prod : manifeste servi, SW **actif dans Chrome**, 0 erreur console · tests UI **233 → 248** |

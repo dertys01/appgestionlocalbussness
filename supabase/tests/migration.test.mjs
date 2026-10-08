@@ -88,6 +88,20 @@ const ORDER = [
   // 'navigateur', NULL = jamais relevé). Jointuré au relevé par
   // scripts/funnel.mjs — get_activation_funnel() lui-même ne change pas.
   'migration_display_mode.sql',
+  // Essai Starter de 14 jours : colonnes trial sur organizations (sans GRANT
+  // client), start_free_trial() SECURITY DEFINER, current_org_plan() conscient
+  // de l'essai. AVANT migration_plan_config.sql, qui lit le plan effectif.
+  'migration_trial.sql',
+  // Mobile Money : périodes prépayées. Colonnes d'échéance, commandes,
+  // activate_prepaid_plan() service_role, current_org_plan() avec échéance.
+  // APRÈS migration_trial.sql (qui définit déjà current_org_plan) et AVANT
+  // migration_plan_config.sql : ses triggers lisent plan_valid_until, la
+  // colonne doit exister avant leur première déclenchement.
+  'migration_mobilemoney.sql',
+  // Limites des plans côté serveur : table plan_config (vide dans le dépôt,
+  // remplie par scripts/sync-plan-config.mjs), quotas produits et employés,
+  // fenêtre d'historique sur sales (détections de dettes comprises).
+  'migration_plan_config.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -4862,6 +4876,575 @@ console.log('\n▸ Mode d’ouverture : installée ou navigateur');
            (SELECT display_mode FROM organizations WHERE name = 'Funnel A') AS mode`)).rows[0];
   check('34g. le rejeu garde une contrainte unique et les valeurs intactes',
     rejeu.contraintes === 1 && rejeu.mode === 'standalone', JSON.stringify(rejeu));
+}
+
+// ─── 35. Essai gratuit de 14 jours ────────────────────────────────
+// Sprint 19 (freemium, plan 14). L'essai n'écrit jamais organizations.plan :
+// le plan brut reste l'affaire du webhook Stripe, l'essai vit à côté dans deux
+// colonnes sans aucun GRANT client — start_free_trial() est la seule porte, et
+// elle vérifie qui appelle. Trois choses sont à prouver : le patron démarre,
+// une seule fois ; le plan UTILE passe starter pendant l'essai (require_feature
+// avec lui) puis redescend à l'expiration, sans que le plan brut ait bougé ; et
+// le navigateur ne peut pas écrire lui-même sa date de fin.
+console.log('\n▸ Essai gratuit de 14 jours');
+{
+  // 35a — à froid, comme 34f. Trois temps : le prédicat doit d'abord VOIR un
+  // droit quand il existe (display_mode, que 34f vient de rendre, et un grant
+  // posé à la main sur trial_ends_at) ; on retire tout ; puis on rejoue le
+  // fichier. Son GRANT... il n'y en a pas, c'est la thèse : le rejeu ne rend
+  // toujours pas le navigateur capable de poser sa propre date de fin.
+  const voit = (await q(`
+    SELECT has_column_privilege('authenticated', 'organizations', 'display_mode', 'UPDATE') AS display,
+           has_column_privilege('authenticated', 'organizations', 'trial_ends_at', 'UPDATE') AS essai`)).rows[0];
+  check('35a. le prédicat voit le droit de display_mode (34f), et rien sur trial_ends_at',
+    voit.display === true && voit.essai === false, JSON.stringify(voit));
+
+  await e(`GRANT UPDATE (trial_ends_at) ON organizations TO authenticated`);
+  const avecGrant = (await q(
+    `SELECT has_column_privilege('authenticated', 'organizations', 'trial_ends_at', 'UPDATE') AS essai`)).rows[0];
+  await q(`REVOKE UPDATE (trial_ends_at, trial_started_at) ON organizations FROM authenticated`).catch(() => {});
+  await q(`REVOKE UPDATE ON organizations FROM authenticated`).catch(() => {});
+  await e(readSql('migration_trial.sql'));
+  const apresRejeu = (await q(`
+    SELECT has_column_privilege('authenticated', 'organizations', 'trial_ends_at', 'UPDATE')   AS auth,
+           has_column_privilege('anon', 'organizations', 'trial_started_at', 'UPDATE')         AS anon`)).rows[0];
+  check('35a2. un grant à la main se voit ; le rejeu du fichier, lui, ne redonne rien (anon comme authenticated)',
+    avecGrant.essai === true && apresRejeu.auth === false && apresRejeu.anon === false,
+    `grant: ${JSON.stringify(avecGrant)}, rejeu: ${JSON.stringify(apresRejeu)}`);
+
+  // 35a2 — les colonnes existent, toutes deux sans défaut : NULL = jamais
+  // d'essai. Un DEFAULT remplit les boutiques existantes d'un essai déjà joué.
+  const cols = (await q(`
+    SELECT column_name, column_default
+      FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = 'organizations'
+       AND column_name IN ('trial_started_at', 'trial_ends_at')
+     ORDER BY column_name`)).rows;
+  check('35a3. deux colonnes, toutes deux sans défaut (NULL = jamais d’essai)',
+    cols.length === 2 && cols.every((c) => c.column_default === null),
+    JSON.stringify(cols));
+
+  // 35b — le patron démarre : colonnes remplies, fin ≈ 14 jours, et surtout
+  // le plan brut n'a pas bougé — l'essai n'est pas un faux paiement.
+  const ESSAI = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  await q(`INSERT INTO auth.users (id, email) VALUES ('${ESSAI}', 'essai@test.ci') ON CONFLICT DO NOTHING`);
+  await q(`INSERT INTO organizations (id, name, slug, plan) VALUES ('${ESSAI}', 'Boutique Essai', 'boutique-essai', 'free') ON CONFLICT DO NOTHING`);
+  await q(`SELECT set_config('request.jwt.claim.sub', '${ESSAI}', false)`);
+  const fin = (await q(`SELECT start_free_trial() AS fin`)).rows[0].fin;
+  const jours = (new Date(fin).getTime() - Date.now()) / 86400000;
+  const o = (await q(
+    `SELECT trial_started_at, trial_ends_at, plan FROM organizations WHERE id = '${ESSAI}'`)).rows[0];
+  check('35b. le patron démarre un essai d’environ 14 jours, colonnes remplies, plan brut intact',
+    jours > 13 && jours < 15 && o.trial_started_at !== null
+      && o.trial_ends_at !== null && o.plan === 'free',
+    `jours=${jours.toFixed(2)}, ${JSON.stringify(o)}`);
+
+  // 35c — une seule fois pour toujours : un essai expiré ne se relance pas,
+  // sinon le plan gratuit devient illimité par rotation.
+  let msg = '';
+  try { await q(`SELECT start_free_trial()`); } catch (ex) { msg = ex.message; }
+  check('35c. un second essai est refusé (une fois par boutique)',
+    /une fois par boutique/.test(msg), msg);
+
+  // 35d — un employé ne démarre pas l'essai de la boutique de son patron :
+  // auth.uid() est son propre id, qui n'est la clé d'aucune boutique.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${EMPLOYE}', false)`);
+  msg = '';
+  try { await q(`SELECT start_free_trial()`); } catch (ex) { msg = ex.message; }
+  check('35d. un employé n’y arrive pas : son id n’est pas une boutique',
+    /Boutique introuvable/.test(msg), msg);
+
+  // 35e — une boutique déjà payante non plus : c'est le paiement qui
+  // commande, l'essai ne fait que soulever le gratuit.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+  msg = '';
+  try { await q(`SELECT start_free_trial()`); } catch (ex) { msg = ex.message; }
+  check('35e. une boutique payante ne démarre pas d’essai',
+    /déjà sur un plan payant/.test(msg), msg);
+
+  // 35f — l'effet : pendant l'essai, le plan UTILE est starter
+  // (require_feature ouvre les rapports) ; expiré, il redescend et les mêmes
+  // appels échouent — pendant que le plan brut, lui, dit encore 'free'.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${ESSAI}', false)`);
+  const pendant = (await q(
+    `SELECT current_org_plan() AS p, require_feature('reports') AS r`)).rows[0];
+  await e(`UPDATE organizations SET trial_ends_at = now() - interval '1 day' WHERE id = '${ESSAI}'`);
+  const apresPlan = (await q(
+    `SELECT current_org_plan() AS p, plan AS brut FROM organizations WHERE id = '${ESSAI}'`)).rows[0];
+  msg = '';
+  try { await q(`SELECT require_feature('reports')`); } catch (ex) { msg = ex.message; }
+  check('35f. essai actif → plan utile starter (rapports ouverts) ; expiré → free et rapports refusés, plan brut jamais touché',
+    pendant.p === 'starter' && pendant.r === true
+      && apresPlan.p === 'free' && apresPlan.brut === 'free'
+      && /nécessite le plan starter/.test(msg),
+    JSON.stringify({ pendant, apresPlan, msg }));
+
+  // 35g — même en contournant le composant : rôle authenticated, RLS
+  // favorable, mais aucun privilège sur la colonne — prolonger son essai à la
+  // main échoue avant même la politique.
+  await e(`SET ROLE authenticated`);
+  msg = '';
+  try {
+    await q(`UPDATE organizations SET trial_ends_at = now() + interval '1 year' WHERE id = '${ESSAI}'`);
+  } catch (ex) { msg = ex.message; }
+  await e(`RESET ROLE`);
+  check('35g. authenticated ne peut pas prolonger lui-même son essai (permission denied)',
+    /permission denied/.test(msg), msg);
+
+  // 35h — la porte n'est pas publique : anon sans exécution, authenticated
+  // avec (REVOKE PUBLIC du fichier, vérifié à froid sur anon qui n'a rien
+  // reçu entre-temps).
+  const fn = (await q(`
+    SELECT has_function_privilege('anon', 'start_free_trial()', 'EXECUTE')          AS anon,
+           has_function_privilege('authenticated', 'start_free_trial()', 'EXECUTE') AS auth`)).rows[0];
+  check('35h. start_free_trial() : anon dehors, authenticated dedans',
+    fn.anon === false && fn.auth === true, JSON.stringify(fn));
+
+  // 35i — rejouable : le fichier re-collé ne double ni les colonnes ni les
+  // fonctions, et ne remet pas à zéro un essai en cours (ADD COLUMN IF NOT
+  // EXISTS, CREATE OR REPLACE — pas de DROP qui détruirait les dates).
+  await e(readSql('migration_trial.sql'));
+  await e(readSql('migration_trial.sql'));
+  const rejeu = (await q(`
+    SELECT (SELECT count(*)::int FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = 'organizations'
+               AND column_name IN ('trial_started_at', 'trial_ends_at')) AS colonnes,
+           (SELECT count(*)::int FROM pg_proc WHERE proname = 'start_free_trial') AS fns,
+           ((SELECT trial_ends_at FROM organizations WHERE id = '${ESSAI}') IS NOT NULL) AS essai_intact`)).rows[0];
+  check('35i. le rejeu garde deux colonnes, une fonction, et l’essai en cours',
+    rejeu.colonnes === 2 && rejeu.fns === 1 && rejeu.essai_intact === true,
+    JSON.stringify(rejeu));
+}
+
+// ─── 36. Limites des plans côté serveur ────────────────────────────────
+// Sprint 19 : ce qui ne vivait que dans le navigateur. Trois limites, une
+// table vide dans le dépôt, et deux principes à verrouiller :
+//   • sans quota posé, rien ne se bloque (fail-open) — le mécanisme ne
+//     devine jamais une valeur ;
+//   • les dettes survivent à la fenêtre d'historique : régler son argent
+//     n'est pas un avantage payant (§8 : dettes sur tous les plans).
+// Les valeurs ci-dessous sont des FIXTURES de test (2, 5, 30…), jamais
+// l'offre : le test prouve le mécanisme, jamais un chiffre.
+console.log('\n▸ Limites des plans côté serveur');
+{
+  const ESSAI = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+
+  // La section 16 a laissé la « Boutique Gratuite » en pro (elle servait à
+  // vérifier que Pro accède aux prévisions). Ici c'est l'inverse qu'on
+  // teste : on la remet en gratuit, comme au premier jour.
+  await e(`UPDATE organizations SET plan = 'free', trial_started_at = NULL, trial_ends_at = NULL
+            WHERE id = '${FREE}'`);
+
+  // Rejeu d'entrée : la section 19 a re-collé migration_security.sql, qui
+  // porte une version SANS fenêtre de la politique sales (elle est antérieure
+  // à cette section). En déploiement réel, migration_plan_config.sql arrive
+  // APRÈS — c'est ce rejeu qui rétablit l'ordre réel.
+  await e(readSql('migration_plan_config.sql'));
+
+  // 36a — la table est vide : aucune valeur dans le dépôt, aucune valeur
+  // dans une migration. C'est scripts/sync-plan-config.mjs qui la remplit.
+  const vide = (await q(`SELECT count(*)::int n FROM plan_config`)).rows[0];
+  check('36a. plan_config existe et aucune migration n’y pose une valeur',
+    vide.n === 0, JSON.stringify(vide));
+
+  // 36a2 — à froid : la section 4 a fait GRANT ALL (l'état d'une base
+  // Supabase à la création des tables). On retire tout, on rejoue, et c'est
+  // le fichier qui décide : navigateur sans AUCUN accès (même la lecture —
+  // les quotas affichés viennent du build, pas de la base), service_role
+  // complet pour les scripts.
+  await e(`REVOKE ALL ON plan_config FROM anon, authenticated, service_role`);
+  await e(readSql('migration_plan_config.sql'));
+  const priv = (await q(`
+    SELECT has_table_privilege('authenticated', 'plan_config', 'SELECT') AS auth_select,
+           has_table_privilege('authenticated', 'plan_config', 'INSERT') AS auth_insert,
+           has_table_privilege('anon', 'plan_config', 'SELECT')          AS anon_select,
+           has_table_privilege('service_role', 'plan_config', 'SELECT,INSERT,UPDATE,DELETE') AS service`)).rows[0];
+  check('36a2. à froid : aucun accès navigateur, service_role complet',
+    priv.auth_select === false && priv.auth_insert === false
+      && priv.anon_select === false && priv.service === true,
+    JSON.stringify(priv));
+
+
+  // 36b — quota posé (fixture : 2 produits) → refus réel par le trigger,
+  // plan et quota nommés dans le message.
+  await e(`INSERT INTO plan_config (plan, key, value) VALUES
+    ('free',    'products',     2),
+    ('free',    'employees',    0),
+    ('free',    'history_days', 30),
+    ('starter', 'products',     5),
+    ('starter', 'employees',    2),
+    ('starter', 'history_days', 2147483647),
+    ('pro',     'products',     2147483647),
+    ('pro',     'employees',    2147483647),
+    ('pro',     'history_days', 2147483647)`);
+  const insProd = (id, org) =>
+    `INSERT INTO products (id, user_id, name, price_buy, price_sell, stock_qty)
+     VALUES ('${id}', '${org}', 'Article ${id.slice(-4)}', 100, 200, 1)`;
+  await e(insProd('f0f0f0f0-0000-4000-8000-00000000000c', FREE)); // la 2e : passe
+  let msg = '';
+  try { await e(insProd('f0f0f0f0-0000-4000-8000-00000000000d', FREE)); }
+  catch (ex) { msg = ex.message; }
+  check('36b. quota produit appliqué en base : la 3e ligne est refusée, plan et quota nommés',
+    /Limite de produits atteinte pour le plan free \(max 2\)/.test(msg), msg);
+
+  // 36c — fail-open : quota retiré, l'insertion repasse. Le mécanisme ne
+  // remplace jamais l'absence de valeur par un nombre inventé. Trois
+  // articles, pas quatre : la 3e tentative refusée en 36b a été annulée
+  // avec sa transaction, elle n'a jamais atterri.
+  await e(`DELETE FROM plan_config WHERE plan = 'free' AND key = 'products'`);
+  await e(insProd('f0f0f0f0-0000-4000-8000-00000000000e', FREE));
+  const compte = (await q(
+    `SELECT count(*)::int n FROM products WHERE user_id = '${FREE}'`)).rows[0];
+  check('36c. quota retiré → l’insertion repasse (fail-open), trois articles pour la boutique',
+    compte.n === 3, JSON.stringify(compte));
+
+  // 36d — l'essai donne les quotas Starter : plan brut 'free', plafond de
+  // starter. On réactive l'essai que la section 35 avait laissé expiré.
+  await e(`UPDATE organizations SET trial_ends_at = now() + interval '1 day' WHERE id = '${ESSAI}'`);
+  for (let i = 1; i <= 5; i++) {
+    await e(insProd(`9e9e9e9e-0000-4000-8000-00000000000${i}`, ESSAI));
+  }
+  msg = '';
+  try { await e(insProd('9e9e9e9e-0000-4000-8000-00000000000f', ESSAI)); }
+  catch (ex) { msg = ex.message; }
+  check('36d. pendant l’essai, le quota lu est celui de starter (max 5, plan starter)',
+    /Limite de produits atteinte pour le plan starter \(max 5\)/.test(msg), msg);
+
+  // 36e — le quota d'équipe, dans les deux tables.
+  const PAYANTE = '55555555-5555-4555-8555-555555555555';
+  await q(`INSERT INTO auth.users (id, email) VALUES ('${PAYANTE}', 'payante@test.ci') ON CONFLICT DO NOTHING`);
+  await q(`INSERT INTO organizations (id, name, slug, plan) VALUES ('${PAYANTE}', 'Boutique Payante', 'boutique-payante', 'starter') ON CONFLICT DO NOTHING`);
+  const inv = (owner, email, token) =>
+    `INSERT INTO employee_invitations (owner_id, email, token) VALUES ('${owner}', '${email}', '${token}')`;
+
+  // gratuit : pas d'employé du tout.
+  msg = '';
+  try { await e(inv(FREE, 'aucun@test.ci', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')); }
+  catch (ex) { msg = ex.message; }
+  check('36e. plan gratuit : l’invitation est refusée, message sans zéro dénué de sens',
+    /ne prend pas d.employ/.test(msg), msg);
+
+  // starter : deux invitations en attente passent, la troisième est refusée.
+  await e(inv(PAYANTE, 'une@test.ci', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'));
+  await e(inv(PAYANTE, 'deux@test.ci', 'cccccccccccccccccccccccccccccccc'));
+  msg = '';
+  try { await e(inv(PAYANTE, 'trois@test.ci', 'dddddddddddddddddddddddddddddddd')); }
+  catch (ex) { msg = ex.message; }
+  check('36e2. starter : 2 invitations ok, la 3e refusée (les en attente occupent un poste)',
+    /Limite du plan starter atteinte : 2 employé\(s\) maximum/.test(msg), msg);
+
+  // l'acceptation ne double-compte pas : redeem_invitation insert le membre
+  // AVANT de marquer l'invitation acceptée — seul le décompte « membres »
+  // s'applique ici, sinon la personne deviendrait son propre refus.
+  await q(`INSERT INTO auth.users (id, email) VALUES ('99999999-9999-4999-8999-999999999999', 'nouveau@test.ci') ON CONFLICT DO NOTHING`);
+  await e(`INSERT INTO business_members (owner_id, member_id, member_name)
+            VALUES ('${PAYANTE}', '99999999-9999-4999-8999-999999999999', 'Nouveau')`);
+  const membres = (await q(
+    `SELECT count(*)::int n FROM business_members WHERE owner_id = '${PAYANTE}'`)).rows[0];
+  check('36e3. l’acceptation passe : le membre entre alors que ses 2 invitations sont encore en attente',
+    membres.n === 1, JSON.stringify(membres));
+
+  // 36f — la fenêtre d'historique, et ce qu'elle n'emporte PAS.
+  await e(`INSERT INTO sales (id, user_id, total_amount, amount_received, settled, created_at) VALUES
+    ('abababab-0000-4000-8000-000000000001', '${FREE}',  9000, 9000, true, now() - interval '40 days'),
+    ('abababab-0000-4000-8000-000000000002', '${FREE}',  7000, 7000, true, now() - interval '5 days'),
+    ('abababab-0000-4000-8000-000000000005', '${ESSAI}', 8000, 8000, true, now() - interval '40 days')`);
+  // La vieille dette : client_phone obligatoire pour une vente non soldée
+  // (CHECK sales_credit_needs_phone), et payment_method='credit' pour que
+  // fill_amount_received() laisse amount_received à 0 — une vente « cash »
+  // à 0 serait re-remplie à plein prix et la dette paraîtrait réglée.
+  await e(`INSERT INTO sales (id, user_id, total_amount, amount_received, payment_method, settled, client_phone, created_at)
+           VALUES ('abababab-0000-4000-8000-000000000003', '${FREE}', 5000, 0, 'credit', false, '97111111', now() - interval '40 days')`);
+  await e(`INSERT INTO sales (id, user_id, total_amount, amount_received, settled, created_at)
+           VALUES ('abababab-0000-4000-8000-000000000004', '${PATRON}', 12000, 12000, true, now() - interval '40 days')`);
+  await e(`INSERT INTO customer_debts (user_id, phone, name) VALUES ('${FREE}', '97111111', 'Vieux Client') ON CONFLICT DO NOTHING`);
+  await e(`INSERT INTO sale_items (sale_id, product_id, product_name, quantity, unit_price, subtotal) VALUES
+    ('abababab-0000-4000-8000-000000000001', 'f0f0f0f0-0000-4000-8000-00000000000b', 'Article gratuit', 1, 10000, 10000),
+    ('abababab-0000-4000-8000-000000000002', 'f0f0f0f0-0000-4000-8000-00000000000b', 'Article gratuit', 1, 7000, 7000)`);
+
+  // Lecture en rôle authenticated (la RLS ne s'applique vraiment qu'alors :
+  // le harnais tourne en superuser).
+  await e(`SET ROLE authenticated`);
+  await q(`SELECT set_config('request.jwt.claim.sub', '${FREE}', false)`);
+  const vues = (await q(
+    `SELECT id::text FROM sales WHERE user_id = '${FREE}'`)).rows.map((r) => r.id);
+  const items = (await q(`
+    SELECT si.sale_id::text FROM sale_items si
+     WHERE si.sale_id IN ('abababab-0000-4000-8000-000000000001',
+                          'abababab-0000-4000-8000-000000000002')`)).rows.map((r) => r.sale_id);
+  const dettes = (await q(`SELECT phone, total_due FROM get_customer_debts()`)).rows;
+
+  // essai actif (36d) : fenêtre de starter, malgré un plan brut 'free'.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${ESSAI}', false)`);
+  const essaiVues = (await q(
+    `SELECT id::text FROM sales WHERE user_id = '${ESSAI}'`)).rows.map((r) => r.id);
+
+  // plan payant : toute l'histoire — le quota 2147483647 compris, borné en
+  // date par within_plan_history (sinon « timestamp out of range »).
+  await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+  const patronVues = (await q(
+    `SELECT id::text FROM sales WHERE user_id = '${PATRON}'`)).rows.map((r) => r.id);
+  await e(`RESET ROLE`);
+
+  const dette = dettes.find((d) => d.phone === '97111111');
+  check('36f. gratuit : la payée vieille disparaît, la récente reste, la dette vieille reste (règlement ≠ avantage payant)',
+    vues.includes('abababab-0000-4000-8000-000000000002')
+      && vues.includes('abababab-0000-4000-8000-000000000003')
+      && !vues.includes('abababab-0000-4000-8000-000000000001')
+      && items.length === 1 && items[0] === 'abababab-0000-4000-8000-000000000002'
+      && dette !== undefined && Number(dette.total_due) === 5000,
+    JSON.stringify({ vues, items, dettes, dette }));
+
+  check('36f2. essai → fenêtre starter ; plan payant → tout l’historique, illimité compris, sans erreur de date',
+    essaiVues.length === 1
+      && essaiVues[0] === 'abababab-0000-4000-8000-000000000005'
+      && patronVues.includes('abababab-0000-4000-8000-000000000004'),
+    JSON.stringify({ essaiVues, patronVues }));
+
+  // 36f3 — anon : vide, surtout pas d'erreur. Sans SECURITY DEFINER sur
+  // within_plan_history, la politique mourrait sur les privilèges de
+  // plan_config (révoqués aux navigateurs) — une ERREUR là où le visiteur
+  // déconnecté obtenait un résultat vide. On donne d'abord à anon les
+  // privilèges de table d'une vraie base Supabase (la section 4 n'accorde
+  // qu'à authenticated ; c'est RLS, pas privilèges, qui filtre anon).
+  await e(`GRANT USAGE ON SCHEMA public TO anon`);
+  await e(`GRANT SELECT ON ALL TABLES IN SCHEMA public TO anon`);
+  await e(`SET ROLE anon`);
+  await q(`SELECT set_config('request.jwt.claim.sub', '', false)`);
+  let anonN = -1;
+  let anonOk = true;
+  try { anonN = (await q(`SELECT count(*)::int n FROM sales`)).rows[0].n; }
+  catch (ex) { anonOk = false; anonN = ex.message; }
+  await e(`RESET ROLE`);
+  check('36f3. anon : zéro ligne et zéro erreur de privilège dans la politique',
+    anonOk && anonN === 0, JSON.stringify(anonN));
+
+  // 36g — l'export n'est pas qu'un bouton : le mapping « exportCsv » →
+  // starter vit dans require_feature(), et c'est LUI que devront appeler les
+  // routes d'export du Sprint 21. Les données qui remplissent un export sont
+  // déjà fenêtrées par la politique (36f) ; ce test garantit que la
+  // fonctionnalité elle-même refuse en base, pas seulement dans l'écran —
+  // et qu'elle suit l'essai, comme tout ce qui lit le plan.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${FREE}', false)`);
+  let msgExport = '';
+  try { await q(`SELECT require_feature('exportCsv')`); }
+  catch (ex) { msgExport = ex.message; }
+  check('36g. exportCsv refusé en plan gratuit par la base elle-même',
+    /exportCsv.*plan starter/i.test(msgExport), msgExport || 'ACCEPTÉ !');
+
+  await e(`UPDATE organizations SET trial_started_at = now(),
+            trial_ends_at = now() + interval '1 day'
+            WHERE id = '${FREE}'`);
+  let essaiExport = false;
+  try { essaiExport = (await q(`SELECT require_feature('exportCsv') x`)).rows[0].x === true; }
+  catch { essaiExport = false; }
+  check('36g2. pendant l’essai, exportCsv est ouvert (le verrou lit le plan effectif)',
+    essaiExport === true, String(essaiExport));
+
+  await e(`UPDATE organizations SET trial_started_at = now() - interval '15 days',
+            trial_ends_at = now() - interval '1 day'
+            WHERE id = '${FREE}'`);
+  let msgApres = '';
+  try { await q(`SELECT require_feature('exportCsv')`); }
+  catch (ex) { msgApres = ex.message; }
+  check('36g3. essai expiré : refermé, malgré des colonnes de trial remplies',
+    /exportCsv/i.test(msgApres), msgApres || 'ACCEPTÉ !');
+  await e(`UPDATE organizations SET trial_started_at = NULL, trial_ends_at = NULL
+            WHERE id = '${FREE}'`);
+
+  // 36h — rejouable : trois triggers, la politique de sales, et les quotas
+  // déjà posés intacts (la migration ne réécrit pas la configuration).
+  await e(readSql('migration_plan_config.sql'));
+  const rejeu = (await q(`
+    SELECT (SELECT count(*)::int FROM pg_trigger
+             WHERE tgname IN ('enforce_product_limit', 'enforce_employee_limit', 'enforce_member_limit')
+               AND NOT tgisinternal) AS triggers,
+           (SELECT count(*)::int FROM pg_policies
+             WHERE policyname = 'user_sales_select' AND tablename = 'sales') AS politiques,
+           (SELECT value FROM plan_config WHERE plan = 'free' AND key = 'history_days') AS quota_histoire`)).rows[0];
+  check('36h. le rejeu garde 3 triggers, la politique de sales, et les quotas posés',
+    rejeu.triggers === 3 && rejeu.politiques === 1 && rejeu.quota_histoire === 30,
+    JSON.stringify(rejeu));
+}
+
+// ─── 37. Périodes prépayées Mobile Money ───────────────────────────────
+// Sprint 19, sans clé de prestataire : la base ne connaît que les COMMANDES
+// et leur activation. Ce qui est vérifié ici, dans l'ordre du cycle de vie :
+//   • activation → plan + échéance, puis idempotence (webhook rejoué) et
+//     prolongation (1 mois puis 3 = 4, pas « depuis maintenant ») ;
+//   • échéance → TOUT retombe en gratuit, y compris les quotas appliqués
+//     par le trigger lui-même, puisque tout luit current_org_plan() ;
+//   • l'essai n'est jamais éteint par une échéance résiduelle ;
+//   • le navigateur lit SES commandes et rien d'autre, n'écrit rien, et
+//     n'appelle jamais l'activation ; anon n'a rien du tout.
+// Montants (7777) et quotas (4) sont des FIXTURES de test, jamais l'offre.
+console.log('\n▸ Périodes prépayées Mobile Money');
+{
+  // Rejeu d'entrée : la section 35 a re-collé migration_trial.sql, qui
+  // remet current_org_plan() sans échéance ; la section 36 a re-collé
+  // migration_plan_config.sql. Ce fichier arrive juste après les deux dans
+  // l'ORDER — ce rejeu rétablit l'ordre réel du déploiement.
+  await e(readSql('migration_mobilemoney.sql'));
+
+  await e(`UPDATE organizations
+             SET plan = 'free', trial_started_at = NULL, trial_ends_at = NULL,
+                 plan_valid_until = NULL
+           WHERE id = '${FREE}'`);
+
+  // 37a — première commande : activée en service_role (le rôle que la route
+  // callback utilise réellement), le plan et son échéance suivent.
+  await e(`INSERT INTO payment_orders (user_id, plan, period_months, amount, provider, reference)
+           VALUES ('${FREE}', 'starter', 1, 7777, 'sandbox', 'ref-37a')`);
+  await q(`SELECT set_config('request.jwt.claim.sub', '${FREE}', false)`);
+  let actA = null, actErr = '';
+  await e(`SET ROLE service_role`);
+  try { actA = (await q(`SELECT activate_prepaid_plan('ref-37a') x`)).rows[0].x; }
+  catch (ex) { actErr = ex.message; }
+  await e(`RESET ROLE`);
+  const etatA = (await q(
+    `SELECT plan, plan_valid_until FROM organizations WHERE id = '${FREE}'`)).rows[0];
+  const utileA = (await q(`SELECT current_org_plan() p`)).rows[0].p;
+  // Comparaison en timestamps, pas « delta en jours − intervalle en mois » :
+  // extract(epoch) compte un mois pour 30 jours, l'écart affichait toujours
+  // un ou deux jours d'écart artificiel.
+  const ecartA = (await q(`
+    SELECT abs(extract(epoch FROM plan_valid_until - (now() + interval '1 month')))::int s
+      FROM organizations WHERE id = '${FREE}'`)).rows[0].s;
+  check('37a. commande activée : plan starter, échéance à ~1 mois, plan effectif starter',
+    actA === true && etatA.plan === 'starter' && utileA === 'starter' && ecartA < 86400,
+    JSON.stringify({ actA, actErr, utileA, ecartA, etatA }));
+
+  // 37b — idempotence : les prestataires rejouent leurs webhooks ; une
+  // seconde activation doit dire « déjà payée » sans ajouter un mois.
+  let actB = null, actErrB = '';
+  await e(`SET ROLE service_role`);
+  try { actB = (await q(`SELECT activate_prepaid_plan('ref-37a') x`)).rows[0].x; }
+  catch (ex) { actErrB = ex.message; }
+  await e(`RESET ROLE`);
+  const etatB = (await q(
+    `SELECT plan_valid_until FROM organizations WHERE id = '${FREE}'`)).rows[0];
+  check('37b. webhook rejoué : « payée » encore true, échéance strictement inchangée',
+    actB === true && +new Date(etatB.plan_valid_until) === +new Date(etatA.plan_valid_until),
+    JSON.stringify({ actB, actErrB, avant: etatA.plan_valid_until, apres: etatB.plan_valid_until }));
+
+  // 37c — prolongation : renouveler le même plan AJOUTE à la période en
+  // cours. 1 mois puis 3 ≈ 4 mois depuis maintenant, pas 3 depuis aujourd'hui.
+  await e(`INSERT INTO payment_orders (user_id, plan, period_months, amount, provider, reference)
+           VALUES ('${FREE}', 'starter', 3, 7777, 'sandbox', 'ref-37c')`);
+  let actC = null, actErrC = '';
+  await e(`SET ROLE service_role`);
+  try { actC = (await q(`SELECT activate_prepaid_plan('ref-37c') x`)).rows[0].x; }
+  catch (ex) { actErrC = ex.message; }
+  await e(`RESET ROLE`);
+  const ecartC = (await q(`
+    SELECT abs(extract(epoch FROM plan_valid_until - (now() + interval '4 months')))::int s
+      FROM organizations WHERE id = '${FREE}'`)).rows[0].s;
+  check('37c. prolongation : 1 mois puis 3 = ~4 mois depuis l’activation initiale',
+    actC === true && ecartC < 86400, JSON.stringify({ actC, actErrC, ecartC }));
+
+  // 37d — échéance passée : tout retombe en gratuit. Trois miroirs du même
+  // plan utile doivent dire la même chose — current_org_plan(), le verrou
+  // require_feature(), et le trigger de quota (qui applique alors le quota
+  // gratuit, fixture 4 : le 4e article passe, le 5e est refusé).
+  await e(`UPDATE organizations SET plan_valid_until = now() - interval '1 second'
+            WHERE id = '${FREE}'`);
+  const utileD = (await q(`SELECT current_org_plan() p`)).rows[0].p;
+  let msgD = '';
+  try { await q(`SELECT require_feature('exportCsv')`); }
+  catch (ex) { msgD = ex.message; }
+
+  await e(`INSERT INTO plan_config (plan, key, value) VALUES ('free', 'products', 4)
+             ON CONFLICT (plan, key) DO UPDATE SET value = 4`);
+  let quatreOk = false, cinqMsg = '';
+  try {
+    await e(`INSERT INTO products (id, user_id, name, price_buy, price_sell, stock_qty)
+             VALUES ('7a7a7a7a-0000-4000-8000-000000000001', '${FREE}', '4e article prépayé', 1, 2, 1)`);
+    quatreOk = true;
+  } catch (ex) { cinqMsg = ex.message; }
+  let refusCinq = false;
+  try {
+    await e(`INSERT INTO products (id, user_id, name, price_buy, price_sell, stock_qty)
+             VALUES ('7a7a7a7a-0000-4000-8000-000000000002', '${FREE}', '5e article prépayé', 1, 2, 1)`);
+  } catch (ex) { refusCinq = /atteinte|maximum/i.test(ex.message); cinqMsg = ex.message; }
+  check('37d. échéance : plan effectif gratuit, export refusé, quota gratuit appliqué par le trigger',
+    utileD === 'free' && /exportCsv/i.test(msgD) && quatreOk && refusCinq,
+    JSON.stringify({ utileD, msgD, quatreOk, cinqMsg }));
+
+  // 37e — la coexistence essai/échéance : plan BRUT gratuit + essai actif +
+  // échéance résiduelle d'une période d'avant. La branche échéance exige un
+  // plan brut payant, elle ne touche donc jamais à l'essai.
+  await e(`UPDATE organizations
+             SET plan = 'free', trial_ends_at = now() + interval '10 days',
+                 plan_valid_until = now() - interval '3 days'
+           WHERE id = '${FREE}'`);
+  const utileE = (await q(`SELECT current_org_plan() p`)).rows[0].p;
+  check('37e. essai actif malgré une échéance résiduelle : le gratuit brut protège l’essai',
+    utileE === 'starter', utileE);
+
+  // 37f — le navigateur lit SES commandes, et n'écrit rien : les privilèges
+  // (pas seulement la RLS) refusent, donc l'erreur est nette et non un
+  // « 0 ligne » silencieux. anon n'a même pas la lecture.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${FREE}', false)`);
+  await e(`SET ROLE authenticated`);
+  let insErr = '', updErr = '', delErr = '', vues = -1;
+  try {
+    await e(`INSERT INTO payment_orders (user_id, plan, period_months, amount, provider, reference)
+             VALUES ('${FREE}', 'starter', 1, 1, 'sandbox', 'ref-37f')`);
+  } catch (ex) { insErr = ex.message; }
+  try { await e(`UPDATE payment_orders SET status = 'paid' WHERE reference = 'ref-37a'`); }
+  catch (ex) { updErr = ex.message; }
+  try { await e(`DELETE FROM payment_orders WHERE reference = 'ref-37a'`); }
+  catch (ex) { delErr = ex.message; }
+  try { vues = (await q(`SELECT count(*)::int n FROM payment_orders`)).rows[0].n; }
+  catch (ex) { vues = ex.message; }
+  await e(`RESET ROLE`);
+  const anonSelect = (await q(
+    `SELECT has_table_privilege('anon', 'payment_orders', 'SELECT') x`)).rows[0].x;
+  check('37f. navigateur : lecture de SES commandes seule, écriture refusée, anon rien',
+    /permission denied/i.test(insErr) && /permission denied/i.test(updErr)
+      && /permission denied/i.test(delErr) && vues === 2 && anonSelect === false,
+    JSON.stringify({ insErr, updErr, delErr, vues, anonSelect }));
+
+  // 37g — l'activation n'est pas appelable depuis le navigateur : EXECUTE
+  // révoqué à authenticated. C'est la route webhook, vérifiée, qui appelle.
+  await e(`SET ROLE authenticated`);
+  let svcErr = '';
+  try { await q(`SELECT activate_prepaid_plan('ref-37a')`); }
+  catch (ex) { svcErr = ex.message; }
+  await e(`RESET ROLE`);
+  check('37g. activation interdite au navigateur (EXECUTE service_role seulement)',
+    /permission denied/i.test(svcErr), svcErr || 'ACCEPTÉE !');
+
+  // 37h — un employé de la boutique ne voit AUCUNE commande : la policy
+  // compare à auth.uid(), pas au patron, contrairement à la plupart des
+  // tables de ce dépôt — les commandes n'affairent pas à l'équipe.
+  const CAISSIER = '88888888-8888-4888-8888-888888888837';
+  await e(`INSERT INTO auth.users (id, email) VALUES ('${CAISSIER}', 'caissier37@test.ci') ON CONFLICT DO NOTHING`);
+  await e(`INSERT INTO business_members (owner_id, member_id, member_name)
+             VALUES ('${FREE}', '${CAISSIER}', 'Caissier 37')`);
+  await q(`SELECT set_config('request.jwt.claim.sub', '${CAISSIER}', false)`);
+  await e(`SET ROLE authenticated`);
+  let employeVues = -1;
+  try { employeVues = (await q(`SELECT count(*)::int n FROM payment_orders`)).rows[0].n; }
+  catch (ex) { employeVues = ex.message; }
+  await e(`RESET ROLE`);
+  check('37h. un employé ne voit aucune commande',
+    employeVues === 0, JSON.stringify(employeVues));
+
+  // 37i — rejeu : ALTER IF NOT EXISTS, DROP puis CREATE (trigger et
+  // policy), CREATE OR REPLACE — deux fois de suite sans bouger l'état.
+  await e(readSql('migration_mobilemoney.sql'));
+  await e(readSql('migration_mobilemoney.sql'));
+  const rejeu37 = (await q(`
+    SELECT (SELECT count(*)::int FROM information_schema.columns
+             WHERE table_name = 'payment_orders') AS colonnes,
+           (SELECT count(*)::int FROM pg_trigger
+             WHERE tgrelid = 'payment_orders'::regclass AND NOT tgisinternal) AS triggers,
+           (SELECT count(*)::int FROM pg_policies
+             WHERE tablename = 'payment_orders') AS politiques`)).rows[0];
+  check('37i. double rejeu : 14 colonnes, 1 trigger, 1 politique — rien ne se duplique',
+    rejeu37.colonnes === 14 && rejeu37.triggers === 1 && rejeu37.politiques === 1,
+    JSON.stringify(rejeu37));
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);

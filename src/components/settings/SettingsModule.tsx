@@ -1,31 +1,41 @@
 'use client';
 
 import { useState } from 'react';
-import { Save, Loader2, CreditCard, Zap, CheckCircle, ExternalLink, Building2, Globe, Smartphone } from 'lucide-react';
+import { Save, Loader2, CreditCard, Zap, CheckCircle, ExternalLink, Building2, Globe, Smartphone, CalendarClock } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
-import { PLAN_LABELS, PLAN_LIMITS } from '@/lib/utils/plans';
+import {
+  PLAN_LABELS, PLAN_LIMITS, essaiActif, lignesQuotas, montantPeriode,
+  prixMensuelLabel, prixAAnnuelLabel, type DureePeriode, type PlanPayant,
+} from '@/lib/utils/plans';
+import { formatCFA } from '@/lib/utils/currency';
 import { normalizeDomain, normalizeUiMode, DOMAIN_LABELS, DOMAIN_DESCRIPTIONS, type Domain, type UiMode } from '@/lib/modules';
 import type { Plan } from '@/types';
 
-const PLANS: { id: Plan; price: string; features: string[] }[] = [
+/**
+ * Présentation des plans de l'onglet Facturation.
+ *
+ * Les quantités affichées (plafond de produits, postes, fenêtre
+ * d'historique) viennent des quotas de configuration — écrire ici un chiffre
+ * reviendrait à publier la stratégie tarifaire dans le dépôt public. Les
+ * lignes sans quantité sont de la copie commerciale, pas des valeurs : elles
+ * restent ici.
+ */
+const PLANS: { id: Plan; features: string[] }[] = [
   {
     id: 'free',
-    price: 'Gratuit',
-    features: ['30 produits', '1 employé', 'Historique 30 jours', 'Caisse + scanner'],
+    features: [...lignesQuotas('free'), 'Caisse + scanner'],
   },
   {
     id: 'starter',
-    price: '3 000 FCFA / mois',
-    features: ['200 produits', '5 employés', 'Historique 1 an', 'Export CSV', 'Rapports avancés'],
+    features: [...lignesQuotas('starter'), 'Export CSV', 'Rapports avancés'],
   },
   {
     id: 'pro',
-    price: '9 000 FCFA / mois',
-    features: ['Produits illimités', 'Employés illimités', 'Historique illimité', 'Prévisions IA', 'Support prioritaire'],
+    features: [...lignesQuotas('pro'), 'Prévisions IA', 'Support prioritaire'],
   },
 ];
 
@@ -45,6 +55,30 @@ export function SettingsModule() {
   const [loadingCheckout, setLoadingCheckout] = useState<Plan | null>(null);
   const [loadingPortal, setLoadingPortal] = useState(false);
   const [billingError, setBillingError] = useState('');
+  const [loadingTrial, setLoadingTrial] = useState(false);
+  // Mobile Money : durée choisie pour la période prépayée, et le plan en
+  // cours d'ouverture de page de paiement.
+  const [periode, setPeriode] = useState<DureePeriode>(1);
+  const [loadingMobile, setLoadingMobile] = useState<PlanPayant | null>(null);
+
+  // Le plan BRUT (org.plan) dit ce qui est payé ; c'est lui qui décide de
+  // l'éligibilité à l'essai — pendant l'essai, `plan` (effectif) vaut déjà
+  // 'starter' et ne dirait plus jamais « éligible ».
+  const planBrut = org?.plan ?? 'free';
+  const enEssai = essaiActif(planBrut, org?.trial_ends_at);
+
+  const demarrerEssai = async () => {
+    setBillingError('');
+    setLoadingTrial(true);
+    // La base décide (patron seulement, plan gratuit seulement, une fois
+    // pour toujours) : l'écran n'anticipe rien, il se contente de relire
+    // la boutique après le RPC — c'est refreshOrg qui basculera le plan
+    // effectif en starter.
+    const { error } = await supabase.rpc('start_free_trial');
+    setLoadingTrial(false);
+    if (error) { setBillingError(error.message); return; }
+    await refreshOrg();
+  };
 
   // Domaine d'activité : la bascule commerce ⇄ restauration. Aucun risque —
   // elle ne touche ni aux données, ni aux quotas, ni aux RLS : elle change la
@@ -167,6 +201,39 @@ export function SettingsModule() {
       setBillingError((e as Error).message);
     } finally {
       setLoadingPortal(false);
+    }
+  };
+
+  // Mobile Money : la route recalcule le montant depuis la configuration —
+  // l'écran n'envoie que { plan, mois }. Si la route refuse (prestataire non
+  // branché, prix absent), l'erreur rejoint le bandeau d'en haut de l'onglet.
+  const payerMobileMoney = async (cible: PlanPayant) => {
+    setBillingError('');
+    setLoadingMobile(cible);
+
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch('/api/payments/order', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${session?.access_token}`,
+        },
+        body: JSON.stringify({ plan: cible, mois: periode }),
+      });
+
+      const json = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        setBillingError(json?.error ?? `Erreur serveur (${res.status})`);
+        return;
+      }
+      if (json?.redirectUrl) window.location.href = json.redirectUrl;
+      else setBillingError('Aucune page de paiement reçue.');
+    } catch (e) {
+      setBillingError((e as Error).message);
+    } finally {
+      setLoadingMobile(null);
     }
   };
 
@@ -349,6 +416,70 @@ export function SettingsModule() {
             </p>
           )}
 
+          {/* Essai gratuit de 14 jours */}
+          {planBrut === 'free' && (
+            <Card className={`border-2 ${enEssai ? 'border-indigo-300 bg-indigo-50' : 'border-slate-200'}`}>
+              <CardContent className="p-4 space-y-2">
+                {enEssai ? (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <Zap className="h-4 w-4 text-indigo-600" />
+                      <p className="text-sm font-semibold text-indigo-800">Essai Starter en cours</p>
+                    </div>
+                    <p className="text-xs text-indigo-700">
+                      Il se termine le{' '}
+                      {new Date(org!.trial_ends_at!).toLocaleDateString('fr-FR', {
+                        day: '2-digit', month: 'long', year: 'numeric',
+                      })}
+                      {(() => {
+                        const restants = Math.ceil(
+                          (new Date(org!.trial_ends_at!).getTime() - Date.now()) / 86400000
+                        );
+                        return restants <= 1
+                          ? ' — dernier jour'
+                          : ` — ${restants} jours restants`;
+                      })()}
+                      . Ensuite la boutique revient au plan Gratuit, sans prélèvement ni perte de données.
+                    </p>
+                  </>
+                ) : org?.trial_started_at ? (
+                  // Déjà expiré : l'essai ne se relance jamais (une fois par
+                  // boutique), dire les choses vaut mieux qu'un bouton qui
+                  // échouerait.
+                  <p className="text-xs text-slate-500">
+                    Votre essai de 14 jours est terminé. Le plan Gratuit reste entièrement
+                    utilisable — les données n&apos;ont jamais bougé.
+                  </p>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <Zap className="h-4 w-4 text-indigo-600" />
+                      <p className="text-sm font-semibold text-slate-800">
+                        Essayer Starter pendant 14 jours
+                      </p>
+                    </div>
+                    <p className="text-xs text-slate-500">
+                      Sans carte bancaire, et en un clic. Au bout de 14 jours, retour au plan
+                      Gratuit — sans prélèvement, sans surprise. L&apos;essai n&apos;est proposé qu&apos;une
+                      fois par boutique : à vous de choisir le bon moment.
+                    </p>
+                    <Button
+                      size="sm"
+                      onClick={demarrerEssai}
+                      disabled={loadingTrial}
+                      className="bg-indigo-600 hover:bg-indigo-700 gap-1 text-xs"
+                    >
+                      {loadingTrial
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        : <Zap className="h-3.5 w-3.5" />}
+                      Démarrer l&apos;essai
+                    </Button>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {/* Plans */}
           <div className="space-y-3">
             {PLANS.map((p) => {
@@ -368,7 +499,14 @@ export function SettingsModule() {
                           <Badge className="bg-amber-100 text-amber-700 text-xs">Populaire</Badge>
                         )}
                       </div>
-                      <p className="text-sm font-semibold text-slate-600">{p.price}</p>
+                      <p className="text-sm font-semibold text-slate-600">
+                        {prixMensuelLabel(p.id)}
+                        {prixAAnnuelLabel(p.id) && (
+                          <span className="ml-2 font-normal text-slate-400">
+                            ou {prixAAnnuelLabel(p.id)}
+                          </span>
+                        )}
+                      </p>
                       <ul className="space-y-0.5">
                         {p.features.map((f) => (
                           <li key={f} className="text-xs text-slate-500 flex items-center gap-1.5">
@@ -400,6 +538,85 @@ export function SettingsModule() {
               );
             })}
           </div>
+
+          {/* Période prépayée — Mobile Money */}
+          <Card className="border-slate-200">
+            <CardContent className="p-4 space-y-3">
+              <div className="flex items-center gap-2">
+                <Smartphone className="h-4 w-4 text-emerald-600" />
+                <p className="text-sm font-medium text-slate-700">
+                  Payer par Mobile Money — période prépayée
+                </p>
+              </div>
+              <p className="text-xs text-slate-500">
+                Vous payez une période d&apos;avance (1, 3 ou 12 mois) sur votre
+                téléphone, sans carte bancaire et sans prélèvement automatique :
+                la période se termine d&apos;elle-même, et vous la prolongez quand
+                vous le voulez.
+              </p>
+
+              {planBrut !== 'free' && org?.plan_valid_until &&
+                new Date(org.plan_valid_until).getTime() > Date.now() && (
+                <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-md px-3 py-2 flex items-center gap-1.5">
+                  <CalendarClock className="h-3.5 w-3.5 shrink-0" />
+                  Période {PLAN_LABELS[planBrut]} active jusqu&apos;au{' '}
+                  {new Date(org.plan_valid_until).toLocaleDateString('fr-FR', {
+                    day: '2-digit', month: 'long', year: 'numeric',
+                  })} — prolongez-la ci-dessous, la fin de période est repoussée.
+                </p>
+              )}
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-slate-500">Durée :</span>
+                {([1, 3, 12] as DureePeriode[]).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    onClick={() => setPeriode(m)}
+                    disabled={loadingMobile !== null}
+                    aria-pressed={periode === m}
+                    className={`px-2.5 py-1 rounded-full text-xs border transition-colors ${
+                      periode === m
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'bg-white text-slate-600 border-slate-300 hover:border-slate-400'
+                    }`}
+                  >
+                    {m} mois
+                  </button>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                {(['starter', 'pro'] as PlanPayant[]).map((p) => {
+                  const montant = montantPeriode(p, periode);
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => payerMobileMoney(p)}
+                      disabled={montant === null || loadingMobile !== null}
+                      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm hover:border-emerald-400 hover:bg-emerald-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      <span className="font-medium text-slate-800">{PLAN_LABELS[p]}</span>
+                      <span className="block text-xs text-slate-500">
+                        {montant === null
+                          ? 'Prix non configuré'
+                          : loadingMobile === p
+                            ? 'Ouverture…'
+                            : formatCFA(montant)}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <p className="text-[11px] text-slate-400">
+                Parcours de démonstration tant que le prestataire Mobile Money
+                n&apos;est pas branché : aucun débit réel n&apos;a lieu, la
+                confirmation est simulée (bac à sable).
+              </p>
+            </CardContent>
+          </Card>
 
           {/* Moyens de paiement */}
           <div className="space-y-2">

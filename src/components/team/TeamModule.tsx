@@ -164,10 +164,14 @@ export function TeamModule() {
     // pas les compter ici laisserait l'échec survenir plus tard, à l'acceptation,
     // sans raison visible pour l'utilisateur.
     if (!canAddEmployee(plan, members.length + invitations.length)) {
+      const quota = PLAN_LIMITS[plan].employees;
+      // « autorise 0 employé(s) » se lit comme un bug : le plan gratuit ne
+      // prend tout simplement pas d'employé, et dire les choses ainsi est
+      // plus clair qu'un zéro.
       setFormError(
-        // PLAN_LIMITS[plan] est un OBJET : interpolé tel quel il s'affichait
-        // « autorise [object Object] employé(s) ». C'est .employees qu'il faut.
-        `Limite atteinte. Le plan ${PLAN_LABELS[plan]} autorise ${PLAN_LIMITS[plan].employees} employé(s), invitations en attente comprises. Passez au plan supérieur dans Paramètres.`
+        quota === 0
+          ? `Le plan ${PLAN_LABELS[plan]} n'autorise pas d'employé (invitations en attente comprises). Passez au plan supérieur dans Paramètres.`
+          : `Limite atteinte. Le plan ${PLAN_LABELS[plan]} autorise ${quota} employé${quota > 1 ? 's' : ''}, invitations en attente comprises. Passez au plan supérieur dans Paramètres.`
       );
       return;
     }

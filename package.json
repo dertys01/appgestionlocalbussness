@@ -20,7 +20,8 @@
     "qa:audit": "node qa/audit.mjs",
     "qa:parcours": "node qa/parcours.mjs",
     "icons:gen": "node scripts/gen-icons.mjs",
-    "stats:activation": "node scripts/funnel.mjs"
+    "stats:activation": "node scripts/funnel.mjs",
+    "sync:plans": "node scripts/sync-plan-config.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",

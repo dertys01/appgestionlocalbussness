@@ -1,4 +1,19 @@
 import '@testing-library/jest-dom/vitest';
+import { FORMULES_TEST } from './formules.fixture';
+
+/**
+ * Configuration des formules pour les tests.
+ *
+ * Les prix et quotas viennent de `NEXT_PUBLIC_PLANS_CONFIG` — jamais du code
+ * (dépôt public). Les tests ont donc leurs propres valeurs, posées AVANT que
+ * `src/lib/utils/plans.ts` ne soit importé par un test : elles sont
+ * volontairement quelconques (et non celles de l'offre réelle) pour qu'un
+ * test qui passerait ici ne devine jamais la stratégie tarifaire.
+ *
+ * Un test qui veut vérifier un plafond lit `PLAN_LIMITS` — il ne répète pas
+ * le nombre dans son assertion.
+ */
+process.env.NEXT_PUBLIC_PLANS_CONFIG = JSON.stringify(FORMULES_TEST);
 
 /**
  * jsdom n'implémente pas `matchMedia`. Un composant qui s'en sert pour

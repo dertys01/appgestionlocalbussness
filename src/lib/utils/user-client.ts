@@ -75,3 +75,32 @@ export async function readUser(req: NextRequest): Promise<{ id: string } | null>
   if (error || !data?.user) return null;
   return { id: data.user.id };
 }
+
+/**
+ * Vérifie que l'appelant EST un patron, et renvoie (identité, client).
+ *
+ * Un·e employé·e ne gère ni l'équipe ni la facturation :
+ * `get_business_owner_id()` renverrait l'id du patron pour l'employé aussi,
+ * la comparaison doit donc porter sur l'identité du patron lui-même.
+ * Identiques si et seulement si l'appelant est un patron. La fonction voit le
+ * tenant réel même sous RLS, là où une lecture directe de `business_members`
+ * ne verrait rien et laisserait passer tout le monde.
+ *
+ * `message` : ce que la route répond à un employé — chaque action parle de
+ * son propre geste (inviter, souscrire…).
+ */
+export async function requirePatron(
+  req: NextRequest,
+  message = 'Seul le patron peut effectuer cette action',
+): Promise<{ error: string; status: number } | { user: { id: string }; db: SupabaseClient }> {
+  const user = await readUser(req);
+  if (!user) return { error: 'Non authentifié', status: 401 };
+
+  const db = clientFor(req);
+  const { data: patron, error: errPatron } = await db.rpc('get_business_owner_id');
+  if (errPatron) throw errPatron;
+
+  if (patron !== user.id) return { error: message, status: 403 };
+
+  return { user, db };
+}

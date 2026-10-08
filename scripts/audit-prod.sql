@@ -10,10 +10,11 @@
 --    MANQUANTE    = fonction absente de la base
 --    EN PLUS      = fonction présente en base mais pas dans le dépôt
 --
---  45 fonctions · ordre des sections = APPLY_MIGRATIONS.sql
+--  49 fonctions · ordre des sections = APPLY_MIGRATIONS.sql
 -- ============================================================================
 WITH expect(sig, brut_md5, code_md5) AS (
   VALUES
+    ('activate_prepaid_plan(text)', '11f2150b9a0703d9fc614a56a9ea72ed', '0b9971edb05ee1e252b57cf4ce1dd9b3'),
     ('add_recipe_ingredient(uuid,uuid,numeric)', 'e4c0dad4130d66ec3a640b89a0ce5bba', '8337ef1fe6a90cc392cd66df125e56fc'),
     ('archive_product(uuid)', '610b13ef4713663065496c91f73a8786', '9dd0a32e27855218c7983ae482f6ba37'),
     ('beta_claim_slot()', 'e004c9eaec49a5b43916a2adba0fe4ad', 'd0b3e0b43bb0d5f7f8d4a6ccc2b01c1e'),
@@ -24,13 +25,14 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('business_members_remove(uuid)', '5f36ed6ff400cc61947a140820c5730f', '3fdd9d32586d3d98153089078ce2dd94'),
     ('business_members_set_role(uuid,text)', '89a1cd9f06512fb862d59d3a5da9a19b', '89f32a91dcf97b1cae903be3cb2c0c68'),
     ('can_manage_products()', '7c1b153eba2bc02e61338c6b4becb01e', '475b14d5a81518d7f37aa3849484189d'),
-    ('check_product_limit()', 'c425ef7076490e9b8cc1e9eeb089ddd0', 'b16a2309f37c3ebf6b5d2196c68d67fc'),
+    ('check_employee_limit()', '828a3a5f9922e321d185623e33fc04fb', 'f904113a6081292e40040c09e64daab8'),
+    ('check_product_limit()', 'd64eeeeff7e006665fc411182193e1b9', '832d753ae1e76152276f0732c2897b51'),
     ('check_product_supplier_tenant()', 'a67a791a03cdd317a211be3c870759e6', '03adf983a5186d2d128430f334e6237f'),
     ('claim_webhook_event(text,text,text)', '40a1a3cbee1bf96bae5f60debca639fa', '0c164db9340e69ec622cd45bae135cb4'),
     ('close_beta_program()', '28a8854e2d5e4e0ebf74288bfa0a0cae', '5a82cf9f604a045ca4f163abc3cd1650'),
     ('close_table_order(uuid,text,numeric,integer,text,text,numeric)', '0203a702c3229e4d060d929cfb7e1285', '3954e9994a8ec5e873973912f02ebd0a'),
     ('create_sale(jsonb,text,text,text)', 'd08703ca15f146827f8479ea7e9c9f30', 'c528887ee89306bc0a071f9ea39a08f6'),
-    ('current_org_plan()', '85e3ffea01aa25bdc1b405db6e2f8836', '8354e3aaa7ae02d48d1ae89a11c33bb2'),
+    ('current_org_plan()', 'ca233084cdc9d653a98bd164a4eae2ac', 'db407b6e27b88cf7f4a0e454971fd30a'),
     ('fill_amount_received()', '35e03e2e5bc95e91ad3d43a5e0c5e8e2', '5e1305ee23c60dc867e4b46cd49f9219'),
     ('freeze_sale_item_cost()', '51ea5fb2804004f581857f43c0702706', '9c10ad43d8f21aed0a3b77accd71c0da'),
     ('get_activation_funnel(date,date,timestampwithtimezone)', '2e33c88246c4097b8e8db48c88139f67', '4074908f327846331cfe0fe8f50785d8'),
@@ -57,8 +59,10 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('seed_expense_categories()', '08bc2bda2ee1a6f10c270b8388a23526', '1549868c21e25fd23812c0e698168e6f'),
     ('send_order_items(uuid)', '64dc6cd05843ea786f32e8579966c76f', '9bd93f17cce950d628f5911fc10de731'),
     ('set_beta_slots(integer)', '253f7aa9e61ee16c11f41570f2704ef3', '6ac8fd92fdacfa02c138eccc63564da1'),
+    ('start_free_trial()', '00b183213c6ea80e15bdcdf2acd2dbb2', 'e52ae4618f94d46bd1d53ed09ce14c4d'),
     ('update_org_timestamp()', '9baf00d43cdeb2cd0e55c1de045be21b', 'f019c2a85daf0ed4058b77a7a14664a9'),
-    ('update_updated_at()', 'da5ac28a58c8b4bb30209bf0d3d7082c', '8d0d99f0f246f51e6e468e02e03e428b')
+    ('update_updated_at()', 'da5ac28a58c8b4bb30209bf0d3d7082c', '8d0d99f0f246f51e6e468e02e03e428b'),
+    ('within_plan_history(timestampwithtimezone)', 'c07576f52d7c6e0614cf73e1ed6ae59f', 'd766ce063a6eb49dc4f2a4bb46431f58')
 ),
 src AS (
   SELECT p.oid::regprocedure::text AS sig, p.prosrc
