@@ -10,7 +10,7 @@
 --    MANQUANTE    = fonction absente de la base
 --    EN PLUS      = fonction présente en base mais pas dans le dépôt
 --
---  44 fonctions · ordre des sections = APPLY_MIGRATIONS.sql
+--  45 fonctions · ordre des sections = APPLY_MIGRATIONS.sql
 -- ============================================================================
 WITH expect(sig, brut_md5, code_md5) AS (
   VALUES
@@ -33,6 +33,7 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('current_org_plan()', '85e3ffea01aa25bdc1b405db6e2f8836', '8354e3aaa7ae02d48d1ae89a11c33bb2'),
     ('fill_amount_received()', '35e03e2e5bc95e91ad3d43a5e0c5e8e2', '5e1305ee23c60dc867e4b46cd49f9219'),
     ('freeze_sale_item_cost()', '51ea5fb2804004f581857f43c0702706', '9c10ad43d8f21aed0a3b77accd71c0da'),
+    ('get_activation_funnel(date,date,timestampwithtimezone)', '2e33c88246c4097b8e8db48c88139f67', '4074908f327846331cfe0fe8f50785d8'),
     ('get_business_owner_id()', 'f1a35c5ce9ed572c1a3313ba0be69fb7', '6cd22294040166c9e6714901940420d2'),
     ('get_cash_flow(date,date)', 'd10976d2751a09b723cf67184725b566', '35094efd447bccb61360005a3876c9ca'),
     ('get_customer_debts()', '1167942d7e174732e05ba3854db67b1a', 'cbf003dd943e7232899d57267a5412ff'),

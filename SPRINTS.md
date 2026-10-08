@@ -947,6 +947,11 @@ comparerait un **numéro de modèle** aux prix de la boutique.
 - **Reprendre la dernière vente** : standard de tout POS du commerce. Ça
   **ajoute** au panier, ça ne remplace jamais — donc aucune confirmation, et un
   clic ne peut rien détruire. Stock plafonné, lignes disparues comptées à part.
+  Le bandeau se rafraîchit **lui-même** à chaque encaissement — il bascule sur
+  la vente validée sans attendre le rechargement du catalogue du parent, auquel
+  il était accroché par un effet indirect (un échec de ce rechargement le
+  laissait bloqué sur l'ancienne vente). Un **bouton X** ferme la proposition :
+  elle ne revient pas après la vente suivante, un rechargement la ramène.
 - **Une lettre place le curseur dans la recherche** : un geste au lieu de deux.
 
 ### 11.4 — Une erreur d'ergonomie trouvée au passage
@@ -1064,6 +1069,8 @@ Décisions prises à l'audit du 07/10/2026 :
   simple ; les rapports (rentabilité, charges, trésorerie) restent payants.
 - **Prix, nombre d'utilisateurs du Starter et prestataire Mobile Money** : à
   décider au Sprint 19, après une évaluation marketing.
+  **→ Évaluation rendue le 07/10/2026 ; prix arrêtés, consignés HORS du
+  dépôt** (dépôt public). Ne jamais les écrire ici.
 
 ### Sprint 17 — Onboarding premier lancement (plan : 12)
 
@@ -1109,12 +1116,38 @@ Fait **avant le 19** : celui-ci attend l'évaluation marketing des prix.
 | **Tests** | Section 32 du harnais (6 contrôles), 3 tests de lien WhatsApp, `tests/ui/exports.test.tsx` (7) · `qa/exports.mjs` |
 | **Hors périmètre** | Mode hors ligne de la caisse (optionnel au plan) : un chantier à part entière — file d'attente des ventes, conflits de stock au retour du réseau |
 
+### Mesure du parcours (P3 de l'évaluation marketing) — faite le 08/10/2026
+
+| | |
+|---|---|
+| **Objectif** | Les chiffres du pilote, sans outil externe : inscrits → assistant terminé → première vente → ventes en semaine 2 → ventes en semaine 4 |
+| **SQL** | `migration_activation_funnel.sql` : `get_activation_funnel(p_from, p_to, p_now)` — une ligne par boutique inscrite **localement** dans la période : `onboarding_done` / `onboarding_step`, `first_sale_at`, `sales_week2`, `sales_week4` (jours **locaux** de la boutique, fenêtres `[d0+7, d0+14)` et `[d0+21, d0+28)`), `mature_week2` / `mature_week4` |
+| **Règle** | Une boutique trop récente n'est **pas inactive : elle est non évaluable.** Les taux de semaine ne divisent que par les boutiques dont la fenêtre est écoulée — sinon le taux chute à chaque inscription, pour la seule raison qu'elle est récente. C'est aussi pour ça que `p_now` est un paramètre : la maturité se teste sans attendre 28 jours |
+| **Sécurité** | La fonction lit **toutes** les boutiques : `REVOKE` sur `PUBLIC`, `anon` et `authenticated`, `GRANT` au `service_role` seul. Vérifié sur la base réelle après application : `anon=false, authenticated=false, service_role=true` |
+| **Outil** | `npm run stats:activation` (`scripts/funnel.mjs`) : parcours + détail par boutique · `--from` / `--to` · `--exclude 'QA\|Test'` pour masquer les comptes de recette |
+| **Mode d'ouverture** | P2 × P3 : `migration_display_mode.sql` (38ᵉ section) — `organizations.display_mode` = `'standalone'` (application installée) ou `'navigateur'`, NULL = **jamais relevé**. Sans défaut (le garde-fou « pas de DEFAULT sur une colonne d'affichage »), CHECK sur les deux valeurs, GRANT colonne par colonne. Le client le relève au login du **patron** seul, et seulement si le mode a changé : une écriture par changement, pas une par visite. `get_activation_funnel()` **ne change pas** (changer son type de retour coûterait un DROP + CREATE en prod pour la même information) : `scripts/funnel.mjs` fait la jointure, affiche le bloc « Ouverture de l'application » et la colonne Mode du détail. C'est l'hypothèse « la rétention vient de l'icône » qui devient mesurable dans le relevé du pilote |
+| **Tests** | Section 33 du harnais, **9 contrôles** : cohorte en jour local (23 h 30 UTC est déjà le lendemain à Porto-Novo), frontière de fenêtre exclue à droite, maturité née exactement à `d0 + 14`, ACL vérifiée **à froid** (DROP + rejeu — la section 4 du harnais re-grante toutes les fonctions à `authenticated` pour tester la RLS, ce qui masquerait le `REVOKE`), rejeu sans effet · section 34, **7 contrôles** : colonnes sans défaut, CHECK contre les valeurs inconnues, les deux modes écrits et relus, NULL non inventé, jointure du relevé, **GRANT à froid** (revoke des deux formes puis rejeu — la section 4 a fait GRANT ALL sur les tables), rejeu sans doublon · UI `modeOuverture()` (2) |
+| **État** | Appliquée en prod le 08/10/2026 (colonnes, contrainte, privilèges vérifiés sur `lmygvpruffpspixrsixh`). Premier relevé : **8 boutiques, toutes des comptes de recette, aucune encore évaluable** — conformément à l'évaluation (« aucun commerçant extérieur identifié »), et 8/8 « jamais relevée » : la colonne est née aujourd'hui, personne n'a encore rouvert l'app depuis. Le premier relevé utile sera celui du pilote |
+
+### Application installable (P2 de l'évaluation marketing) — faite le 08/10/2026
+
+| | |
+|---|---|
+| **Objectif** | GestionLocal s'ouvre comme une application : icône propre sur l'écran d'accueil (Android et iOS), plein écran, sans barre d'adresse — la rétention d'un commerçant passe par l'icône qu'il voit chaque jour |
+| **Manifeste** | `src/app/manifest.ts` (Next le sert et le lie automatiquement en `<link rel="manifest">`) : nom, `display: standalone`, `id/scope` sur `/`, couleurs de la marque — indigo-600 (thème) et slate-50 (fond de l'application). Les textes du manifeste restent **sans aucun chiffre** : c'est un manifeste d'application, pas un document commercial |
+| **Icônes** | `scripts/gen-icons.mjs` (`npm run icons:gen`, sharp déjà présent via Next) : 192, 512, **masquable** (plein cadre, le « G » dans la zone de sécurité centrale — sans quoi Android recoupe l'icône) et `apple-touch-icon` 180 (iOS ignore le manifeste). PNG générés puis commités. `viewport.themeColor` et `icons.apple` posés dans le layout |
+| **Service worker** | `public/sw.js`, volontairement minimal : il ne répond que sur `/_next/static/` — fichiers hashés, jamais périmés. **Aucune donnée de commerce** (API, ventes, stock, dettes) n'est mise en cache : c'est un accélérateur de révision, **pas** le mode hors ligne (P7, chantier distinct). `Cache-Control: no-store` sur `/sw.js` (headers dans `next.config.ts`) : une stratégie de cache ne doit jamais retarder son propre déploiement. Enregistré en production seulement (`EnregistreurPWA`, monté dans le layout) |
+| **Invitation** | Bannière sur l'accueil : le prompt natif `beforeinstallprompt` est capté **au montage du layout** (Chrome ne l'émet qu'une fois par page — l'écouter depuis le composant le raterait), bouton « Installer » qui consomme l'invitation une seule fois ; sur iOS, la consigne Safari (Partager → Sur l'écran d'accueil) ; refus mémorisé (`src/lib/pwa/refus.ts`, repli mémoire sans `localStorage`). Déjà installé : silencieux total. Décision isolée dans `invitationARecevoir()` (fonction pure) |
+| **Tests** | `tests/ui/pwa.test.ts` (12) : champs du manifeste, **manifeste sans chiffre** (garde-fou tarifaire), les 3 icônes + l'icône iOS **vérifiées sur disque** (signature PNG — un manifeste pointant un fichier absent ne se voit qu'au téléphone), portée du service worker (`startsWith` = uniquement `/_next/static/`, jamais `supabase` ni `/api/`), matrice de décision. `tests/ui/install-prompt.test.tsx` (3) : installé → rien, téléphone → bouton puis `prompt()` natif appelé, refus tenu après un nouveau rendu. jsdom n'a pas `localStorage` : le module de refus est simulé en mémoire |
+| **Recette** | Build + serveur de production : manifeste JSON servi, `/sw.js` en `no-store`, icône `200 image/png`, head avec `manifest` + `apple-touch-icon` + `theme-color`. Dans Chrome : service worker **actif** sur le scope `/`, **0 erreur console**. Chaîne complète `npm test` au vert, tests UI **233 → 248** |
+| **Hors périmètre** | Mode hors ligne (P7, à décider sur la mesure du pilote), notifications push, score Lighthouse |
+
 ### Sprint 19 — Freemium (plan : 14), à venir
 
 Limites des 3 plans **côté serveur** (aujourd'hui seuls les produits le sont ;
-employés, historique et export ne sont bloqués que par l'écran), nouveaux prix
-Stripe, page tarifs, essai de 14 jours, prestataire Mobile Money. Démarre par
-l'évaluation marketing des prix.
+employés, historique et export ne sont bloqués que par l'écran), prix retenus
+dans l'évaluation marketing (**valeurs à prendre hors du dépôt, jamais écrites
+ici**), page tarifs, essai de 14 jours, prestataire Mobile Money.
 
 ## Garde-fous permanents
 
@@ -1145,6 +1178,11 @@ l'évaluation marketing des prix.
 - Une colonne d'affichage ajoutée à `organizations` ne naît **jamais** avec le
   défaut destiné aux nouveaux comptes : `ADD COLUMN ... DEFAULT` remplit toutes
   les lignes existantes.
+- **`public/sw.js` ne répond que sur `/_next/static/`** : jamais l'API, jamais
+  les données de la boutique. Étendre sa portée serait confier un cache à des
+  données vivantes — le mode hors ligne (P7) est un chantier à part, avec ses
+  règles de conflit, pas un `startsWith` de plus. Le test de portée dans
+  `tests/ui/pwa.test.ts` échoue sur toute autre cible.
 - **Le serveur OpenCode de cette machine est exposé sur le réseau local**
   (`hostname 0.0.0.0`, port `49374`, IP `192.168.8.110`) depuis le 03/10/2026, pour
   piloter les tâches depuis l'application Android. Décision du mainteneur, prise en
@@ -1159,6 +1197,10 @@ l'évaluation marketing des prix.
 
 | Date | Commit | Objet |
 |---|---|---|
+| 08/10/2026 | — | **Caisse — « Reprendre la dernière vente » rafraîchi et refermable.** Le bandeau ne bougeait pas après une vente validée et clôturée : il n'était rafraîchi qu'indirectement, par un effet accroché à la référence du tableau `products` que le parent régénère au rechargement du catalogue — un échec ou un retard de ce rechargement, et l'ancienne vente restait affichée. Le POS recharge désormais sa dernière vente **lui-même** à chaque encaissement (`create_sale` a commité avant de renvoyer, la requête voit la vente immédiatement). Bouton **X** ajouté : la fermeture tient jusqu'au rechargement de la caisse, elle ne revient pas après chaque vente · tests UI **251 → 253** |
+| 08/10/2026 | — | **Mode d'ouverture dans la mesure (P2 × P3).** `organizations.display_mode` : `'standalone'` (app installée) ou `'navigateur'`, NULL = jamais relevé — sans défaut, CHECK sur les deux valeurs, GRANT colonne par colonne (vérifié en prod : authenticated écrit, anon non). Le client le relève au login du patron, **seulement si le mode a changé** ; `get_activation_funnel()` reste intact, `npm run stats:activation` le jointure et affiche « Ouverture de l'application » + la colonne Mode du détail. Section 34 du harnais, **7 contrôles** dont un GRANT **à froid** (la section 4 re-grante les tables) · migrations **37 → 38** · tests UI **248 → 251** |
+| 08/10/2026 | — | **Application installable (P2 — évaluation marketing).** Manifeste (`src/app/manifest.ts`, `display: standalone`, couleurs de la marque), icônes 192/512/masquable + `apple-touch-icon` générées par `npm run icons:gen` (vérifiées sur disque par les tests), service worker **limité à `/_next/static/`** — jamais l'API ni les ventes, le mode hors ligne reste P7 — avec `no-cache` sur `/sw.js`, bannière d'invitation sur l'accueil (prompt natif capté au montage du layout, consigne iOS, refus mémorisé). Recette serveur de prod : manifeste servi, SW **actif dans Chrome**, 0 erreur console · tests UI **233 → 248** |
+| 08/10/2026 | — | **Mesure du parcours (P3 — évaluation marketing).** `get_activation_funnel(p_from, p_to, p_now)` : cohorte d'inscrits en jour **local**, assistant terminé, première vente, semaines 2 et 4 en jours locaux de la boutique, maturité explicite — un taux de semaine ne divise que par les boutiques évaluables. Réservée `service_role` (vérifié en prod : anon et authenticated refusés). `npm run stats:activation` : parcours + détail par boutique, `--exclude` pour les comptes de recette. Section 33 du harnais, **9 contrôles** (frontières de fuseau 22 h / 23 h 30, fenêtre exclusive, maturité à `d0+14`, ACL à froid, rejeu) · migrations **36 → 37** · tests UI **233** inchangés |
 | 07/10/2026 | — | **Sprint 21 — relance et exports.** Numéros béninois à 10 chiffres : la relance WhatsApp menait à un numéro inexistant pour tout client saisi au format actuel — règle corrigée en base et dans l'application, 4 fiches et 4 ventes réparées en recette. Excel (`;`) et PDF A4 pour les dettes et les ventes. Recette navigateur 375 px sur deux comptes : liens de relance internationaux, Excel en colonnes, PDF lisible et sans débordement, 0 erreur · migrations **35 → 36** · tests UI **226 → 233** |
 | 07/10/2026 | — | **Sprint 20 — accueil du jour et caisse mobile.** Encaissé, ventes, à recouvrer, stock bas ; Journal du jour sans refus de plan en gratuit ; tri de caisse honnête. Recette navigateur gratuit 375 px + Pro 375/1280 px : 0 débordement, **0 erreur HTTP** (le 403 de `get_cash_flow` sur chaque ouverture du journal gratuit a disparu). Au passage : un `~/package-lock.json` vide faisait croire à Next.js que le projet commençait au dossier personnel — supprimé · tests UI **223 → 226** |
 | 07/10/2026 | — | **Recette navigateur des sprints 17-18**, build de production, téléphone 375 px, base de recette migrée par `scripts/supabase-sql.mjs` : épicerie + exemples, restaurant + exemples, boutique + « mes propres produits » — **21/21 et 22/22 contrôles**, rechargement en cours d'assistant, aucun débordement, aucune erreur HTTP ni JS. Compte existant : menu complet, pas d'assistant. **Défaut trouvé et corrigé** : la caisse appelait `get_units_sold_since()` (« + vendus », plan Pro) sur tous les plans — un 403 à chaque ouverture de caisse en gratuit ; l'appel n'est plus fait sans le plan. Outil : `qa/onboarding.mjs` |

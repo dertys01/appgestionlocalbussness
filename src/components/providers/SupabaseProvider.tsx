@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
+import { modeOuverture } from '@/lib/pwa/installation';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
 import type { Organization, Plan } from '@/types';
 
@@ -48,7 +49,7 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
   // useCallback : sans lui, loadOrg et refreshOrg changent de référence à chaque
   // render — et comme refreshOrg entre dans la valeur du contexte, la valeur
   // changeait aussi, re-rendant les 20 consommateurs (dont le POS) pour rien.
-  const loadOrg = useCallback(async (ownerIdVal: string) => {
+  const loadOrg = useCallback(async (ownerIdVal: string): Promise<Organization | null> => {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error } = await (supabase as any)
@@ -62,15 +63,18 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
       // d'où l'écran « Configuration requise » affiché à tort.
       if (error) {
         setOrgError(error.message ?? 'Lecture de la boutique impossible.');
-        return;
+        return null;
       }
       setOrgError(null);
       if (data) {
         setOrg(data as Organization);
         setPlan((data as Organization).plan);
+        return data as Organization;
       }
+      return null;
     } catch (e) {
       setOrgError(e instanceof Error ? e.message : 'Lecture de la boutique impossible.');
+      return null;
     }
   }, [supabase]);
 
@@ -129,7 +133,27 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
         }).then(() => {}, () => {});
       }
 
-      await loadOrg(resolvedOwnerId);
+      const ligne = await loadOrg(resolvedOwnerId);
+
+      // Relevé d'ouverture (P2/P3) : la base dit comment ce patron ouvre
+      // son application — icône installée ou onglet du navigateur — pour
+      // que le relevé du parcours (npm run stats:activation) lise le mode
+      // à côté des semaines 2 et 4. Seul le patron signe : un caissier en
+      // navigateur n'infirme rien, et la RLS « Patron modifie sa propre
+      // org » lui refuse d'ailleurs l'écriture. Une écriture seulement si
+      // le mode a changé — pas une par visite. Non bloquant, au même titre
+      // que le journal d'audit ci-dessus : un échec de mesure ne doit pas
+      // coûter une connexion.
+      if (!data && ligne) {
+        const mode = modeOuverture();
+        if (ligne.display_mode !== mode) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (supabase as any).from('organizations')
+            .update({ display_mode: mode, display_mode_at: new Date().toISOString() })
+            .eq('id', resolvedOwnerId)
+            .then(() => {}, () => {});
+        }
+      }
     } catch (e) {
       // Ne jamais bloquer l'app — mais ne pas faire comme si de rien n'était :
       // sans ce message, canManageProducts resterait à false et l'UI passerait

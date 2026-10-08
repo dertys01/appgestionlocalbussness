@@ -5,6 +5,7 @@ import { Package, AlertTriangle, ShoppingCart, Wallet, Handshake, Receipt, Chevr
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { formatCFA, formatQty } from '@/lib/utils/currency';
+import { InstallPrompt } from '@/components/pwa/InstallPrompt';
 import type { Today } from '@/lib/hooks/useToday';
 import type { Product } from '@/types';
 
@@ -52,6 +53,8 @@ export function DashboardTab({
         <h2 className="text-xl font-bold text-slate-800">Aujourd&apos;hui</h2>
         <p className="text-sm text-slate-500 first-letter:uppercase">{dateDuJour}</p>
       </div>
+
+      <InstallPrompt />
 
       {totalProducts === 0 ? (
         /* Boutique neuve : les cartes afficheraient 0 partout — aucune

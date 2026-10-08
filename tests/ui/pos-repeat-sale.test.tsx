@@ -67,12 +67,22 @@ const LIGNES = [
   { product_id: 'coque', quantity: 1, unit_price: 3500 },
 ];
 
+/**
+ * « Base » mutable : create_sale déplace la dernière vente au moment de
+ * l'encaissement, comme le ferait le serveur. Les tests qui veulent un état
+ * fixe surchargent `from` eux-mêmes et ignorent ces deux variables.
+ */
+let venteCourante = VENTE;
+let lignesCourantes = LIGNES;
+
 beforeEach(() => {
   vi.clearAllMocks();
+  venteCourante = VENTE;
+  lignesCourantes = LIGNES;
   rpc.mockResolvedValue({ data: [], error: null });
   from.mockImplementation((table: string) => {
-    if (table === 'sales') return chaine([VENTE]);
-    if (table === 'sale_items') return chaine(LIGNES);
+    if (table === 'sales') return chaine([venteCourante]);
+    if (table === 'sale_items') return chaine(lignesCourantes);
     return chaine([]);
   });
 });
@@ -168,5 +178,67 @@ describe('POS — reprendre la dernière vente', () => {
     // 4 + 2 = 6, mais le stock est de 5 : la ligne s'arrête à 5, sinon c'est
     // create_sale() qui refuse au dernier moment et la vente est perdue.
     await waitFor(() => expect(screen.getByRole('button', { name: /5 articles, total/ })).toBeInTheDocument());
+  });
+
+  it('après encaissement, le bandeau passe à la vente qu’on vient de valider', async () => {
+    // Régression : le bandeau n'était rafraîchi qu'indirectement — un
+    // rechargement du catalogue côté parent changeait la référence de
+    // `products`, ce qui relançait l'effet de chargement. Si ce rechargement
+    // n'arrivait pas (échec, retard, parent qui ne le fait pas), l'ancienne
+    // vente restait affichée alors que la nouvelle était déjà validée et
+    // clôturée — exactement le symptôme vu en caisse.
+    rpc.mockImplementation(async (nom: string) => {
+      if (nom !== 'create_sale') return { data: [], error: null };
+      // create_sale a commité : la vente vient de devenir la dernière.
+      venteCourante = { id: 'v2', total_amount: 1500 };
+      lignesCourantes = [{ product_id: 'riz', quantity: 1, unit_price: 1500 }];
+      return { data: { id: 'v2', total_amount: 1500, invoice_number: 'FA-0007' }, error: null };
+    });
+    supabase.auth.getUser = vi.fn().mockResolvedValue({ data: { user: null } });
+
+    renderPOS();
+    // Le bandeau commence sur l'ancienne vente : 2 A17 + 1 coque.
+    await waitFor(() => expect(boutonReprendre().textContent).toContain('2 articles'));
+
+    ajouterAuPanier('RIZ');
+    fireEvent.click(await screen.findByRole('button', { name: /Encaisser/ }));
+
+    // Le reçu s'ouvre : la vente est validée. On le clôt, comme le caissier.
+    fireEvent.click(await screen.findByRole('button', { name: 'Fermer' }));
+
+    // Le bandeau bascule sur la nouvelle vente, et il n'y a AUCUN
+    // rechargement du catalogue derrière : `onSaleComplete` est un no-op
+    // dans ce test et le prop `products` n'a pas bougé. Si le bandeau bouge
+    // quand même, c'est qu'il se rafraîchit lui-même.
+    await waitFor(() => expect(boutonReprendre().textContent).toContain('1 article'));
+    expect(boutonReprendre().textContent).toMatch(/1\s?500\s?F/);
+  });
+
+  it('le bouton X ferme la proposition, et elle ne revient pas', async () => {
+    const vue = renderPOS();
+    await waitFor(() => expect(boutonReprendre()).toBeInTheDocument());
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Masquer la reprise de la dernière vente' })
+    );
+    await waitFor(() => expect(screen.queryByRole('button', { name: /dernière vente/ })).toBeNull());
+
+    // Une nouvelle vente arrive (le bandeau se serait rechargé dessus) : la
+    // fermeture tient jusqu'au rechargement de la caisse, sinon le X ne
+    // servirait à rien — il reviendrait après chaque encaissement.
+    venteCourante = { id: 'v2', total_amount: 1500 };
+    lignesCourantes = [{ product_id: 'riz', quantity: 1, unit_price: 1500 }];
+    const chargementsAvant = from.mock.calls.filter((c) => c[0] === 'sales').length;
+    vue.rerender(
+      <POSModule products={[...products] as unknown as Product[]} onSaleComplete={vi.fn()} />
+    );
+    // Le rechargement a bien eu lieu (le prop a changé → l'effet a reparti)…
+    await waitFor(() =>
+      expect(from.mock.calls.filter((c) => c[0] === 'sales').length).toBeGreaterThan(chargementsAvant)
+    );
+    // …mais la proposition fermée ne se remet pas à afficher.
+    expect(
+      screen.queryByRole('button', { name: /Ajouter au panier les \d+ articles de la dernière vente/ })
+    ).not.toBeInTheDocument();
   });
 });

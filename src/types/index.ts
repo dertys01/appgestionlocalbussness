@@ -162,6 +162,14 @@ export interface Organization {
   onboarding_step?: string | null;
   /** Les 4 activités de l'inscription — `domain` en est déduit. */
   business_type?: 'epicerie' | 'boutique' | 'restaurant' | 'autre' | null;
+  /**
+   * Dernier relevé d'ouverture (P2/P3, migration_display_mode.sql) :
+   * 'standalone' = application installée, 'navigateur' ; NULL = jamais
+   * relevé (aucun défaut — le mode ne se remplit qu'à l'ouverture par le
+   * patron, et seulement s'il a changé).
+   */
+  display_mode?: 'standalone' | 'navigateur' | null;
+  display_mode_at?: string | null;
   created_at: string;
   updated_at: string;
 }

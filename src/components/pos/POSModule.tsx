@@ -264,6 +264,16 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
   } | null>(null);
 
   /**
+   * Le caissier a fermé la proposition de reprise d'un clic (le X).
+   *
+   * La fermeture tient jusqu'au rechargement de la caisse : elle ne revient
+   * pas après la vente suivante, sinon le X ne servirait à rien — il
+   * reviendrait après chaque encaissement. Aucun stockage : si le caissier
+   * change d'avis, un rechargement suffit à tout remettre à zéro.
+   */
+  const [repriseFerme, setRepriseFerme] = useState(false);
+
+  /**
    * Catalogue de la caisse : non archivé, puis filtré et classé.
    *
    * Les articles EN RUPTURE restent visibles, marqués « Rupture », au lieu de
@@ -803,6 +813,16 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
       setPanierOuvert(false);
       if (paymentMethod === 'credit') setPaymentMethod('cash');
       onSaleComplete?.();
+      // Le bandeau « Reprendre la dernière vente » doit basculer sur la
+      // vente qu'on vient de valider sans attendre le rechargement du
+      // catalogue du parent. Ce lien indirect — un nouveau tableau de
+      // produits qui relançait l'effet de chargement — suffisait, en
+      // pratique, à laisser l'ancienne vente affichée : un échec ou un
+      // retard de ce rechargement, et le bandeau ne bougeait plus alors
+      // que la vente était déjà validée et clôturée. create_sale a commité
+      // avant de renvoyer, donc la requête ci-dessous voit la nouvelle
+      // vente, immédiatement.
+      void chargerDerniereVente();
     } catch (err) {
       setCheckoutError(err instanceof Error ? err.message : 'Erreur inconnue');
     } finally {
@@ -841,26 +861,38 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         </div>
 
         {/* Reprendre la dernière vente. Au-dessus de la grille : l'action vaut un
-            clic si elle est visible sans défiler. */}
-        {ventePrecedente && ventePrecedente.nbLignes > 0 && (
-          <button
-            onClick={reprendreDerniereVente}
-            className="flex w-full items-center gap-2 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-left text-indigo-800 hover:bg-indigo-100 transition-colors"
-            aria-label={`Ajouter au panier les ${ventePrecedente.nbLignes} articles de la dernière vente`}
-          >
-            <RotateCcw className="h-4 w-4 shrink-0" />
-            <span className="text-sm font-medium">Reprendre la dernière vente</span>
-            <span className="text-xs text-indigo-600">
-              {ventePrecedente.nbLignes} article{ventePrecedente.nbLignes > 1 ? 's' : ''} ·{' '}
-              {formatCFA(ventePrecedente.total)}
-            </span>
-            {ventePrecedente.nbIgnorees > 0 && (
-              <span className="ml-auto text-xs text-amber-700">
-                {ventePrecedente.nbIgnorees} retiré{ventePrecedente.nbIgnorees > 1 ? 's' : ''} du
-                catalogue
+            clic si elle est visible sans défiler.
+            Conteneur + deux boutons : imbriquer le X dans le bouton de reprise
+            donnerait un bouton dans un bouton (HTML invalide), et le X perdrait
+            alors sa propre cible d'accessibilité. */}
+        {ventePrecedente && ventePrecedente.nbLignes > 0 && !repriseFerme && (
+          <div className="flex w-full items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-indigo-800">
+            <button
+              onClick={reprendreDerniereVente}
+              className="flex min-w-0 flex-1 items-center gap-2 rounded py-0.5 text-left transition-colors hover:bg-indigo-100"
+              aria-label={`Ajouter au panier les ${ventePrecedente.nbLignes} articles de la dernière vente`}
+            >
+              <RotateCcw className="h-4 w-4 shrink-0" />
+              <span className="text-sm font-medium">Reprendre la dernière vente</span>
+              <span className="text-xs text-indigo-600">
+                {ventePrecedente.nbLignes} article{ventePrecedente.nbLignes > 1 ? 's' : ''} ·{' '}
+                {formatCFA(ventePrecedente.total)}
               </span>
-            )}
-          </button>
+              {ventePrecedente.nbIgnorees > 0 && (
+                <span className="ml-auto text-xs text-amber-700">
+                  {ventePrecedente.nbIgnorees} retiré{ventePrecedente.nbIgnorees > 1 ? 's' : ''} du
+                  catalogue
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => setRepriseFerme(true)}
+              aria-label="Masquer la reprise de la dernière vente"
+              className="shrink-0 rounded p-1.5 text-indigo-400 transition-colors hover:bg-indigo-100 hover:text-indigo-700"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         )}
 
         {/* Barre de catégories, collante sous la recherche.

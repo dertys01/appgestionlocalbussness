@@ -80,6 +80,14 @@ const ORDER = [
   'migration_onboarding_mode.sql',
   // normalize_phone() connaît les numéros béninois à 10 chiffres (01…).
   'migration_telephone_benin.sql',
+  // Mesure du parcours d'activation : get_activation_funnel(), réservée au
+  // service_role — créée APRÈS migration_security.sql, donc à révoquer
+  // d'authenticated elle-même (voir la fin du fichier).
+  'migration_activation_funnel.sql',
+  // Mode d'ouverture : organizations.display_mode ('standalone' ou
+  // 'navigateur', NULL = jamais relevé). Jointuré au relevé par
+  // scripts/funnel.mjs — get_activation_funnel() lui-même ne change pas.
+  'migration_display_mode.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -4640,6 +4648,220 @@ console.log('\n▸ Téléphone béninois à 10 chiffres');
   check('32e. une fiche enregistrée sans indicatif est corrigée', tel('Ancien format') === '2290196000001', tel('Ancien format'));
   check('32f. une fiche qui créerait un doublon est laissée telle quelle',
     tel('Doublon') === '0196000002' && tel('Déjà international') === '2290196000002', JSON.stringify(fiches));
+}
+
+// ─── 33. Mesure du parcours d'activation ─────────────────────
+// La mesure P3 de l'évaluation marketing : inscrits → assistant terminé →
+// première vente → ventes en semaine 2 → ventes en semaine 4. Le pilote
+// décidera du plafond gratuit, du hors ligne et des prix avec ces chiffres
+// là — donc ce qui compte ici, ce sont les FRONTIÈRES : le jour se compte
+// en fuseau de boutique (23 h 30 UTC est déjà le lendemain à Porto-Novo),
+// la fenêtre est [d0+7, d0+14) exclusive à droite, et une boutique trop
+// récente n'est pas « inactive », elle est non évaluable.
+console.log('\n▸ Mesure du parcours d’activation');
+{
+  const NOW = '2026-10-08 10:00:00+00';
+  const COHORT = `get_activation_funnel('2026-09-01', '2026-10-08', '${NOW}')`;
+
+  // Cinq boutiques, cinq états différents. On ne touche à aucune existante :
+  // la mesure doit refléter les données des autres sections telles quelles.
+  const seed = [
+    // id, email, nom, créée, assistant terminé
+    ['fa000000-0000-4000-8000-00000000000a', 'funnel-a@test.local', 'Funnel A', '2026-09-08 09:00:00+00', true],
+    ['fb000000-0000-4000-8000-00000000000b', 'funnel-b@test.local', 'Funnel B', '2026-10-06 09:00:00+00', false],
+    ['fc000000-0000-4000-8000-00000000000c', 'funnel-c@test.local', 'Funnel C', '2026-09-20 09:00:00+00', true],
+    // Hors cohorte : créée en août, doit rester invisible.
+    ['fd000000-0000-4000-8000-00000000000d', 'funnel-d@test.local', 'Funnel D', '2026-08-01 09:00:00+00', true],
+    // Frontière de cohorte : 23 h 30 UTC = 00 h 30 le 1er septembre à
+    // Porto-Novo. En UTC elle serait hors période ; en jour local, elle y est.
+    ['fe000000-0000-4000-8000-00000000000e', 'funnel-e@test.local', 'Funnel E', '2026-08-31 23:30:00+00', false],
+    // Maturité exacte : créée le 24 septembre, sa semaine 2 s'achève le
+    // 8 octobre — le jour de p_now, pas la veille.
+    ['ff000000-0000-4000-8000-00000000000f', 'funnel-f@test.local', 'Funnel F', '2026-09-24 09:00:00+00', true],
+  ];
+  for (const [id, email, nom, cree, fini] of seed) {
+    await q(`INSERT INTO auth.users (id, email) VALUES ('${id}', '${email}') ON CONFLICT DO NOTHING`);
+    await q(`INSERT INTO organizations (id, name, slug, timezone, created_at, onboarding_done)
+             VALUES ('${id}', '${nom}', 'funnel-${id.slice(-1)}', 'Africa/Porto-Novo', '${cree}', ${fini})`);
+  }
+
+  // Ventes de A — quatre frontières en une :
+  //   10/09 12 h UTC        semaine 1, première vente
+  //   14/09 22 h UTC = 23 h locale   → 14 septembre local : encore semaine 1
+  //   14/09 23 h 30 UTC = 15/09 00 h 30 locale → premier jour de semaine 2
+  //   17/09                 semaine 2, cas courant
+  //   01/10                 semaine 4 (fenêtre [29/09, 06/10))
+  const vente = (uid, at) =>
+    q(`INSERT INTO sales (user_id, total_amount, created_at) VALUES ('${uid}', 1000, '${at}')`);
+  for (const at of [
+    '2026-09-10 12:00:00+00', '2026-09-14 22:00:00+00', '2026-09-14 23:30:00+00',
+    '2026-09-17 10:00:00+00', '2026-10-01 10:00:00+00',
+  ]) await vente(seed[0][0], at);
+  await vente(seed[2][0], '2026-09-28 10:00:00+00'); // C : semaine 2
+  await vente(seed[3][0], '2026-08-05 10:00:00+00'); // D : ne doit jamais apparaître
+  await vente(seed[5][0], '2026-10-02 10:00:00+00'); // F : semaine 2, dernier jour
+
+  const one = async (name, cols = '*') =>
+    (await q(`SELECT ${cols} FROM ${COHORT} WHERE org_name = '${name}'`)).rows[0] ?? null;
+
+  // 33a — la cohorte : jour local du côté inclus, D hors période. Le filtre
+  // ne porte que sur « Funnel % » : les autres boutiques du harnais sont
+  // créées « maintenant » et tombent légitimement dans la période — c'est D,
+  // créée en août, qui ne doit pas y figurer même sous ce filtre.
+  const rows = (await q(
+    `SELECT org_name FROM ${COHORT} WHERE org_name LIKE 'Funnel%' ORDER BY org_name`)).rows;
+  const noms = rows.map((r) => r.org_name);
+  check('33a. la cohorte contient A, B, C, E, F — et pas D (créée en août)',
+    JSON.stringify(noms) === JSON.stringify(['Funnel A', 'Funnel B', 'Funnel C', 'Funnel E', 'Funnel F']),
+    noms.join(', '));
+
+  const a = await one('Funnel A',
+    'onboarding_done, first_sale_at::date::text AS fs, sales_week2, sales_week4, mature_week2, mature_week4');
+  check('33b. A : assistant terminé et première vente au bon jour',
+    a.onboarding_done === true && a.fs === '2026-09-10', JSON.stringify(a));
+  check('33c. A : semaine 2 comptée en jour local (22 h exclue, 23 h 30 incluse)',
+    a.sales_week2 === 2, `sales_week2 = ${a.sales_week2}, attendu 2`);
+  check('33d. A : semaine 4 comptée, les deux fenêtres sont évaluables',
+    a.sales_week4 === 1 && a.mature_week2 === true && a.mature_week4 === true, JSON.stringify(a));
+
+  const b = await one('Funnel B',
+    'onboarding_done, first_sale_at, sales_week2, sales_week4, mature_week2, mature_week4');
+  check('33e. B : rien du tout, et surtout pas comptée comme inactive',
+    b.onboarding_done === false && b.first_sale_at === null &&
+    b.sales_week2 === 0 && b.sales_week4 === 0 &&
+    b.mature_week2 === false && b.mature_week4 === false, JSON.stringify(b));
+
+  const c = await one('Funnel C',
+    'sales_week2, mature_week2, mature_week4');
+  check('33f. C : semaine 2 évaluée, semaine 4 encore non évaluable',
+    c.sales_week2 === 1 && c.mature_week2 === true && c.mature_week4 === false, JSON.stringify(c));
+
+  const f = await one('Funnel F', 'sales_week2, mature_week2, mature_week4');
+  check('33g. F : la maturité naît exactement à d0 + 14 jours',
+    f.sales_week2 === 1 && f.mature_week2 === true && f.mature_week4 === false, JSON.stringify(f));
+
+  // 33h — la mesure lit toutes les boutiques : elle ne doit répondre ni à la
+  // clé publique, ni à un commerçant connecté. On recrée la fonction À FROID
+  // (DROP + fichier) : la section 4 du harnais a GRANTé EXECUTE sur TOUTES
+  // les fonctions à authenticated pour tester la RLS, et ce grant masquerait
+  // l'effet réel du REVOKE. C'est l'état du fichier — celui qui
+  // s'appliquera en production — qui est vérifié ici.
+  await e('DROP FUNCTION get_activation_funnel(date, date, timestamptz)');
+  await e(readSql('migration_activation_funnel.sql'));
+  const sig = 'get_activation_funnel(date, date, timestamptz)';
+  const priv = (await q(`
+    SELECT has_function_privilege('anon', '${sig}', 'EXECUTE')          AS anon,
+           has_function_privilege('authenticated', '${sig}', 'EXECUTE') AS auth,
+           has_function_privilege('service_role', '${sig}', 'EXECUTE')  AS svc`)).rows[0];
+  check('33h. à froid : anon et authenticated refusés, service_role autorisé',
+    priv.anon === false && priv.auth === false && priv.svc === true, JSON.stringify(priv));
+
+  // 33i — rejouable : le fichier re-collé sur la fonction déjà là ne casse
+  // rien et ne bouge pas les résultats (APPLY_MIGRATIONS.sql se rejoue sur
+  // une base peuplée).
+  await e(readSql('migration_activation_funnel.sql'));
+  const apresRejeu = (await q(
+    `SELECT count(*)::int AS n FROM ${COHORT} WHERE org_name LIKE 'Funnel%'`)).rows[0].n;
+  const a2 = await one('Funnel A', 'sales_week2, sales_week4');
+  check('33i. le rejeu laisse la mesure intacte (5 boutiques, A inchangée)',
+    apresRejeu === 5 && a2.sales_week2 === 2 && a2.sales_week4 === 1,
+    `${apresRejeu} ligne(s), A: ${JSON.stringify(a2)}`);
+}
+
+// ─── 34. Mode d'ouverture : installée ou navigateur ─────────
+// P2 et P3 se répondent : le relevé du parcours doit dire comment chaque
+// pilote ouvre l'application — icône installée ou onglet du navigateur.
+// Ce qui compte ici : le mode naît NULL (jamais de DEFAULT sur une colonne
+// d'affichage), n'accepte que les deux valeurs mesurables, le droit
+// d'écrire vient du GRANT colonne de ce fichier, et la jointure de
+// scripts/funnel.mjs porte bien la donnée.
+console.log('\n▸ Mode d’ouverture : installée ou navigateur');
+{
+  // 34a — les deux colonnes existent, sans défaut : NULL = jamais relevé.
+  const cols = (await q(`
+    SELECT column_name, column_default
+      FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = 'organizations'
+       AND column_name IN ('display_mode', 'display_mode_at')
+     ORDER BY column_name`)).rows;
+  check('34a. display_mode et display_mode_at existent, toutes deux sans défaut',
+    cols.length === 2 && cols.every((c) => c.column_default === null),
+    JSON.stringify(cols));
+
+  // 34b — le CHECK : deux valeurs mesurables, rien d'autre. Une valeur
+  // inconnue écraserait la mesure sans jamais échouer ailleurs.
+  let msg = '';
+  try {
+    await q(`UPDATE organizations SET display_mode = 'bureau' WHERE name = 'Funnel A'`);
+  } catch (ex) { msg = ex.message; }
+  check('34b. une valeur inconnue est refusée par le CHECK',
+    /organizations_display_mode_check/.test(msg), msg);
+
+  // 34c — les deux modes s'écrivent, horodatés.
+  await e(`UPDATE organizations
+             SET display_mode = 'standalone',
+                 display_mode_at = '2026-10-08 09:15:00+00'
+           WHERE name = 'Funnel A'`);
+  await e(`UPDATE organizations SET display_mode = 'navigateur' WHERE name = 'Funnel B'`);
+  const modes = (await q(`
+    SELECT name, display_mode, display_mode_at::text AS at
+      FROM organizations
+     WHERE name IN ('Funnel A', 'Funnel B')
+     ORDER BY name`)).rows;
+  check('34c. A : installée et horodatée ; B : navigateur',
+    modes[0]?.display_mode === 'standalone'
+      && modes[0]?.at?.startsWith('2026-10-08 09:15')
+      && modes[1]?.display_mode === 'navigateur',
+    JSON.stringify(modes));
+
+  // 34d — jamais relevé = NULL, pas une valeur inventée.
+  const c = (await q(
+    `SELECT display_mode, display_mode_at FROM organizations WHERE name = 'Funnel C'`)).rows[0];
+  check('34d. une boutique muette reste à NULL, pas à une valeur par défaut',
+    c.display_mode === null && c.display_mode_at === null, JSON.stringify(c));
+
+  // 34e — la jointure que fait scripts/funnel.mjs : le relevé du parcours
+  // porte le mode (A installée ; C, jamais relevée, transmet son NULL).
+  const jointure = (await q(`
+    SELECT f.org_name, o.display_mode
+      FROM get_activation_funnel('2026-09-01', '2026-10-08', '2026-10-08 10:00:00+00') f
+      JOIN organizations o ON o.id = f.org_id
+     WHERE f.org_name IN ('Funnel A', 'Funnel C')
+     ORDER BY f.org_name`)).rows;
+  check('34e. la jointure du relevé porte le mode (A : installée, C : jamais relevée)',
+    jointure.length === 2
+      && jointure[0].display_mode === 'standalone'
+      && jointure[1].display_mode === null,
+    JSON.stringify(jointure));
+
+  // 34f — à froid : la section 4 a fait GRANT ALL sur toutes les tables à
+  // authenticated, qui masquerait l'absence du GRANT colonne. On ôte les
+  // deux formes du droit (large et colonne), puis on rejoue le fichier —
+  // c'est son GRANT, et lui seul, qui rend l'écriture possible. anon, lui,
+  // n'a jamais rien reçu.
+  await e(`REVOKE UPDATE ON organizations FROM authenticated`);
+  await e(`REVOKE UPDATE (display_mode, display_mode_at) ON organizations FROM authenticated`);
+  const apresRevoke = (await q(`
+    SELECT has_column_privilege('authenticated', 'organizations', 'display_mode', 'UPDATE') AS auth`)).rows[0];
+  await e(readSql('migration_display_mode.sql'));
+  const apresRejeu = (await q(`
+    SELECT has_column_privilege('authenticated', 'organizations', 'display_mode', 'UPDATE')       AS auth,
+           has_column_privilege('authenticated', 'organizations', 'display_mode_at', 'UPDATE')    AS auth_at,
+           has_column_privilege('anon', 'organizations', 'display_mode', 'UPDATE')               AS anon`)).rows[0];
+  check('34f. sans le GRANT, authenticated ne peut pas écrire ; le rejeu le rend, anon reste dehors',
+    apresRevoke.auth === false
+      && apresRejeu.auth === true && apresRejeu.auth_at === true && apresRejeu.anon === false,
+    `après revoke: ${JSON.stringify(apresRevoke)}, après rejeu: ${JSON.stringify(apresRejeu)}`);
+
+  // 34g — rejouable : le fichier re-collé ne double pas la contrainte et
+  // ne bouge pas les valeurs déjà relevées.
+  await e(readSql('migration_display_mode.sql'));
+  const rejeu = (await q(`
+    SELECT (SELECT count(*)::int FROM pg_constraint WHERE conname = 'organizations_display_mode_check') AS contraintes,
+           (SELECT display_mode FROM organizations WHERE name = 'Funnel A') AS mode`)).rows[0];
+  check('34g. le rejeu garde une contrainte unique et les valeurs intactes',
+    rejeu.contraintes === 1 && rejeu.mode === 'standalone', JSON.stringify(rejeu));
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);

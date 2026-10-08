@@ -18,7 +18,9 @@
     "test:rl": "node --experimental-strip-types --test tests/rate-limit.test.mts",
     "test:wa": "node --experimental-strip-types --import ./tests/ts-hooks.mjs --test tests/whatsapp-credit.test.mts",
     "qa:audit": "node qa/audit.mjs",
-    "qa:parcours": "node qa/parcours.mjs"
+    "qa:parcours": "node qa/parcours.mjs",
+    "icons:gen": "node scripts/gen-icons.mjs",
+    "stats:activation": "node scripts/funnel.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.3.0",
