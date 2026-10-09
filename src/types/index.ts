@@ -255,4 +255,9 @@ export interface NavItem {
   label: string;
   icon: ElementType;
   locked: boolean;
+  /**
+   * Pastille de rappel (P6) : nombre de dettes à relancer sur l'onglet
+   * Dettes. Absente = rien à signaler — jamais un zéro affiché.
+   */
+  badge?: number;
 }

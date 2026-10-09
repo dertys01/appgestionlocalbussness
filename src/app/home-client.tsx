@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   LayoutDashboard,
   ShoppingCart,
@@ -63,6 +63,24 @@ export default function HomePage() {
   // doivent pas recevoir le même jeton, sinon le POS croirait une demande déjà
   // traitée et n'ajouterait que la première.
   const scanSeq = useRef(0);
+  // P6 : pastille « à relancer » sur l'onglet Dettes. Lue à chaque retour
+  // sur l'accueil (même rythme que `today`) : le rappel programmé doit être
+  // là quand le patron ouvre l'app, pas après un rechargement manuel.
+  // Échec silencieux : pas de pastille plutôt qu'une erreur — le carnet,
+  // lui, reste accessible.
+  const [aRelancer, setARelancer] = useState(0);
+  const rappelsAuto = plan === 'starter' || plan === 'pro';
+  useEffect(() => {
+    let annule = false;
+    // setState uniquement dans le .then (jamais synchrone dans l'effet) :
+    // la pastille tombe à zéro quand le plan ne donne plus droit aux rappels.
+    const travail = rappelsAuto && org?.onboarding_done
+      ? supabase.rpc('dettes_a_relancer').then(({ data, error }) => (
+        !error ? (data ?? []).length : 0))
+      : Promise.resolve(0);
+    void travail.then((n) => { if (!annule) setARelancer(n); });
+    return () => { annule = true; };
+  }, [supabase, rappelsAuto, org?.onboarding_done, tab]);
   // Identité stable : passé en dépendance de l'effet du POS, un arrow inline
   // le relancerait à chaque render.
   const handleAddToCartHandled = useCallback(() => setAddToCartRequest(null), []);
@@ -182,8 +200,10 @@ export default function HomePage() {
     { key: 'inventory', label: 'Stock',      icon: Package,         locked: false },
     { key: 'sales',     label: 'Ventes',     icon: History,         locked: false },
     // Dettes : gratuites depuis migration_onboarding_mode.sql — récupérer son
-    // argent n'est pas un avantage payant.
-    { key: 'debts',     label: 'Dettes',     icon: Handshake,       locked: false },
+    // argent n'est pas un avantage payant. La pastille P6, elle, est payante
+    // (évaluation §7) : `aRelancer` ne peut être non nul que si rappelsAuto.
+    { key: 'debts',     label: 'Dettes',     icon: Handshake,       locked: false,
+      ...(aRelancer > 0 ? { badge: aRelancer } : {}) },
     { key: 'reports',   label: 'Rapports',   icon: BarChart2,       locked: !isFeatureAllowed(plan, 'reports') },
     { key: 'forecast',  label: 'Prévisions', icon: Brain,           locked: !isFeatureAllowed(plan, 'forecast') },
     // Salle : module restaurant, donc filtré comme les autres. La caisse

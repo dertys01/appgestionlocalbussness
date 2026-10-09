@@ -102,6 +102,9 @@ const ORDER = [
   // remplie par scripts/sync-plan-config.mjs), quotas produits et employés,
   // fenêtre d'historique sur sales (détections de dettes comprises).
   'migration_plan_config.sql',
+  // Relances automatiques (P6) : dettes_a_relancer() lit current_org_plan()
+  // (essai et échéance), posé par trial + plan_config — donc après eux.
+  'migration_relances.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -5445,6 +5448,126 @@ console.log('\n▸ Périodes prépayées Mobile Money');
   check('37i. double rejeu : 14 colonnes, 1 trigger, 1 politique — rien ne se duplique',
     rejeu37.colonnes === 14 && rejeu37.triggers === 1 && rejeu37.politiques === 1,
     JSON.stringify(rejeu37));
+}
+
+// ─── 38. Relances automatiques (P6) ───────────────────────────────
+console.log('\n▸ Relances automatiques (rappel programmé, Starter+)');
+{
+  await e(readSql('migration_relances.sql'));
+
+  // 38a — la table naît fermée : aucun accès navigateur, service complet ;
+  // les deux fonctions sont exécutables par authenticated.
+  const priv38 = (await q(`
+    SELECT has_table_privilege('authenticated', 'relance_suivi', 'SELECT') AS auth_select,
+           has_table_privilege('anon', 'relance_suivi', 'SELECT')          AS anon_select,
+           has_table_privilege('service_role', 'relance_suivi', 'SELECT,INSERT,UPDATE,DELETE') AS service,
+           has_function_privilege('authenticated', 'dettes_a_relancer()', 'EXECUTE') AS f_r,
+           has_function_privilege('authenticated', 'marquer_relance(uuid)', 'EXECUTE') AS f_m`)).rows[0];
+  check('38a. relance_suivi fermée au navigateur, service complet, fonctions exécutables',
+    priv38.auth_select === false && priv38.anon_select === false
+      && priv38.service === true && priv38.f_r === true && priv38.f_m === true,
+    JSON.stringify(priv38));
+
+  // États de départ explicites : les sections précédentes ont laissé FREE
+  // payant et ESSAI expiré — la section ne doit rien supposer.
+  await e(`UPDATE organizations
+             SET plan = 'free', trial_started_at = NULL, trial_ends_at = NULL,
+                 plan_valid_until = NULL
+           WHERE id = '${FREE}'`);
+  const REL = '42424242-4242-4424-8424-424242424242';
+  const EXP = '43434343-4343-4434-8434-434343434343';
+  const ESSAI = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee';
+  await q(`INSERT INTO auth.users (id,email) VALUES ('${REL}','relances@test.ci') ON CONFLICT DO NOTHING`);
+  await q(`INSERT INTO organizations (id,name,slug,plan) VALUES ('${REL}','Boutique Relances','boutique-relances','starter') ON CONFLICT DO NOTHING`);
+  await q(`INSERT INTO auth.users (id,email) VALUES ('${EXP}','echue@test.ci') ON CONFLICT DO NOTHING`);
+  await q(`INSERT INTO organizations (id,name,slug,plan,plan_valid_until) VALUES ('${EXP}','Boutique Échue','boutique-echue','starter', now() - interval '1 day') ON CONFLICT DO NOTHING`);
+  // Plans explicites après insertion : le trigger du programme bêta réécrit
+  // le plan à la création (compte servi → pro), et sales.settled naît à TRUE
+  // (les ventes existantes sont encaissées). Sans ces deux lignes, la section
+  // testerait le programme bêta, pas les relances.
+  await e(`UPDATE organizations SET plan = 'starter', trial_started_at = NULL,
+             trial_ends_at = NULL, plan_valid_until = NULL WHERE id = '${REL}'`);
+  await e(`UPDATE organizations SET plan = 'starter', trial_started_at = NULL,
+             trial_ends_at = NULL, plan_valid_until = now() - interval '1 day'
+           WHERE id = '${EXP}'`);
+
+  // Une vieille dette par org (10 jours, 5000 dus, NON SOLDÉE) + une dette
+  // récente (2 jours) pour REL. Téléphones distincts : aucune diaphonie.
+  const vieille = (org, tel) => `
+    INSERT INTO customer_debts (user_id, phone, name)
+      VALUES ('${org}', '${tel}', 'Client ${tel.slice(-4)}')
+      ON CONFLICT DO NOTHING;
+    INSERT INTO sales (user_id, total_amount, amount_received, payment_method, client_phone, settled, created_at)
+      VALUES ('${org}', 5000, 0, 'credit', '${tel}', false, now() - interval '10 days')`;
+  await e(vieille(FREE, '22991000002'));
+  await e(vieille(REL, '22991000001'));
+  await e(vieille(EXP, '22991000004'));
+  await e(`INSERT INTO customer_debts (user_id, phone, name)
+             VALUES ('${REL}', '22991000003', 'Client récent') ON CONFLICT DO NOTHING`);
+  await e(`INSERT INTO sales (user_id, total_amount, amount_received, payment_method, client_phone, settled, created_at)
+             VALUES ('${REL}', 3000, 0, 'credit', '22991000003', false, now() - interval '2 days')`);
+  const detteRel = (await q(
+    `SELECT id FROM customer_debts WHERE user_id='${REL}' AND phone='22991000001'`)).rows[0].id;
+
+  // 38b — verrou de plan : le gratuit voit ses dettes (get_customer_debts,
+  // sans verrou) mais ne reçoit aucun rappel programmé.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${FREE}', false)`);
+  const autoFree = (await q(`SELECT count(*)::int n FROM dettes_a_relancer()`)).rows[0];
+  const manuelFree = (await q(`SELECT count(*)::int n FROM get_customer_debts()`)).rows[0];
+  check('38b. plan gratuit : aucun rappel programmé, carnet manuel intact',
+    autoFree.n === 0 && manuelFree.n >= 1, JSON.stringify({ autoFree, manuelFree }));
+
+  // 38c — starter : la vieille dette sort, avec son âge ; la récente non.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${REL}', false)`);
+  const cand = (await q(`SELECT * FROM dettes_a_relancer()`)).rows;
+  check('38c. starter : 1 candidate (la vieille de 10 jours), la récente exclue',
+    cand.length === 1 && Number(cand[0].total_due) === 5000
+      && Number(cand[0].total_paid) === 0 && cand[0].jours >= 10,
+    JSON.stringify(cand));
+
+  // 38d — le tap Relancer journalise : la dette disparaît des candidates.
+  const marque = (await q(`SELECT marquer_relance('${detteRel}') m`)).rows[0].m;
+  const apres = (await q(`SELECT count(*)::int n FROM dettes_a_relancer()`)).rows[0];
+  check('38d. marquer_relance() → true, la dette sort des candidates',
+    marque === true && apres.n === 0, JSON.stringify({ marque, apres }));
+
+  // 38e — 7 jours plus tard (log vieilli), elle ressurgit : le rappel est
+  // programmé, pas unique.
+  await e(`UPDATE relance_suivi SET last_reminded_at = now() - interval '8 days'
+           WHERE debt_id = '${detteRel}'`);
+  const retour = (await q(`SELECT count(*)::int n FROM dettes_a_relancer()`)).rows[0];
+  check('38e. relance vieille de 8 jours : la dette redevient candidate',
+    retour.n === 1, JSON.stringify(retour));
+
+  // 38f — essai en cours = starter : rappels reçus ; essai expiré = free :
+  // plus rien. Même org ESSAI, même vieille dette, seul le temps change.
+  await e(vieille(ESSAI, '22991000005'));
+  await e(`UPDATE organizations SET trial_started_at = now() - interval '1 day',
+             trial_ends_at = now() + interval '13 days' WHERE id = '${ESSAI}'`);
+  await q(`SELECT set_config('request.jwt.claim.sub', '${ESSAI}', false)`);
+  const enEssai = (await q(`SELECT count(*)::int n FROM dettes_a_relancer()`)).rows[0];
+  await e(`UPDATE organizations SET trial_ends_at = now() - interval '1 day' WHERE id = '${ESSAI}'`);
+  const expire = (await q(`SELECT count(*)::int n FROM dettes_a_relancer()`)).rows[0];
+  check('38f. essai actif → 1 candidate ; essai expiré → 0',
+    enEssai.n === 1 && expire.n === 0, JSON.stringify({ enEssai, expire }));
+
+  // 38g — plan payant échu : current_org_plan() retombe à free, aucun rappel.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${EXP}', false)`);
+  const planExp = (await q(`SELECT current_org_plan() p`)).rows[0].p;
+  const autoExp = (await q(`SELECT count(*)::int n FROM dettes_a_relancer()`)).rows[0];
+  check('38g. période échue : plan effectif free, aucun rappel',
+    planExp === 'free' && autoExp.n === 0, JSON.stringify({ planExp, autoExp }));
+
+  // 38h — isolation : journaliser la dette d'une autre boutique ment
+  // poliment (false), sans rien écrire.
+  await q(`SELECT set_config('request.jwt.claim.sub', '${REL}', false)`);
+  const detteEtrangere = (await q(
+    `SELECT id FROM customer_debts WHERE user_id='${FREE}' LIMIT 1`)).rows[0].id;
+  const ment = (await q(`SELECT marquer_relance('${detteEtrangere}') m`)).rows[0].m;
+  const trace = (await q(
+    `SELECT count(*)::int n FROM relance_suivi WHERE debt_id='${detteEtrangere}'`)).rows[0];
+  check('38h. dette étrangère : false, aucune trace écrite',
+    ment === false && trace.n === 0, JSON.stringify({ ment, trace }));
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);

@@ -106,9 +106,13 @@ describe('Carnet de dettes — exports', () => {
     expect(screen.queryByRole('button', { name: /Excel/ })).toBeNull();
   });
 
-  it('le lien de relance porte l\'indicatif d\'un numéro à 10 chiffres', async () => {
+  it('le bouton de relance ouvre WhatsApp avec l\'indicatif d\'un numéro à 10 chiffres', async () => {
+    const ouvrir = vi.spyOn(window, 'open').mockReturnValue(null);
     render(<DebtsModule />);
-    const liens = await screen.findAllByRole('link', { name: /Relancer/ });
-    expect(liens[0].getAttribute('href')).toMatch(/^https:\/\/wa\.me\/2290197000001\?text=/);
+    const boutons = await screen.findAllByRole('button', { name: /Relancer/ });
+    fireEvent.click(boutons[0]);
+    expect(ouvrir).toHaveBeenCalled();
+    expect(ouvrir.mock.calls[0][0]).toMatch(/^https:\/\/wa\.me\/2290197000001\?text=/);
+    ouvrir.mockRestore();
   });
 });

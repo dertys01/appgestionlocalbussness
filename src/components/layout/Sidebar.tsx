@@ -101,7 +101,7 @@ export function Sidebar({
 
         {/* Nav items */}
         <nav className="flex-1 py-3 space-y-1 px-2 overflow-y-auto">
-          {items.map(({ key, label, icon: Icon, locked }) => (
+          {items.map(({ key, label, icon: Icon, locked, badge }) => (
             <button
               key={key}
               onClick={() => naviguer(locked ? 'settings' : key)}
@@ -119,6 +119,17 @@ export function Sidebar({
               <span className={libelles}>
                 {label}
                 {locked && <Lock className="w-3 h-3 text-slate-300" />}
+                {/* P6 : pastille « à relancer », Dettes uniquement. Le zéro
+                    ne s'affiche jamais — une pastille à zéro punirait
+                    l'ouverture du menu pour rien. */}
+                {badge !== undefined && badge > 0 && (
+                  <span
+                    aria-label={`${badge} dette${badge > 1 ? 's' : ''} à relancer`}
+                    className="ml-auto mr-1 inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full bg-amber-500 text-white text-[11px] font-bold tabular-nums"
+                  >
+                    {badge}
+                  </span>
+                )}
               </span>
             </button>
           ))}

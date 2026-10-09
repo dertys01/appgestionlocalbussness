@@ -10,7 +10,7 @@
 --    MANQUANTE    = fonction absente de la base
 --    EN PLUS      = fonction présente en base mais pas dans le dépôt
 --
---  49 fonctions · ordre des sections = APPLY_MIGRATIONS.sql
+--  51 fonctions · ordre des sections = APPLY_MIGRATIONS.sql
 -- ============================================================================
 WITH expect(sig, brut_md5, code_md5) AS (
   VALUES
@@ -33,6 +33,7 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('close_table_order(uuid,text,numeric,integer,text,text,numeric)', '0203a702c3229e4d060d929cfb7e1285', '3954e9994a8ec5e873973912f02ebd0a'),
     ('create_sale(jsonb,text,text,text)', 'd08703ca15f146827f8479ea7e9c9f30', 'c528887ee89306bc0a071f9ea39a08f6'),
     ('current_org_plan()', 'ca233084cdc9d653a98bd164a4eae2ac', 'db407b6e27b88cf7f4a0e454971fd30a'),
+    ('dettes_a_relancer()', '7a77668c91d18e50b57f655efd059296', '8394e999b5a1b5ece8bf510fb16e8c5c'),
     ('fill_amount_received()', '35e03e2e5bc95e91ad3d43a5e0c5e8e2', '5e1305ee23c60dc867e4b46cd49f9219'),
     ('freeze_sale_item_cost()', '51ea5fb2804004f581857f43c0702706', '9c10ad43d8f21aed0a3b77accd71c0da'),
     ('get_activation_funnel(date,date,timestampwithtimezone)', '2e33c88246c4097b8e8db48c88139f67', '4074908f327846331cfe0fe8f50785d8'),
@@ -43,6 +44,7 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('get_sales_summary(date,date,text)', 'b20ea71234701f0c5cf9c570040027b2', '874d04e131374a05e6e53a23fa2a78bf'),
     ('get_top_products(date,date,text,integer)', '03bcc22bb85b632d90912b919ad92c0d', '7487786d4255660fe52e807dc79f60b1'),
     ('get_units_sold_since(integer)', '8f74000cae984ddf44cf1a6a78ffe3e2', '6b45edfae71cd3b4be3816ad3c959550'),
+    ('marquer_relance(uuid)', '17d82722d6179dd487dd1ab67d258948', '3fd61fb19fa1f0010e87d02ad48706b5'),
     ('normalize_phone(text)', '560e755f78d2debe862a2814cddae112', '3f8addb8c5e4fbf0ace0ccbceeeda9cc'),
     ('organizations_reject_plan_change()', '9ee6f5d51d38737a7dc107f3f92caf88', 'feb8216cb154d6953576fe38198dc44a'),
     ('pay_customer_debt(uuid,numeric,text,text)', 'c2464b9cb0a7397a2a09d56032533efe', '1c514fcfadaf0642d540b8318727872c'),

@@ -32,6 +32,35 @@ interface Debt {
 
 const PAGE = 20;
 
+/**
+ * Dette à relancer (P6 — dettes_a_relancer()). Même identité que Debt
+ * (debt_id), plus l'âge et la dernière relance : tout ce que la section
+ * « À relancer » affiche tient dans cette ligne.
+ */
+interface Candidat {
+  debt_id: string;
+  phone: string;
+  name: string | null;
+  total_due: number;
+  total_paid: number;
+  oldest_sale_at: string | null;
+  jours: number;
+  last_reminded_at: string | null;
+}
+
+/**
+ * Ce qu'une relance doit dire : nom, solde, déjà-versé, âge. Debt et
+ * Candidat le portent tous deux — reminderLink() ne demande que ça, pas
+ * la fiche entière.
+ */
+export interface RelanceCible {
+  phone: string;
+  name: string | null;
+  total_due: number;
+  total_paid: number;
+  oldest_sale_at: string | null;
+}
+
 /** Numéro lisible : 22997000001 → « 97 00 00 01 ». */
 function prettyPhone(phone: string): string {
   const d = phone.replace(/^229/, '');
@@ -55,6 +84,11 @@ function daysSince(iso: string | null): number | null {
 export function DebtsModule() {
   const { supabase, canManageProducts, plan, org } = useSupabase();
   const [debts, setDebts] = useState<Debt[]>([]);
+  const [candidats, setCandidats] = useState<Candidat[]>([]);
+  // P6 : les rappels programmés sont Starter et Pro (évaluation §7) — la
+  // relance manuelle, elle, reste sur tous les plans. `plan` est déjà le
+  // plan effectif (essai et échéance traduits par le provider).
+  const rappelsAuto = plan === 'starter' || plan === 'pro';
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [payingId, setPayingId] = useState<string | null>(null);
@@ -80,15 +114,41 @@ export function DebtsModule() {
       const { data, error: err } = await supabase.rpc('get_customer_debts');
       if (err) throw new Error(readablePlanError(err.message));
       setDebts((data ?? []) as Debt[]);
+      // Candidats P6 : même passe de chargement, pour que la pastille de
+      // navigation et la section disent la même chose. Échec silencieux —
+      // le carnet reste, seul le rappel disparaît.
+      if (rappelsAuto) {
+        const { data: cand, error: errCand } = await supabase.rpc('dettes_a_relancer');
+        if (!errCand) setCandidats((cand ?? []) as Candidat[]);
+      } else {
+        setCandidats([]);
+      }
     } catch (e) {
       setError((e as Error).message);
       setDebts([]);
     } finally {
       setLoading(false);
     }
-  }, [supabase]);
+  }, [supabase, rappelsAuto]);
 
   useEffect(() => { load(); }, [load]);
+
+  /**
+   * Relancer un client (P6) : WhatsApp s'ouvre D'ABORD, la journalisation
+   * ensuite. Inverser les deux casserait la chaîne du geste utilisateur et
+   * les bloqueurs de popup mangeraient la fenêtre — le message partirait
+   * sans s'ouvrir. Le log ne bloque jamais l'envoi (marquer_relance() ment
+   * poliment en base) ; son échec ne fait que refaire surface la dette.
+   */
+  const relancer = (d: RelanceCible & { debt_id: string }) => {
+    window.open(reminderLink(d, plan), '_blank', 'noopener');
+    // Fire-and-forget volontaire : le message est déjà parti.
+    void supabase.rpc('marquer_relance', { p_debt_id: d.debt_id }).then(({ error }) => {
+      if (!error && rappelsAuto) {
+        setCandidats((prev) => prev.filter((c) => c.debt_id !== d.debt_id));
+      }
+    });
+  };
 
   const pay = async (debt: Debt) => {
     const raw = (amounts[debt.debt_id] ?? '').trim();
@@ -223,6 +283,44 @@ export function DebtsModule() {
         </p>
       )}
 
+      {/* P6 : le rappel programmé. Starter et Pro uniquement (évaluation
+          §7) — le gratuit garde la relance manuelle, dette par dette, plus
+          bas. Un tap ouvre WhatsApp avec le message respectueux habituel ;
+          la relance est notée, la carte disparaît jusqu'au prochain cycle. */}
+      {rappelsAuto && candidats.length > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
+          <p className="text-sm font-semibold text-amber-900">
+            À relancer ({candidats.length})
+          </p>
+          <p className="text-xs text-amber-800">
+            Ces clients doivent depuis 7 jours ou plus. Un tap ouvre WhatsApp —
+            la relance est notée automatiquement.
+          </p>
+          {candidats.map((c) => (
+            <div
+              key={c.debt_id}
+              className="flex items-center gap-3 rounded-lg bg-white border border-amber-100 px-3 py-2"
+            >
+              <div className="flex-1 min-w-0">
+                <div className="font-medium text-slate-800 text-sm truncate">
+                  {c.name ?? 'Client sans nom'}
+                </div>
+                <div className="text-xs text-slate-500 tabular-nums">
+                  {formatCFA(c.total_due)} · depuis {c.jours} jour{c.jours > 1 ? 's' : ''}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => relancer(c)}
+                className="shrink-0 inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#25D366] hover:bg-[#1ebe5d] text-white text-xs font-medium px-3 h-9"
+              >
+                <MessageCircle className="w-3.5 h-3.5" /> Relancer
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+
       {loading && debts.length === 0 ? (
         <div className="text-center text-slate-500 py-8 text-sm">Chargement...</div>
       ) : debts.length === 0 ? (
@@ -287,14 +385,13 @@ export function DebtsModule() {
                       Encaisser poussé à droite par ml-auto) et le montant +
                       moyen occupent la rangée du dessous, en pleine largeur. */}
                   <div className="flex flex-wrap gap-2">
-                    <a
-                      href={reminderLink(d, plan)}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                    <button
+                      type="button"
+                      onClick={() => relancer(d)}
                       className="order-1 shrink-0 inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#25D366] hover:bg-[#1ebe5d] text-white text-xs font-medium px-3 h-11 sm:h-9"
                     >
                       <MessageCircle className="w-3.5 h-3.5" /> Relancer
-                    </a>
+                    </button>
 
                     {canManageProducts && (
                       <>
@@ -386,7 +483,7 @@ export function DebtsModule() {
  * Exportée pour le test : c'est aussi le seul message du produit qui part
  * sans reçu (le pied de diffusion P4 y est vérifié).
  */
-export function reminderLink(d: Debt, plan: Plan): string {
+export function reminderLink(d: RelanceCible, plan: Plan): string {
   const age = daysSince(d.oldest_sale_at);
   const depuis = age !== null && age >= 7 ? ` depuis ${age} jours` : '';
   const message = [
