@@ -119,6 +119,9 @@ const ORDER = [
   // supabase_realtime. Aucun effet sur le schéma ni les données ; la partie
   // client reste inerte tant que NEXT_PUBLIC_REALTIME ≠ « 1 ».
   'migration_realtime.sql',
+  // Durcissement (S-4) : anon/authenticated ne peuvent plus créer d'objets
+  // dans le schéma public.
+  'migration_hardening.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une

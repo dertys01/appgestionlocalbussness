@@ -16,6 +16,7 @@ import { formatCFA, formatQty } from '@/lib/utils/currency';
 import { printKitchenTicket } from '@/lib/utils/kitchen';
 import { platsServisAujourdhui } from '@/lib/utils/menu';
 import { lireMontant } from '@/lib/utils/nombres';
+import { useRealtimeRefresh } from '@/lib/hooks/useRealtimeRefresh';
 import type { Product } from '@/types';
 
 /**
@@ -249,6 +250,10 @@ export function FloorModule({
     const t = setTimeout(() => { void loadTables(); }, 0);
     return () => clearTimeout(t);
   }, [loadTables]);
+
+  // Temps réel (si NEXT_PUBLIC_REALTIME=1) : une commande ouverte sur un autre
+  // appareil (le serveur, la caisse) rafraîchit le plan de salle.
+  useRealtimeRefresh(['restaurant_orders'], loadTables);
 
   useEffect(() => {
     if (!orderId) return;

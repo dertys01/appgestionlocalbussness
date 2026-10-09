@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import { useState, useMemo, useCallback, useEffect, useRef, memo } from 'react';
 import {
   ShoppingCart,
   Trash2,
@@ -109,6 +109,107 @@ function readableSaleError(message: string): string {
   }
   return "La vente n'a pas été enregistrée. Aucune modification n'a été appliquée.";
 }
+
+/**
+ * Carte produit (vue grille) et ligne produit (vue liste), mémoïsées.
+ *
+ * Le POS se re-rend à chaque geste du panier. Sans mémoïsation, les 60 cartes
+ * affichées se réconcilient à chaque ajout ou retrait, alors qu'une seule
+ * change. `React.memo` ne re-rend que celle dont la quantité a bougé : c'est
+ * ce qui garde la caisse fluide quand le catalogue grandit.
+ *
+ * `onAjouter` doit être stable (useCallback), sinon la mémoïsation ne sert à
+ * rien.
+ */
+const CarteProduit = memo(function CarteProduit({
+  produit, quantite, vendable, estPlat, onAjouter,
+}: {
+  produit: Product;
+  quantite: number;
+  vendable: boolean;
+  estPlat: boolean;
+  onAjouter: (p: Product) => void;
+}) {
+  return (
+    <button
+      onClick={() => onAjouter(produit)}
+      aria-disabled={!vendable || undefined}
+      className={`group relative flex flex-col text-left rounded-xl border p-3 shadow-sm transition-all ${
+        vendable
+          ? 'border-slate-200 bg-white hover:border-indigo-400 hover:shadow-md active:scale-95'
+          : 'border-slate-200 bg-slate-50 cursor-not-allowed'
+      }`}
+    >
+      {quantite > 0 && (
+        <span className="absolute -top-2 -right-2 h-5 min-w-5 px-1 rounded-full bg-indigo-600 text-white text-xs flex items-center justify-center font-bold">
+          {formatQty(quantite)}
+        </span>
+      )}
+      <div className="text-xs text-slate-500 mb-1">{produit.category ?? '—'}</div>
+      <div className={`min-h-9 font-semibold text-sm leading-tight line-clamp-2 ${vendable ? 'text-slate-800' : 'text-slate-400 line-through'}`}>
+        {produit.name}
+      </div>
+      <div className={`mt-2 pt-auto font-bold ${vendable ? 'text-indigo-600' : 'text-slate-300'}`}>{formatCFA(produit.price_sell)}</div>
+      <div className="text-xs text-slate-500">
+        {!vendable ? (
+          <span className="text-red-500 font-medium">Rupture de stock</span>
+        ) : estPlat ? (
+          <span className="text-slate-400">Recette</span>
+        ) : (
+          <>Stock : {formatQty(produit.stock_qty)} {produit.unit ?? 'pce'}</>
+        )}
+      </div>
+    </button>
+  );
+});
+
+const LigneProduit = memo(function LigneProduit({
+  produit, quantite, vendable, estPlat, onAjouter,
+}: {
+  produit: Product;
+  quantite: number;
+  vendable: boolean;
+  estPlat: boolean;
+  onAjouter: (p: Product) => void;
+}) {
+  return (
+    <button
+      onClick={() => onAjouter(produit)}
+      aria-disabled={!vendable || undefined}
+      className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors ${
+        vendable ? 'hover:bg-indigo-50/40 active:bg-indigo-50' : 'bg-slate-50/60 cursor-not-allowed'
+      }`}
+    >
+      <div className="flex-1 min-w-0">
+        <div className={`text-sm truncate ${vendable ? 'font-medium text-slate-800' : 'text-slate-400 line-through'}`}>
+          {produit.name}
+        </div>
+        <div className="flex items-baseline gap-2 text-xs">
+          <span className={`shrink-0 ${!vendable ? 'text-red-500 font-medium' : 'text-slate-500'}`}>
+            {!vendable ? (
+              'Rupture de stock'
+            ) : estPlat ? (
+              <span className="text-slate-400">Recette</span>
+            ) : (
+              <>Stock : {formatQty(produit.stock_qty)} {produit.unit ?? 'pce'}</>
+            )}
+          </span>
+          <span className="min-w-0 truncate text-right text-slate-400">
+            {produit.category ?? '—'}
+          </span>
+        </div>
+      </div>
+      <div className={`text-sm whitespace-nowrap ${vendable ? 'font-semibold text-indigo-600' : 'text-slate-300 font-semibold'}`}>
+        {formatCFA(produit.price_sell)}
+      </div>
+      {quantite > 0 && (
+        <span className="h-5 min-w-5 px-1 rounded-full bg-indigo-600 text-white text-xs flex items-center justify-center font-bold">
+          {formatQty(quantite)}
+        </span>
+      )}
+    </button>
+  );
+});
 
 export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToCartHandled, onReceiptClosed }: POSModuleProps) {
   const { supabase, ownerId, actorName, org, plan } = useSupabase();
@@ -555,6 +656,15 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
     [filtered, visibleCount]
   );
 
+  // Quantité au panier par produit, passée aux cartes mémoïsées : elle ne
+  // change que pour le produit concerné, donc les autres cartes ne se
+  // re-rendent pas à chaque geste du panier.
+  const quantites = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const i of cart) m.set(i.product.id, i.quantity);
+    return m;
+  }, [cart]);
+
   // Prix effectif de la ligne : prix convenu s'il y en a un, sinon catalogue.
   const linePrice = (item: CartItem) => item.unitPrice ?? item.product.price_sell;
 
@@ -636,14 +746,14 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
    * caissier peut alors dire « il n'y en a plus » au lieu de chercher pourquoi
    * le produit n'est pas dans la liste.
    */
-  const ajouter = (product: Product) => {
+  const ajouter = useCallback((product: Product) => {
     if (!vendable(product)) {
       setScanError(`« ${product.name} » est en rupture de stock.`);
       return;
     }
     setScanError('');
     addToCart(product);
-  };
+  }, [vendable, addToCart]);
 
   /**
    * Quantité saisie. Le champ est décimal : « 1,2 » comme « 1.2 » sont acceptés
@@ -1132,71 +1242,16 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
 
         {vue === 'liste' ? (
           <div className="divide-y divide-slate-100 rounded-xl border border-slate-200 bg-white">
-            {visibleProducts.map((p) => {
-              const inCart = cart.find((i) => i.product.id === p.id);
-              return (
-                <button
-                  key={p.id}
-                  onClick={() => ajouter(p)}
-                  aria-disabled={!vendable(p) || undefined}
-                  className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors ${
-                    vendable(p)
-                      ? 'hover:bg-indigo-50/40 active:bg-indigo-50'
-                      : 'bg-slate-50/60 cursor-not-allowed'
-                  }`}
-                >
-                  <div className="flex-1 min-w-0">
-                    {/* Le nom porte l'information ; la catégorie est une
-                        mention. C'est donc le nom qui se tronque, et la
-                        catégorie qui disparaît en premier quand la ligne est
-                        courte. */}
-                    <div className={`text-sm truncate ${vendable(p) ? 'font-medium text-slate-800' : 'text-slate-400 line-through'}`}>
-                      {p.name}
-                    </div>
-                    {/* Deux mentions sur une rangée : le stock à gauche (c'est
-                        lui qu'on compare d'un produit à l'autre), le rayon à
-                        droite. min-w-0 + truncate sur la mention de droite :
-                        la catégorie suit le nom dans le flux du texte, elle
-                        débordait donc à droite d'une colonne qui ne déborde
-                                        pas — invisible pour tout contrôle de
-                        largeur de page, mais bien hors du cadre à l'écran. */}
-                    <div className="flex items-baseline gap-2 text-xs">
-                      <span
-                        className={`shrink-0 ${
-                          !vendable(p) ? 'text-red-500 font-medium' : 'text-slate-500'
-                        }`}
-                      >
-                        {!vendable(p) ? (
-                          'Rupture de stock'
-                        ) : dishIds.has(p.id) ? (
-                          /* Un plat n'a pas de stock à afficher : ce qui peut
-                             manquer, c'est un ingrédient, et la vente sera refusée
-                             en le nommant. « Stock : 0 pce » sur un plat ne
-                             voulait rien dire. */
-                          <span className="text-slate-400">Recette</span>
-                        ) : (
-                          <>Stock : {formatQty(p.stock_qty)} {p.unit ?? 'pce'}</>
-                        )}
-                      </span>
-                      <span className="min-w-0 truncate text-right text-slate-400">
-                        {p.category ?? '—'}
-                      </span>
-                    </div>
-                  </div>
-                  <div className={`text-sm whitespace-nowrap ${vendable(p) ? 'font-semibold text-indigo-600' : 'text-slate-300 font-semibold'}`}>
-                    {formatCFA(p.price_sell)}
-                  </div>
-                  {inCart && (
-                    <span className="h-5 min-w-5 px-1 rounded-full bg-indigo-600 text-white text-xs flex items-center justify-center font-bold">
-                      {/* formatQty : la pastille affichait « 2.5 » à côté d'un
-                          stock écrit « 48,4 pce ». Deux écritures de la même
-                          quantité dans le même écran. */}
-                      {formatQty(inCart.quantity)}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
+            {visibleProducts.map((p) => (
+              <LigneProduit
+                key={p.id}
+                produit={p}
+                quantite={quantites.get(p.id) ?? 0}
+                vendable={vendable(p)}
+                estPlat={dishIds.has(p.id)}
+                onAjouter={ajouter}
+              />
+            ))}
 
             {filtered.length === 0 && (
               <div className="p-6">
@@ -1216,45 +1271,16 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           </div>
         ) : (
         <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
-          {visibleProducts.map((p) => {
-            const inCart = cart.find((i) => i.product.id === p.id);
-            return (
-              <button
-                key={p.id}
-                onClick={() => ajouter(p)}
-                aria-disabled={!vendable(p) || undefined}
-                className={`group relative flex flex-col text-left rounded-xl border p-3 shadow-sm transition-all ${
-                  vendable(p)
-                    ? 'border-slate-200 bg-white hover:border-indigo-400 hover:shadow-md active:scale-95'
-                    : 'border-slate-200 bg-slate-50 cursor-not-allowed'
-                }`}
-              >
-                {inCart && (
-                  <span className="absolute -top-2 -right-2 h-5 min-w-5 px-1 rounded-full bg-indigo-600 text-white text-xs flex items-center justify-center font-bold">
-                    {formatQty(inCart.quantity)}
-                  </span>
-                )}
-                <div className="text-xs text-slate-500 mb-1">{p.category ?? '—'}</div>
-                {/* min-h fixe la hauteur du bloc nom sur deux lignes. Sans elle,
-                    un nom court laissait les prix de la rangée monte à des
-                    hauteurs différentes : la grille devenait un escalier, et le
-                    prix — la seule chose qu'on compare — n'était plus aligné. */}
-                <div className={`min-h-9 font-semibold text-sm leading-tight line-clamp-2 ${vendable(p) ? 'text-slate-800' : 'text-slate-400 line-through'}`}>
-                  {p.name}
-                </div>
-                <div className={`mt-2 pt-auto font-bold ${vendable(p) ? 'text-indigo-600' : 'text-slate-300'}`}>{formatCFA(p.price_sell)}</div>
-                <div className="text-xs text-slate-500">
-                  {!vendable(p) ? (
-                    <span className="text-red-500 font-medium">Rupture de stock</span>
-                  ) : dishIds.has(p.id) ? (
-                    <span className="text-slate-400">Recette</span>
-                  ) : (
-                    <>Stock : {formatQty(p.stock_qty)} {p.unit ?? 'pce'}</>
-                  )}
-                </div>
-              </button>
-            );
-          })}
+          {visibleProducts.map((p) => (
+            <CarteProduit
+              key={p.id}
+              produit={p}
+              quantite={quantites.get(p.id) ?? 0}
+              vendable={vendable(p)}
+              estPlat={dishIds.has(p.id)}
+              onAjouter={ajouter}
+            />
+          ))}
 
           {filtered.length === 0 && (
             <div className="col-span-full">

@@ -14,6 +14,7 @@ import { isFeatureAllowed } from '@/lib/utils/plans';
 import { piedDiffusion } from '@/lib/utils/whatsapp';
 import type { Plan } from '@/types';
 import { downloadCSV, toCSV } from '@/lib/utils/export';
+import { useRealtimeRefresh } from '@/lib/hooks/useRealtimeRefresh';
 import { imprimerRapport } from '@/lib/utils/rapport';
 
 interface Debt {
@@ -132,6 +133,10 @@ export function DebtsModule() {
   }, [supabase, rappelsAuto]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Temps réel (si NEXT_PUBLIC_REALTIME=1) : un règlement ou une nouvelle dette
+  // saisi sur un autre appareil rafraîchit le carnet.
+  useRealtimeRefresh(['customer_debts'], load);
 
   /**
    * Relancer un client (P6) : WhatsApp s'ouvre D'ABORD, la journalisation

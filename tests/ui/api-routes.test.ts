@@ -24,6 +24,19 @@ vi.mock('@supabase/supabase-js', () => ({
   createClient: h.createClient,
 }));
 
+// Stripe : la route webhook construit l'événement à partir de la signature. On
+// remplace la classe par un double qui rend l'événement fourni par le test.
+const stripeMock = vi.hoisted(() => ({
+  constructEvent: vi.fn(),
+  retrieve: vi.fn(),
+}));
+vi.mock('stripe', () => ({
+  default: class {
+    webhooks = { constructEvent: stripeMock.constructEvent };
+    subscriptions = { retrieve: stripeMock.retrieve };
+  },
+}));
+
 // ── Faux client Supabase ────────────────────────────────────
 // Builder thenable : chaque maillon (select/eq/…) renvoie le builder, et
 // `maybeSingle`/`single`/`await` renvoient le résultat configuré.
@@ -31,7 +44,7 @@ type Rep = { data: unknown; error: { message: string; code?: string } | null };
 
 function builder(result: Rep): Record<string, unknown> {
   const b: Record<string, unknown> = {};
-  for (const m of ['select', 'insert', 'update', 'delete', 'eq', 'is', 'order', 'limit', 'gte', 'lte', 'range']) {
+  for (const m of ['select', 'insert', 'upsert', 'update', 'delete', 'eq', 'is', 'order', 'limit', 'gte', 'lte', 'range']) {
     b[m] = () => b;
   }
   b.maybeSingle = () => Promise.resolve(result);
@@ -280,6 +293,101 @@ describe('PATCH /api/employees/[id]', () => {
       post('/api/employees/membre-1', { role: 'super-admin' }, { authorization: 'Bearer jeton' }),
       ctx,
     );
+    expect(res.status).toBe(400);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+describe('POST /api/stripe/webhook', () => {
+  beforeEach(() => {
+    process.env.STRIPE_SECRET_KEY = 'sk_test';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'srk';
+    process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
+  });
+
+  it('signature invalide → 400, aucun traitement', async () => {
+    stripeMock.constructEvent.mockImplementation(() => { throw new Error('bad signature'); });
+    const { POST } = await import('@/app/api/stripe/webhook/route');
+    const res = await POST(post('/api/stripe/webhook', { id: 'evt' }, { 'stripe-signature': 'faux' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('événement déjà pris en charge → duplicate (idempotence)', async () => {
+    stripeMock.constructEvent.mockReturnValue({
+      id: 'evt_1', type: 'customer.subscription.updated',
+      data: { object: { metadata: { org_id: 'o1' } } },
+    });
+    h.client = fakeClient({ rpc: { claim_webhook_event: { data: false, error: null } } });
+    const { POST } = await import('@/app/api/stripe/webhook/route');
+    const res = await POST(post('/api/stripe/webhook', { id: 'evt_1' }, { 'stripe-signature': 'ok' }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).duplicate).toBe(true);
+  });
+
+  it('checkout.session.completed actif → 200', async () => {
+    stripeMock.constructEvent.mockReturnValue({
+      id: 'evt_2', type: 'checkout.session.completed',
+      data: { object: { metadata: { org_id: 'o1', plan: 'pro' }, subscription: 'sub_1', customer: 'cus_1' } },
+    });
+    stripeMock.retrieve.mockResolvedValue({
+      id: 'sub_1', status: 'active',
+      items: { data: [{ price: { id: 'price_pro' }, current_period_end: 1893456000 }] },
+    });
+    h.client = fakeClient({ rpc: { claim_webhook_event: { data: true, error: null } } });
+    const { POST } = await import('@/app/api/stripe/webhook/route');
+    const res = await POST(post('/api/stripe/webhook', { id: 'evt_2' }, { 'stripe-signature': 'ok' }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).received).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+describe('POST /api/payments/order', () => {
+  const patron = () => fakeClient({
+    getUser: () => ({ data: { user: { id: 'u1' } }, error: null }),
+    rpc: { get_business_owner_id: { data: 'u1', error: null } },
+  });
+
+  it('sans session → 401', async () => {
+    h.client = fakeClient({ getUser: () => ({ data: { user: null }, error: null }) });
+    const { POST } = await import('@/app/api/payments/order/route');
+    const res = await POST(post('/api/payments/order', { plan: 'pro', mois: 1 }));
+    expect(res.status).toBe(401);
+  });
+
+  it('patron, demande invalide → 400', async () => {
+    h.client = patron();
+    const { POST } = await import('@/app/api/payments/order/route');
+    const res = await POST(post('/api/payments/order', { plan: 'inconnu', mois: 2 }, { authorization: 'Bearer j' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('bac à sable non activé → 503 (fail-closed)', async () => {
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'srk';
+    delete process.env.PAYMENTS_SANDBOX;
+    h.client = patron();
+    const { POST } = await import('@/app/api/payments/order/route');
+    const res = await POST(post('/api/payments/order', { plan: 'pro', mois: 1 }, { authorization: 'Bearer j' }));
+    expect(res.status).toBe(503);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+describe('POST /api/invitations', () => {
+  it('sans session → 401', async () => {
+    h.client = fakeClient({ getUser: () => ({ data: { user: null }, error: null }) });
+    const { POST } = await import('@/app/api/invitations/route');
+    const res = await POST(post('/api/invitations', { email: 'a@b.com' }));
+    expect(res.status).toBe(401);
+  });
+
+  it('patron, email invalide → 400', async () => {
+    h.client = fakeClient({
+      getUser: () => ({ data: { user: { id: 'u1' } }, error: null }),
+      rpc: { get_business_owner_id: { data: 'u1', error: null } },
+    });
+    const { POST } = await import('@/app/api/invitations/route');
+    const res = await POST(post('/api/invitations', { email: 'pas-un-email' }, { authorization: 'Bearer j' }));
     expect(res.status).toBe(400);
   });
 });
