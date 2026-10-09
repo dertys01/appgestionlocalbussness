@@ -90,7 +90,7 @@ export function printKitchenTicket(ticket: KitchenTicket): boolean {
     `<div class="meta">`,
     ticket.tableName
       ? `<div><span class="bold">${escapeHtml(ticket.tableName)}</span>${
-          ticket.zone ? ` — ${escapeHtml(ticket.zone)}` : ''
+          ticket.zone ? ` (${escapeHtml(ticket.zone)})` : ''
         }</div>`
       : `<div class="bold">À emporter</div>`,
     heure ? `<div class="label">ouvert à ${escapeHtml(heure)}</div>` : '',
@@ -99,7 +99,7 @@ export function printKitchenTicket(ticket: KitchenTicket): boolean {
     items || `<div class="empty">Aucun plat à envoyer</div>`,
     `<div style="margin-top:14px;text-align:center">`,
     `<button onclick="window.print()" style="padding:8px 20px;cursor:pointer;border:1px solid #000;background:#fff;font-size:12px">`,
-    `🖨 Imprimer</button></div>`,
+    `Imprimer</button></div>`,
     `</body></html>`,
   ].join('');
 

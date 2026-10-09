@@ -25,7 +25,7 @@ export function OrgLoadFailed({ error }: { error: string }) {
         <h1 className="text-xl font-bold text-slate-800">Lecture de la boutique impossible</h1>
         <p className="text-slate-600 text-sm">
           Votre boutique existe, mais elle n&apos;a pas pu être chargée.
-          Réessayez avant toute chose — ne créez pas un second établissement.
+          Réessayez avant toute chose, ne créez pas un second établissement.
         </p>
         <p className="text-red-600 text-xs break-words">{error}</p>
         <div className="space-y-2">

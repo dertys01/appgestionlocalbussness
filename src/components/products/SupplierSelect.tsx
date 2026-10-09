@@ -107,7 +107,7 @@ export function SupplierSelect({ value, onChange, disabled, id }: SupplierSelect
             {suppliers.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name}
-                {s.phone ? ` — ${s.phone}` : ''}
+                {s.phone ? ` (${s.phone})` : ''}
               </option>
             ))}
           </select>

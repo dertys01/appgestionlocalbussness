@@ -79,15 +79,15 @@ export function generateWhatsAppReceiptLink(receipt: SaleReceipt, phone?: string
       reste > 0
         ? [
             `*Total : ${formatCFA(total)}*`,
-            ...(advance > 0 ? [`✅ Déjà versé : ${formatCFA(advance)}`] : []),
-            `💶 *Reste à régler : ${formatCFA(reste)}*`,
+            ...(advance > 0 ? [`Déjà versé : ${formatCFA(advance)}`] : []),
+            `*Reste à régler : ${formatCFA(reste)}*`,
           ]
         : advance > 0
-          ? [`*Total : ${formatCFA(total)}*`, `✅ *Réglé en totalité*`]
+          ? [`*Total : ${formatCFA(total)}*`, `*Réglé en totalité*`]
           : [`*Total : ${formatCFA(total)}*`];
 
     const message = [
-      `📝 *${businessName}*`,
+      `*${businessName}*`,
       ``,
       `Bonjour, voici le récapitulatif de votre achat :`,
       ``,
@@ -95,12 +95,12 @@ export function generateWhatsAppReceiptLink(receipt: SaleReceipt, phone?: string
       ``,
       ...lignesPaiement,
       ``,
-      `📅 Vendu le ${dateStr}`,
-      ...(reste > 0 ? [`💳 Paiement : à crédit`] : []),
+      `Vendu le ${dateStr}`,
+      ...(reste > 0 ? [`Paiement : à crédit`] : []),
       ``,
       reste > 0
-        ? `Merci de passer régler quand vous pouvez. 🙏`
-        : `Merci pour votre achat ! 🙏`,
+        ? `Merci de passer régler quand vous pouvez.`
+        : `Merci pour votre achat !`,
       ...piedDiffusion(plan),
     ].join('\n');
 
@@ -110,15 +110,15 @@ export function generateWhatsAppReceiptLink(receipt: SaleReceipt, phone?: string
   const paymentLabel = paymentMethod === 'momo' ? 'Mobile Money' : 'Espèces';
 
   const message = [
-    `🧾 *Reçu - ${businessName}*`,
-    `📅 ${dateStr}`,
+    `*Reçu - ${businessName}*`,
+    `${dateStr}`,
     ``,
     itemLines,
     ``,
-    `💰 *Total : ${formatCFA(total)}*`,
-    `💳 Paiement : ${paymentLabel}`,
+    `*Total : ${formatCFA(total)}*`,
+    `Paiement : ${paymentLabel}`,
     ``,
-    `Merci pour votre achat ! 🙏`,
+    `Merci pour votre achat !`,
     ...piedDiffusion(plan),
   ].join('\n');
 

@@ -65,7 +65,7 @@ export function DashboardTab({
           <CardContent className="p-5 space-y-4">
             <div>
               <h3 className="font-semibold text-slate-800">
-                {canManageProducts ? 'Bienvenue — vos trois premiers pas' : 'Boutique encore vide'}
+                {canManageProducts ? 'Bienvenue : vos trois premiers pas' : 'Boutique encore vide'}
               </h3>
               <p className="text-sm text-slate-600 mt-1">
                 {canManageProducts
@@ -87,7 +87,7 @@ export function DashboardTab({
                     </span>
                     <span>
                       <strong className="font-semibold">{titre}</strong>
-                      <span className="text-slate-500"> — {detail}</span>
+                      <span className="text-slate-500"> : {detail}</span>
                     </span>
                   </li>
                 ))}
@@ -174,7 +174,7 @@ export function DashboardTab({
       {stockBas.length > 0 && (
         <div className="space-y-2">
           <h3 className="font-semibold text-red-600 flex items-center gap-2 text-sm">
-            <AlertTriangle className="h-4 w-4" /> Stock bas — {stockBas.length} produit{stockBas.length > 1 ? 's' : ''} à réapprovisionner
+            <AlertTriangle className="h-4 w-4" /> Stock bas : {stockBas.length} produit{stockBas.length > 1 ? 's' : ''} à réapprovisionner
           </h3>
           {stockBas.map((p) => (
             <Card key={p.id} className="border-red-200 bg-red-50">

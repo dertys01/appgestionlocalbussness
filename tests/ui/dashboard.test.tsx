@@ -35,7 +35,7 @@ describe('DashboardTab — boutique neuve (0 produit)', () => {
   it('remplace les trois cartes à zéro par les trois premiers pas', () => {
     renderTab([]);
 
-    expect(screen.getByText('Bienvenue — vos trois premiers pas')).toBeInTheDocument();
+    expect(screen.getByText('Bienvenue : vos trois premiers pas')).toBeInTheDocument();
     expect(screen.getAllByRole('listitem')).toHaveLength(3);
 
     // pas de carte « 0 F » sans explication
@@ -85,7 +85,7 @@ describe('DashboardTab — boutique en activité', () => {
     expect(screen.getByText('7')).toBeInTheDocument();
     expect(screen.getByText(/15\s?500 F/)).toBeInTheDocument();
     expect(screen.getByText('2 clients')).toBeInTheDocument();
-    expect(screen.queryByText(/Bienvenue — vos trois premiers pas/)).toBeNull();
+    expect(screen.queryByText(/Bienvenue : vos trois premiers pas/)).toBeNull();
   });
 
   it('n\u2019affiche pas de faux zéros pendant le chargement', () => {
@@ -116,7 +116,7 @@ describe('DashboardTab — boutique en activité', () => {
       product({ id: 'p3', name: 'Sucre 1 kg', stock_qty: 1, min_stock_level: 3 }),
     ]);
     // les deux produits sous le seuil, jamais « 3 »
-    expect(screen.getByText(/Stock bas — 2 produits à réapprovisionner/)).toBeInTheDocument();
+    expect(screen.getByText(/Stock bas : 2 produits à réapprovisionner/)).toBeInTheDocument();
     expect(screen.getByText('Huile 1 L')).toBeInTheDocument();
     expect(screen.getByText('Sucre 1 kg')).toBeInTheDocument();
     expect(screen.queryByText('Riz 1 kg')).toBeNull();

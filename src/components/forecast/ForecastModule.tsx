@@ -213,7 +213,7 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
                           {f.product.name}
                         </span>
                         <Badge className={`text-xs py-0 ${cfg.badge}`}>
-                          {status === 'urgent' && `⚠️ Rupture dans ${f.daysUntilStockout}j`}
+                          {status === 'urgent' && `Rupture dans ${f.daysUntilStockout}j`}
                           {status === 'warning' && `${f.daysUntilStockout}j restants`}
                           {status === 'ok' && f.daysUntilStockout !== null && `${f.daysUntilStockout}j restants`}
                           {status === 'nodata' && 'Aucune vente récente'}
@@ -239,7 +239,7 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
 
                       {f.suggestedReorder > 0 && (
                         <div className="mt-2 text-xs text-indigo-600 font-medium">
-                          💡 Commander ~{f.suggestedReorder} unités pour 30j ({formatCFA(f.suggestedReorder * f.product.price_buy)})
+                          Commander ~{f.suggestedReorder} unités pour 30j ({formatCFA(f.suggestedReorder * f.product.price_buy)})
                         </div>
                       )}
 

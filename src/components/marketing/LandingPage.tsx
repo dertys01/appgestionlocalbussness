@@ -31,7 +31,7 @@ const CAPTURES = [
     src: '/captures/tableau-du-jour.png',
     alt: "Le tableau du jour : encaissé, nombre de ventes et somme à recouvrer",
     legende: 'Le tableau du jour',
-    detail: "L'encaissé, les ventes et ce qu'il reste à recouvrer — en un écran.",
+    detail: "L'encaissé, les ventes et ce qu'il reste à recouvrer, en un écran.",
   },
   {
     src: '/captures/caisse.png',
@@ -142,7 +142,7 @@ export function LandingPage() {
           <p className="mt-5 text-slate-600 text-lg max-w-2xl mx-auto">
             GestionLocal est l&apos;application des commerçants : encaissez au
             comptoir, relevez ce que les clients vous devez, et savez ce qu&apos;il
-            vous reste en stock — depuis votre téléphone.
+            vous reste en stock, depuis votre téléphone.
           </p>
           <div className="mt-8 flex justify-center">
             <Appels />
@@ -195,7 +195,7 @@ export function LandingPage() {
             ))}
           </ul>
           <p className="text-center text-sm text-slate-500 mt-8">
-            Les rapports et les exports figurent dans les formules payantes —{' '}
+            Les rapports et les exports figurent dans les formules payantes :{' '}
             <Link href="/tarifs" className="text-indigo-600 hover:text-indigo-800 underline">
               comparaison sur la page tarifs
             </Link>
@@ -210,7 +210,7 @@ export function LandingPage() {
               Votre boutique mérite mieux qu&apos;un cahier.
             </h2>
             <p className="mt-3 text-indigo-100">
-              Créez-la en deux minutes — ou posez vos questions sur WhatsApp,
+              Créez-la en deux minutes, ou posez vos questions sur WhatsApp,
               on répond nous-mêmes.
             </p>
             <div className="mt-7 flex justify-center">

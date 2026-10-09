@@ -132,7 +132,7 @@ export function printReceipt(data: PrintData) {
     `<tr class="total-row"><td colspan="3">TOTAL</td><td style="text-align:right">${escapeHtml(fmtCFA(data.total))}</td></tr>`,
     `<tr><td colspan="3" class="label">Paiement</td><td style="text-align:right">${
       data.paymentMethod === 'momo' ? 'Mobile Money'
-      : data.paymentMethod === 'credit' ? 'Crédit — à recouvrer'
+      : data.paymentMethod === 'credit' ? 'Crédit (à recouvrer)'
       : 'Espèces'
     }</td></tr>`,
     data.paymentMethod === 'cash' && data.amountGiven >= data.total
@@ -168,7 +168,7 @@ export function printReceipt(data: PrintData) {
     footer,
     `<div style="margin-top:16px;text-align:center">`,
     `<button onclick="window.print()" style="padding:8px 20px;cursor:pointer;border:1px solid #000;background:#fff;font-size:12px">`,
-    `\uD83D\uDDA8 Imprimer</button></div>`,
+    `Imprimer</button></div>`,
     `</body></html>`,
   ].join('');
 

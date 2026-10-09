@@ -4,7 +4,7 @@ import type { Metadata } from 'next';
 // pas en exporter. La page reste intégralement côté client (formulaire +
 // redirection), seul le titre du onglet est rendu par le serveur.
 export const metadata: Metadata = {
-  title: 'Créer un compte — GestionLocal',
+  title: 'Créer un compte - GestionLocal',
   description:
     'Créez votre compte GestionLocal et donnez un nom à votre boutique. Plan gratuit, aucune carte bancaire requise.',
 };

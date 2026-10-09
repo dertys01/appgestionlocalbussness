@@ -5,7 +5,7 @@ import type { Metadata } from 'next';
 // formulaire de connexion vit à part depuis P8 : la racine du site est la
 // page d'accueil publique.
 export const metadata: Metadata = {
-  title: 'Connexion — GestionLocal',
+  title: 'Connexion - GestionLocal',
   description:
     'Connectez-vous à votre boutique GestionLocal : caisse, stocks, dettes clients.',
 };

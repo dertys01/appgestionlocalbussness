@@ -116,7 +116,7 @@ export function InventoryCount({ products, onComplete }: InventoryCountProps) {
 
           // 0 ligne : le stock a changé entre la lecture et l'écriture.
           if (!updated || updated.length === 0) {
-            return { entry, error: 'Le stock a changé pendant la saisie — réessayez.' };
+            return { entry, error: 'Le stock a changé pendant la saisie, réessayez.' };
           }
 
           const { error: logErr } = await supabase.from('stock_logs').insert({

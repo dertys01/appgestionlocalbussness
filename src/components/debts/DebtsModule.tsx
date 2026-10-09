@@ -293,7 +293,7 @@ export function DebtsModule() {
             À relancer ({candidats.length})
           </p>
           <p className="text-xs text-amber-800">
-            Ces clients doivent depuis 7 jours ou plus. Un tap ouvre WhatsApp —
+            Ces clients doivent depuis 7 jours ou plus. Un tap ouvre WhatsApp,
             la relance est notée automatiquement.
           </p>
           {candidats.map((c) => (
@@ -454,7 +454,7 @@ export function DebtsModule() {
 
           {debts.length > PAGE && (
             <p className="text-center text-xs text-slate-500 pt-1">
-              {debts.length} débiteurs — {PAGE} premiers
+              {debts.length} débiteurs, {PAGE} premiers
             </p>
           )}
         </div>

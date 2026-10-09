@@ -25,7 +25,7 @@ import type { Plan } from '@/types';
  * où l'essai pourra être démarré.
  */
 export const metadata: Metadata = {
-  title: 'Tarifs — GestionLocal',
+  title: 'Tarifs - GestionLocal',
   description:
     'Commencez gratuitement, évoluez quand votre boutique grandit : trois formules sans engagement, essai de 14 jours sans carte bancaire.',
 };
@@ -83,7 +83,7 @@ export default function TarifsPage() {
           Un plan pour chaque étape de votre commerce
         </h1>
         <p className="mt-3 text-slate-600">
-          Commencez gratuitement. Passez au niveau supérieur quand c&apos;est le moment —
+          Commencez gratuitement. Passez au niveau supérieur quand c&apos;est le moment :
           vos données, elles, ne bougent jamais d&apos;un plan à l&apos;autre.
         </p>
       </section>
@@ -138,12 +138,12 @@ export default function TarifsPage() {
           <div>
             <h2 className="flex items-center gap-2 font-semibold text-indigo-900">
               <Zap className="h-5 w-5 text-indigo-600" />
-              Démarrer l&apos;essai — 14 jours, sans carte
+              Démarrer l&apos;essai : 14 jours, sans carte
             </h2>
             <p className="mt-2 max-w-2xl text-sm text-indigo-800">
               Essayez Starter avec toutes ses fonctions pendant 14 jours : aucune carte
               bancaire, aucun prélèvement, aucun abonnement caché. L&apos;essai se démarre
-              d&apos;un clic dans Paramètres → Abonnement, après votre inscription — jamais
+              d&apos;un clic dans Paramètres → Abonnement, après votre inscription : jamais
               automatiquement, et une seule fois par boutique. À la fin, tout revient au
               plan Gratuit : rien ne se perd.
             </p>
@@ -162,7 +162,7 @@ export default function TarifsPage() {
       <footer className="border-t border-slate-200 bg-white">
         <div className="mx-auto flex max-w-5xl flex-col gap-2 px-4 py-6 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
           <p>
-            GestionLocal — caisse et gestion pour commerces, restaurants et services,
+            GestionLocal : caisse et gestion pour commerces, restaurants et services,
             pensé pour le Bénin.
           </p>
           <p>

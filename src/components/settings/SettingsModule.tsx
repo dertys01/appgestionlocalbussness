@@ -272,7 +272,7 @@ export function SettingsModule() {
                 <div className="space-y-1">
                   <div className="flex items-baseline gap-1">
                     <label htmlFor="org-ifu" className="text-sm font-medium text-slate-700">IFU</label>
-                    <span id="org-ifu-hint" className="text-xs text-slate-500 font-normal">(pour factures normalisées — Plan Pro)</span>
+                    <span id="org-ifu-hint" className="text-xs text-slate-500 font-normal">(pour factures normalisées, Plan Pro)</span>
                   </div>
                   <Input
                     id="org-ifu"
@@ -436,8 +436,8 @@ export function SettingsModule() {
                           (new Date(org!.trial_ends_at!).getTime() - Date.now()) / 86400000
                         );
                         return restants <= 1
-                          ? ' — dernier jour'
-                          : ` — ${restants} jours restants`;
+                          ? ' : dernier jour'
+                          : ` : ${restants} jours restants`;
                       })()}
                       . Ensuite la boutique revient au plan Gratuit, sans prélèvement ni perte de données.
                     </p>
@@ -448,7 +448,7 @@ export function SettingsModule() {
                   // échouerait.
                   <p className="text-xs text-slate-500">
                     Votre essai de 14 jours est terminé. Le plan Gratuit reste entièrement
-                    utilisable — les données n&apos;ont jamais bougé.
+                    utilisable, les données n&apos;ont jamais bougé.
                   </p>
                 ) : (
                   <>
@@ -460,7 +460,7 @@ export function SettingsModule() {
                     </div>
                     <p className="text-xs text-slate-500">
                       Sans carte bancaire, et en un clic. Au bout de 14 jours, retour au plan
-                      Gratuit — sans prélèvement, sans surprise. L&apos;essai n&apos;est proposé qu&apos;une
+                      Gratuit, sans prélèvement, sans surprise. L&apos;essai n&apos;est proposé qu&apos;une
                       fois par boutique : à vous de choisir le bon moment.
                     </p>
                     <Button
@@ -545,7 +545,7 @@ export function SettingsModule() {
               <div className="flex items-center gap-2">
                 <Smartphone className="h-4 w-4 text-emerald-600" />
                 <p className="text-sm font-medium text-slate-700">
-                  Payer par Mobile Money — période prépayée
+                  Payer par Mobile Money : période prépayée
                 </p>
               </div>
               <p className="text-xs text-slate-500">
@@ -562,7 +562,7 @@ export function SettingsModule() {
                   Période {PLAN_LABELS[planBrut]} active jusqu&apos;au{' '}
                   {new Date(org.plan_valid_until).toLocaleDateString('fr-FR', {
                     day: '2-digit', month: 'long', year: 'numeric',
-                  })} — prolongez-la ci-dessous, la fin de période est repoussée.
+                  })} : prolongez-la ci-dessous, la fin de période est repoussée.
                 </p>
               )}
 

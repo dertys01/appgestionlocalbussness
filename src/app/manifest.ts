@@ -12,7 +12,7 @@ import type { MetadataRoute } from "next";
  */
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "GestionLocal — caisse, dettes et stock",
+    name: "GestionLocal - caisse, dettes et stock",
     short_name: "GestionLocal",
     description: "Caisse, carnet de dettes et stock pour les commerces de proximité",
     id: "/",

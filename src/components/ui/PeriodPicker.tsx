@@ -120,7 +120,7 @@ export function PeriodPicker({
           />
           <span className="text-xs text-slate-500">
             {daysBetween(value.from, value.to)} jours
-            {tooLong ? ` — ramené à ${ceiling}` : ''}
+            {tooLong ? `, ramené à ${ceiling}` : ''}
           </span>
         </div>
       )}

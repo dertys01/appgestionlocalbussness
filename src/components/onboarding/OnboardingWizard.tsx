@@ -168,9 +168,6 @@ export function OnboardingWizard({ onProductsChanged, onGoToCash, onFinish }: On
           {/* ── Écran 1 — Bienvenue ── */}
           {step === 'welcome' && (
             <div className="text-center space-y-5">
-              <div className="h-16 w-16 rounded-2xl bg-indigo-100 flex items-center justify-center mx-auto">
-                <span className="text-3xl" aria-hidden>👋</span>
-              </div>
               <div>
                 <h2 className="text-xl font-bold text-slate-800">Bienvenue sur GestionLocal</h2>
                 <p className="text-slate-600 text-sm mt-2">

@@ -77,7 +77,7 @@ describe('Page /tarifs', () => {
     render(<TarifsPage />);
 
     // L'intitulé voulu, quelque part sur la page.
-    expect(screen.getByText(/Démarrer l.essai — 14 jours, sans carte/)).toBeDefined();
+    expect(screen.getByText(/Démarrer l.essai : 14 jours, sans carte/)).toBeDefined();
 
     // La page dit que l'essai se démarre depuis les paramètres — pas à
     // l'inscription, pas tout seul — et qu'il n'est proposé qu'une fois.
@@ -94,7 +94,7 @@ describe('Page /tarifs', () => {
   });
 
   it('porte des métadonnées publiques sans montant en clair', () => {
-    expect(metadata.title).toBe('Tarifs — GestionLocal');
+    expect(metadata.title).toBe('Tarifs - GestionLocal');
     expect(metadata.description).toBeTruthy();
     // La description meta est affichée dans les résultats de recherche :
     // elle raconte la structure de l'offre, pas ses montants.

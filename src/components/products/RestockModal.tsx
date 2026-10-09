@@ -116,7 +116,7 @@ export function RestockModal({ product, onClose, onSaved }: RestockModalProps) {
           <div className="rounded-lg bg-slate-50 p-3 text-sm">
             <div className="font-semibold text-slate-800">{product.name}</div>
             <div className="text-slate-500">
-              Stock actuel : <strong>{product.stock_qty}</strong> {product.unit} —{' '}
+              Stock actuel : <strong>{product.stock_qty}</strong> {product.unit},{' '}
               {formatCFA(product.price_sell)}
             </div>
           </div>

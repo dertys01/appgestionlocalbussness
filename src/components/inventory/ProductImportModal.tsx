@@ -228,7 +228,7 @@ export function ProductImportModal({ products, onClose, onDone }: ProductImportP
               <div className="flex items-center gap-2 rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3 text-emerald-800 text-sm">
                 <CheckCircle2 className="h-4 w-4 shrink-0" />
                 <span>
-                  <strong>{fichier}</strong> — {importables.length} produit
+                  <strong>{fichier}</strong> : {importables.length} produit
                   {importables.length > 1 ? 's' : ''} à importer
                   {ignores.length > 0 && `, ${ignores.length} ignoré${ignores.length > 1 ? 's' : ''}`}
                   {refuses.length > 0 && `, ${refuses.length} refusé${refuses.length > 1 ? 's' : ''}`}.
@@ -245,7 +245,7 @@ export function ProductImportModal({ products, onClose, onDone }: ProductImportP
                   <ul className="px-4 pb-3 space-y-1 text-xs text-slate-600">
                     {[...ignores, ...refuses].map((r) => (
                       <li key={r.ligne}>
-                        <span className="font-medium text-slate-700">Ligne {r.ligne}</span> — {r.name}{' '}
+                        <span className="font-medium text-slate-700">Ligne {r.ligne}</span> : {r.name}{' '}
                         <span className="text-slate-500">({LIBELLE_STATUT[r.status]}{r.problem ? ` : ${r.problem}` : ''})</span>
                       </li>
                     ))}

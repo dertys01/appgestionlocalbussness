@@ -170,7 +170,7 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
       action: product ? 'product_edit' : 'product_add',
       description: product
         ? `Produit modifié : ${payload.name}`
-        : `Nouveau produit : ${payload.name} — ${payload.price_sell} F`,
+        : `Nouveau produit : ${payload.name} (${payload.price_sell} F)`,
     });
 
     onSaved();

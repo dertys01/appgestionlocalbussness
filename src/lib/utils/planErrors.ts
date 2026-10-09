@@ -22,9 +22,9 @@ export function readablePlanError(message: string): string {
       // Le plan actuel est nommé même ici : un Starter qui tombe sur ce mur doit
       // comprendre qu'il a déjà le palier précédent, sinon il ne sait pas si
       // l'obstacle est le produit ou son abonnement.
-      return `Les prévisions de réapprovisionnement demandent le plan Pro — votre boutique est en plan ${nomActuel}. Le plan Pro indique combien de jours de stock il vous reste avant la rupture et quoi commander.`;
+      return `Les prévisions de réapprovisionnement demandent le plan Pro : votre boutique est en plan ${nomActuel}. Le plan Pro indique combien de jours de stock il vous reste avant la rupture et quoi commander.`;
     }
-    return `Cette fonctionnalité nécessite le plan ${nomRequis} — votre boutique est en plan ${nomActuel}. Passez au plan supérieur dans Paramètres pour y accéder.`;
+    return `Cette fonctionnalité nécessite le plan ${nomRequis} : votre boutique est en plan ${nomActuel}. Passez au plan supérieur dans Paramètres pour y accéder.`;
   }
 
   if (/Fonctionnalité inconnue/.test(message)) return message;

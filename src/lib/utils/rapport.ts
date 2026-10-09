@@ -48,7 +48,7 @@ export function imprimerRapport(r: Rapport): boolean {
   const html = [
     '<!DOCTYPE html><html lang="fr"><head><meta charset="utf-8">',
     '<meta name="viewport" content="width=device-width,initial-scale=1">',
-    `<title>${escapeHtml(`${r.titre} — ${r.boutique}`)}</title>`,
+    `<title>${escapeHtml(`${r.titre} - ${r.boutique}`)}</title>`,
     '<style>',
     '@page{size:A4;margin:14mm}',
     'body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:#0f172a;margin:16px;font-size:12px}',
@@ -71,7 +71,7 @@ export function imprimerRapport(r: Rapport): boolean {
     '</style></head><body>',
     '<div class="actions"><button onclick="window.print()">Imprimer / Enregistrer en PDF</button></div>',
     `<h1>${escapeHtml(r.titre)}</h1>`,
-    `<p class="meta">${escapeHtml(r.boutique)} — ${escapeHtml(r.periode)}</p>`,
+    `<p class="meta">${escapeHtml(r.boutique)}, ${escapeHtml(r.periode)}</p>`,
     `<table><thead><tr>${th}</tr></thead><tbody>`,
     r.lignes.map((l) => ligne(l, 'td')).join(''),
     '</tbody>',

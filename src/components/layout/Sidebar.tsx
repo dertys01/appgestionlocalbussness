@@ -105,7 +105,7 @@ export function Sidebar({
             <button
               key={key}
               onClick={() => naviguer(locked ? 'settings' : key)}
-              title={locked ? `${label} — Plan supérieur requis` : label}
+              title={locked ? `${label} - Plan supérieur requis` : label}
               aria-label={label}
               className={`w-full flex items-center gap-3 px-2 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                 tab === key

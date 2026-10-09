@@ -13,11 +13,11 @@ import HomePage from './home-client';
  * — qui est exactement ce que WhatsApp et les moteurs lisent en premier.
  */
 export const metadata: Metadata = {
-  title: 'GestionLocal — la caisse, les stocks et les dettes de votre boutique',
+  title: 'GestionLocal - la caisse, les stocks et les dettes de votre boutique',
   description:
     "Vendez, suivez vos stocks et relevez ce que les clients vous doivent, depuis votre téléphone. Gratuit pour commencer, sans carte bancaire.",
   openGraph: {
-    title: 'GestionLocal — la caisse, les stocks et les dettes',
+    title: 'GestionLocal - la caisse, les stocks et les dettes',
     description:
       "L'application des commerçants : caisse, stocks, dettes clients et relances WhatsApp.",
     images: [{ url: '/icon-512x512.png', width: 512, height: 512 }],

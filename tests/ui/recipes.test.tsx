@@ -205,7 +205,7 @@ describe('RecipesModule — le coût de revient d\'un plat', () => {
     // sans un mot — 0,3 kg de riz deviennent 1 kg, et le coût de revient, la
     // marge et la consommation du stock deviennent faux en deux clics.
     await waitFor(() => expect(select.options).toHaveLength(1));
-    expect(select.options[0].text).toBe('— Ingrédient —');
+    expect(select.options[0].text).toBe('Ingrédient…');
   });
 
   it('affiche l\'erreur quand la base refuse une recette circulaire', async () => {

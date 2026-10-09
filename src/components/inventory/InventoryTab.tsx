@@ -38,7 +38,7 @@ export function InventoryTab({
                 : 'border-slate-200 text-slate-600 hover:bg-slate-50'
             }`}
           >
-            {showCount ? 'Voir le catalogue' : '📋 Faire un inventaire'}
+            {showCount ? 'Voir le catalogue' : 'Faire un inventaire'}
           </button>
         )}
       </div>

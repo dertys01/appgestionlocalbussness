@@ -153,7 +153,7 @@ export default function PaiementSandboxPage({ params }: { params: Promise<{ ref:
           {commande?.status === 'paid' && (
             <p className="flex items-center gap-2 text-sm text-emerald-700">
               <ShieldCheck className="h-4 w-4" aria-hidden />
-              Cette période est déjà active — retournez à l’application.
+              Cette période est déjà active, retournez à l’application.
             </p>
           )}
 

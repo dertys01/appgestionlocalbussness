@@ -220,7 +220,7 @@ export function ExpensesModule() {
           actorEmail: user.email ?? '',
           actorName,
           action: 'expense',
-          description: `Dépense ${formatCFA(value)} — ${category} (${label.trim()})`,
+          description: `Dépense ${formatCFA(value)} : ${category} (${label.trim()})`,
           metadata: { category, amount: value, day },
         });
       }
@@ -289,7 +289,7 @@ export function ExpensesModule() {
           </div>
           <p className="text-xs mt-1">{flowError}</p>
           <p className="text-xs mt-1 text-amber-700">
-            Vos charges restent enregistrées et modifiables ci-dessous — seule la
+            Vos charges restent enregistrées et modifiables ci-dessous, seule la
             synthèse de résultat est masquée.
           </p>
         </div>

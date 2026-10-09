@@ -152,7 +152,7 @@ export default function RegisterPage() {
         </Card>
 
         <p className="text-center text-xs text-slate-500 mt-4">
-          Plan gratuit — aucune carte bancaire requise
+          Plan gratuit, aucune carte bancaire requise
         </p>
       </div>
     </main>

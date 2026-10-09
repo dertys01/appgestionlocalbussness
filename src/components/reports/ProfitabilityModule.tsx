@@ -174,7 +174,7 @@ export function ProfitabilityModule() {
             Immobilisés en rayon : {tiedUpCapital > 0
               ? formatCFA(tiedUpCapital)
               : 'montant inconnu (prix d’achat non renseigné)'}
-            {neverSold.length <= 8 ? ` — ${neverSold.map((r) => r.name).join(', ')}` : ''}
+            {neverSold.length <= 8 ? `: ${neverSold.map((r) => r.name).join(', ')}` : ''}
           </p>
         </div>
       )}

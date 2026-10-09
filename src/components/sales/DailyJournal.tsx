@@ -188,7 +188,7 @@ export function DailyJournal() {
 
         <div className="min-w-0 flex-1 text-center">
           <div className="truncate text-sm font-semibold text-slate-800">
-            {estAujourdhui ? 'Aujourd’hui — ' : ''}
+            {estAujourdhui ? 'Aujourd’hui, ' : ''}
             {labelDuJour(day)}
           </div>
         </div>

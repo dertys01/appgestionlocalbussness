@@ -99,7 +99,7 @@ function readableSaleError(message: string): string {
   }
   if (message === 'Non authentifié') return 'Session expirée, reconnectez-vous.';
   if (/Failed to fetch|NetworkError|fetch failed/i.test(message)) {
-    return "Connexion impossible. Vérifiez votre réseau et réessayez — la vente n'a pas été enregistrée.";
+    return "Connexion impossible. Vérifiez votre réseau et réessayez : la vente n'a pas été enregistrée.";
   }
   return "La vente n'a pas été enregistrée. Aucune modification n'a été appliquée.";
 }
@@ -737,8 +737,8 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           actorName,
           action: 'sale',
           description:
-            `Vente ${formatCFA(serverTotal)} (${moyen}) — ${itemsDesc}` +
-            (remise > 0 ? ` — remise ${formatCFA(remise)}` : ''),
+            `Vente ${formatCFA(serverTotal)} (${moyen}) : ${itemsDesc}` +
+            (remise > 0 ? `, remise ${formatCFA(remise)}` : ''),
           metadata: {
             sale_id: saleId,
             total: serverTotal,
@@ -950,7 +950,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           <span>
             {filtered.length} produit{filtered.length > 1 ? 's' : ''}
             {search.trim() && ` pour « ${search.trim()} »`}
-            {search.trim() && categorie !== null && ' — tout le catalogue'}
+            {search.trim() && categorie !== null && ', tout le catalogue'}
           </span>
           {visibleProducts.length < filtered.length && (
             <span>affichage par tranches</span>
@@ -1499,7 +1499,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                 inputMode="decimal"
                 step="any"
                 min={0}
-                placeholder="Rien — tout à crédit"
+                placeholder="Rien, tout à crédit"
                 value={advance}
                 onChange={(e) => setAdvance(e.target.value)}
                 className={`h-10 ${advanceTooHigh ? 'border-red-400' : ''}`}
@@ -1575,7 +1575,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
               ? 'Enregistrement...'
               : paymentMethod === 'credit'
                 ? advanceAmount > 0
-                  ? `Encaisser ${formatCFA(advanceAmount)} — dû ${formatCFA(remaining)}`
+                  ? `Encaisser ${formatCFA(advanceAmount)} (dû ${formatCFA(remaining)})`
                   : `Céder à crédit ${formatCFA(total)}`
                 : `Encaisser ${formatCFA(total)}`}
           </Button>
@@ -1587,7 +1587,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle className={`flex items-center gap-2 ${receipt?.isCredit ? 'text-amber-700' : 'text-emerald-700'}`}>
-              {receipt?.isCredit ? '🤝 Vente cédée à crédit' : '✅ Vente enregistrée !'}
+              {receipt?.isCredit ? 'Vente cédée à crédit' : 'Vente enregistrée !'}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
@@ -1672,7 +1672,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                   onClick={fermerRecu}
                 >
                   <FileText className="h-3 w-3" />
-                  Facture normalisée — Plan Pro uniquement
+                  Facture normalisée (Plan Pro uniquement)
                 </button>
               )}
 

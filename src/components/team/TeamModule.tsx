@@ -345,8 +345,8 @@ export function TeamModule() {
                     onChange={(e) => setRole(e.target.value as 'employee' | 'manager')}
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   >
-                    <option value="employee">Employé — encaisse et consulte le stock</option>
-                    <option value="manager">Manager — gère aussi les produits et réassorts</option>
+                    <option value="employee">Employé : encaisse et consulte le stock</option>
+                    <option value="manager">Manager : gère aussi les produits et réassorts</option>
                   </select>
                 </div>
                 {formError && <p className="text-red-600 text-sm">{formError}</p>}
