@@ -40,6 +40,7 @@ import { Sidebar } from '@/components/layout/Sidebar';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { useProducts } from '@/lib/hooks/useProducts';
 import { useToday } from '@/lib/hooks/useToday';
+import { useHistoriqueOnglets } from '@/lib/hooks/useHistoriqueOnglets';
 import { isFeatureAllowed } from '@/lib/utils/plans';
 import type { NavItem, Product, ReportView, Tab } from '@/types';
 import { getEnabledModules, fallbackTab } from '@/lib/modules';
@@ -81,6 +82,9 @@ export default function HomePage() {
     void travail.then((n) => { if (!annule) setARelancer(n); });
     return () => { annule = true; };
   }, [supabase, rappelsAuto, org?.onboarding_done, tab]);
+  // Retour système (Android, navigateur) : voir useHistoriqueOnglets — sans
+  // lui, le bouton retour quitte l'application au lieu de revenir en arrière.
+  useHistoriqueOnglets(tab, setTab);
   // Identité stable : passé en dépendance de l'effet du POS, un arrow inline
   // le relancerait à chaque render.
   const handleAddToCartHandled = useCallback(() => setAddToCartRequest(null), []);
@@ -196,7 +200,7 @@ export default function HomePage() {
   // non dans Sidebar, pour que le filtre soit testable sans rendu.
   const ALL_NAV_ITEMS: NavItem[] = [
     { key: 'dashboard', label: 'Accueil',    icon: LayoutDashboard, locked: false },
-    { key: 'pos',       label: 'Vente',      icon: ShoppingCart,    locked: false },
+    { key: 'pos',       label: 'Caisse',     icon: ShoppingCart,    locked: false },
     { key: 'inventory', label: 'Stock',      icon: Package,         locked: false },
     { key: 'sales',     label: 'Ventes',     icon: History,         locked: false },
     // Dettes : gratuites depuis migration_onboarding_mode.sql — récupérer son

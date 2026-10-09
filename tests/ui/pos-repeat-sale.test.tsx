@@ -75,8 +75,27 @@ const LIGNES = [
 let venteCourante = VENTE;
 let lignesCourantes = LIGNES;
 
+/**
+ * Stockage mémoire : jsdom ne fournit pas `localStorage` ici (c'est pour ça
+ * que le composant le lit en défensif). Le stub prouve le vrai chemin —
+ * lecture à chaque montage, écriture au X — au lieu de le court-circuiter.
+ */
+const sac = new Map<string, string>();
+Object.defineProperty(window, 'localStorage', {
+  value: {
+    getItem: (k: string) => (sac.has(k) ? sac.get(k)! : null),
+    setItem: (k: string, v: string) => { sac.set(k, v); },
+    removeItem: (k: string) => { sac.delete(k); },
+    clear: () => sac.clear(),
+  },
+  configurable: true,
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
+  // Le X du bandeau survit dans le stockage : sans ce ménage, un test
+  // polluerait le suivant avec une vente fermée ailleurs.
+  sac.clear();
   venteCourante = VENTE;
   lignesCourantes = LIGNES;
   rpc.mockResolvedValue({ data: [], error: null });
@@ -214,7 +233,11 @@ describe('POS — reprendre la dernière vente', () => {
     expect(boutonReprendre().textContent).toMatch(/1\s?500\s?F/);
   });
 
-  it('le bouton X ferme la proposition, et elle ne revient pas', async () => {
+  it('le bouton X ferme la proposition pour cette vente-là, même après remontage', async () => {
+    // Régression vue en boutique : la fermeture était un booléen remis à zéro
+    // à chaque remontage — la caisse étant démontée hors de son onglet,
+    // changer d'onglet puis revenir faisait revenir le bandeau, encore et
+    // encore. La fermeture est attachée à la vente et survit en localStorage.
     const vue = renderPOS();
     await waitFor(() => expect(boutonReprendre()).toBeInTheDocument());
 
@@ -223,22 +246,35 @@ describe('POS — reprendre la dernière vente', () => {
     );
     await waitFor(() => expect(screen.queryByRole('button', { name: /dernière vente/ })).toBeNull());
 
-    // Une nouvelle vente arrive (le bandeau se serait rechargé dessus) : la
-    // fermeture tient jusqu'au rechargement de la caisse, sinon le X ne
-    // servirait à rien — il reviendrait après chaque encaissement.
-    venteCourante = { id: 'v2', total_amount: 1500 };
-    lignesCourantes = [{ product_id: 'riz', quantity: 1, unit_price: 1500 }];
-    const chargementsAvant = from.mock.calls.filter((c) => c[0] === 'sales').length;
-    vue.rerender(
-      <POSModule products={[...products] as unknown as Product[]} onSaleComplete={vi.fn()} />
-    );
-    // Le rechargement a bien eu lieu (le prop a changé → l'effet a reparti)…
-    await waitFor(() =>
-      expect(from.mock.calls.filter((c) => c[0] === 'sales').length).toBeGreaterThan(chargementsAvant)
-    );
-    // …mais la proposition fermée ne se remet pas à afficher.
+    // Changement d'onglet simulé : la caisse est démontée puis remontée, la
+    // même vente est toujours la dernière — le bandeau ne revient pas.
+    vue.unmount();
+    renderPOS();
+    await waitFor(() => expect(screen.getByText('RIZ')).toBeInTheDocument());
     expect(
       screen.queryByRole('button', { name: /Ajouter au panier les \d+ articles de la dernière vente/ })
     ).not.toBeInTheDocument();
+  });
+
+  it('une nouvelle vente réaffiche le bandeau (la fermeture valait pour l’ancienne)', async () => {
+    // Le pendant du test précédent : fermer n'est pas bannir la fonction.
+    // Une vente différente a un autre identifiant — le bandeau fait son
+    // travail et propose la dernière vente, qui a changé.
+    const vue = renderPOS();
+    await waitFor(() => expect(boutonReprendre()).toBeInTheDocument());
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Masquer la reprise de la dernière vente' })
+    );
+    await waitFor(() => expect(screen.queryByRole('button', { name: /dernière vente/ })).toBeNull());
+
+    venteCourante = { id: 'v-nouvelle', total_amount: 1500 };
+    lignesCourantes = [{ product_id: 'riz', quantity: 1, unit_price: 1500 }];
+    // Deux caisses montées à la fois feraient doublon à l'écran : on démonte
+    // avant de remonter, comme un changement d'onglet aller-retour.
+    vue.unmount();
+    const vue2 = renderPOS();
+    await waitFor(() => expect(boutonReprendre()).toBeInTheDocument());
+    expect(boutonReprendre().textContent).toContain('1 article');
+    vue2.unmount();
   });
 });

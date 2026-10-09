@@ -264,14 +264,31 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
   } | null>(null);
 
   /**
-   * Le caissier a fermé la proposition de reprise d'un clic (le X).
+   * Le caissier a fermé la proposition de reprise (le X) — mémorisé PAR VENTE.
    *
-   * La fermeture tient jusqu'au rechargement de la caisse : elle ne revient
-   * pas après la vente suivante, sinon le X ne servirait à rien — il
-   * reviendrait après chaque encaissement. Aucun stockage : si le caissier
-   * change d'avis, un rechargement suffit à tout remettre à zéro.
+   * Avant, un booléen remis à zéro à chaque remontage : la caisse étant
+   * démontée hors de son onglet, changer d'onglet puis revenir faisait
+   * revenir le bandeau, encore et encore. La fermeture est maintenant
+   * attachée à l'identifiant de la vente et survit dans localStorage : fermer
+   * vaut pour CETTE vente-là, quelle que soit la navigation ; une NOUVELLE
+   * vente (autre identifiant) réaffiche le bandeau, ce qui est son travail.
    */
-  const [repriseFerme, setRepriseFerme] = useState(false);
+  const CLE_REPRISE = 'gl:reprise-fermee';
+  const [repriseFermeeId, setRepriseFermeeId] = useState<string | null>(() => {
+    try {
+      return window.localStorage?.getItem(CLE_REPRISE);
+    } catch {
+      return null;
+    }
+  });
+  const fermerReprise = (idVente: string) => {
+    setRepriseFermeeId(idVente);
+    try {
+      window.localStorage?.setItem(CLE_REPRISE, idVente);
+    } catch {
+      /* stockage indisponible : la fermeture vaut pour la session */
+    }
+  };
 
   /**
    * Catalogue de la caisse : non archivé, puis filtré et classé.
@@ -868,7 +885,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
             Conteneur + deux boutons : imbriquer le X dans le bouton de reprise
             donnerait un bouton dans un bouton (HTML invalide), et le X perdrait
             alors sa propre cible d'accessibilité. */}
-        {ventePrecedente && ventePrecedente.nbLignes > 0 && !repriseFerme && (
+        {ventePrecedente && ventePrecedente.nbLignes > 0 && ventePrecedente.id !== repriseFermeeId && (
           <div className="flex w-full items-center gap-1 rounded-lg border border-indigo-200 bg-indigo-50 px-3 py-2 text-indigo-800">
             <button
               onClick={reprendreDerniereVente}
@@ -889,7 +906,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
               )}
             </button>
             <button
-              onClick={() => setRepriseFerme(true)}
+              onClick={() => { if (ventePrecedente) fermerReprise(ventePrecedente.id); }}
               aria-label="Masquer la reprise de la dernière vente"
               className="shrink-0 rounded p-1.5 text-indigo-400 transition-colors hover:bg-indigo-100 hover:text-indigo-700"
             >
