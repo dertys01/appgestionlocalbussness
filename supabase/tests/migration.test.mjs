@@ -105,6 +105,9 @@ const ORDER = [
   // Relances automatiques (P6) : dettes_a_relancer() lit current_org_plan()
   // (essai et échéance), posé par trial + plan_config — donc après eux.
   'migration_relances.sql',
+  // Triggers de quotas en propriétaire : ils lisent plan_config, révoquée
+  // au navigateur — en INVOKER, la création produit répondait 403 en prod.
+  'migration_plan_definer.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -5568,6 +5571,81 @@ console.log('\n▸ Relances automatiques (rappel programmé, Starter+)');
     `SELECT count(*)::int n FROM relance_suivi WHERE debt_id='${detteEtrangere}'`)).rows[0];
   check('38h. dette étrangère : false, aucune trace écrite',
     ment === false && trace.n === 0, JSON.stringify({ ment, trace }));
+}
+
+// ─── 39. Triggers de quotas exercés en authenticated ────────────────
+// Le bug prod du Sprint 19 : check_product_limit() et check_employee_limit()
+// lisaient plan_config en INVOKER — superuser au harnais, 403 « permission
+// denied » en production à chaque création de produit et chaque invitation.
+// Les sections 36-37 ne faisaient que constater les privilèges ; ici on
+// EXERCE les triggers dans le rôle du navigateur.
+{
+  await e(readSql('migration_plan_definer.sql'));
+
+  const TRIG = '39393939-3939-4393-8393-393939393939';
+  await q(`INSERT INTO auth.users (id,email) VALUES ('${TRIG}','triggers@test.ci') ON CONFLICT DO NOTHING`);
+  await q(`INSERT INTO organizations (id,name,slug,plan) VALUES ('${TRIG}','Boutique Triggers','boutique-triggers','free') ON CONFLICT DO NOTHING`);
+  await e(`UPDATE organizations SET plan = 'free', trial_started_at = NULL,
+             trial_ends_at = NULL, plan_valid_until = NULL WHERE id = '${TRIG}'`);
+  // Quotas déterministes : les sections précédentes ont vidé/retouché la table.
+  await e(`DELETE FROM plan_config`);
+  await e(`INSERT INTO plan_config (plan, key, value) VALUES
+    ('free', 'products', 2),
+    ('free', 'employees', 0),
+    ('free', 'history_days', 30),
+    ('starter', 'products', 2147483647),
+    ('starter', 'employees', 2147483647),
+    ('starter', 'history_days', 2147483647),
+    ('pro', 'products', 2147483647),
+    ('pro', 'employees', 2147483647),
+    ('pro', 'history_days', 2147483647)`);
+
+  await q(`SELECT set_config('request.jwt.claim.sub', '${TRIG}', false)`);
+  await e(`SET ROLE authenticated`);
+
+  // 39a — le trigger lit les quotas DANS le rôle du navigateur : deux
+  // produits passent (le bug répondait 403 dès le premier).
+  let passe39 = true, detail39 = '';
+  try {
+    await q(`INSERT INTO products (user_id, name, price_buy, price_sell, stock_qty)
+             VALUES ('${TRIG}', 'Article 39a-1', 100, 200, 1),
+                    ('${TRIG}', 'Article 39a-2', 100, 200, 1)`);
+  } catch (ex) { passe39 = false; detail39 = ex.message; }
+  check('39a. en authenticated : 2 produits sous quota passent (plus de 403)',
+    passe39, detail39);
+
+  // 39b — le 3e est refusé PAR LE QUOTA, avec son message — pas par un privilège.
+  let msg39 = '';
+  try {
+    await q(`INSERT INTO products (user_id, name, price_buy, price_sell, stock_qty)
+             VALUES ('${TRIG}', 'Article 39b', 100, 200, 1)`);
+  } catch (ex) { msg39 = ex.message; }
+  check('39b. en authenticated : le 3e est refusé par le quota, nommé dans le message',
+    /Limite de produits atteinte pour le plan free \(max 2\)/.test(msg39)
+      && !/permission denied/i.test(msg39), msg39);
+
+  // 39c — l'invitation est refusée PAR LE PLAN (0 employé en gratuit), pas en 403.
+  let msg39c = '';
+  try {
+    await q(`INSERT INTO employee_invitations (owner_id, email, token)
+             VALUES ('${TRIG}', 'qui@test.ci', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb')`);
+  } catch (ex) { msg39c = ex.message; }
+  check('39c. en authenticated : invitation refusée par le plan, pas par un privilège',
+    /ne prend pas d.employ/.test(msg39c) && !/permission denied/i.test(msg39c), msg39c);
+
+  // 39d — fail-open DANS le rôle du navigateur : sans ligne posée, ça passe.
+  await e(`RESET ROLE`);
+  await e(`DELETE FROM plan_config WHERE plan = 'free' AND key = 'products'`);
+  await q(`SELECT set_config('request.jwt.claim.sub', '${TRIG}', false)`);
+  await e(`SET ROLE authenticated`);
+  let passe39d = true, detail39d = '';
+  try {
+    await q(`INSERT INTO products (user_id, name, price_buy, price_sell, stock_qty)
+             VALUES ('${TRIG}', 'Article 39d', 100, 200, 1)`);
+  } catch (ex) { passe39d = false; detail39d = ex.message; }
+  check('39d. en authenticated : quota retiré → insertion repasse (fail-open)',
+    passe39d, detail39d);
+  await e(`RESET ROLE`);
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);

@@ -38,8 +38,8 @@ const FORMATS = [
  * à vérifier que le clic a bien changé de module.
  */
 const ONGLETS = [
-  ['Accueil', 'Accueil', 'Tableau de bord'],
-  ['Vente', 'Vente', 'Point de vente'],
+  ['Accueil', 'Accueil', "Aujourd'hui"],
+  ['Caisse', 'Caisse', 'Point de vente'],
   ['Salle', 'Salle', 'Salle'],
   ['Recettes', 'Recettes', 'Recettes'],
   ['Stock', 'Stock', 'Inventaire'],
@@ -193,7 +193,7 @@ for (const format of FORMATS) {
     }, jeton);
   }
 
-  await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+  await page.goto(BASE + '/connexion', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(1500);
 
   const ecranConnexion = () =>
@@ -258,10 +258,14 @@ for (const format of FORMATS) {
   // considère un tiroir fermé « visible » — il a une boîte, simplement
   // décalée hors du viewport — et isVisible() ne dit donc rien. On regarde
   // si la cible est réellement dans la fenêtre.
+  // Un élément en `display: none` (bouton mobile sur grand écran) a un
+  // rectangle à zéro : sans le test de taille, il passait pour « dans la
+  // fenêtre » et le clic suivant expirait dessus.
   const dansLaFenetre = async (loc) =>
     loc.evaluate((el) => {
       const r = el.getBoundingClientRect();
-      return r.left >= 0 && r.top >= 0 && r.right <= window.innerWidth && r.bottom <= window.innerHeight;
+      return r.width > 0 && r.height > 0
+        && r.left >= 0 && r.top >= 0 && r.right <= window.innerWidth && r.bottom <= window.innerHeight;
     }).catch(() => false);
 
   const ouvrirMenu = async () => {
@@ -352,8 +356,8 @@ for (const format of FORMATS) {
   // parce que les deux écrans n'ont pas la même commande :
   //   - « Reprendre la dernière vente », qui ouvre la caisse partout ;
   //   - la barre du bas, qui est LA commande d'ouverture sur téléphone.
-  if (!(await dansLaFenetre(page.locator('button[aria-label="Vente"]').first()))) await ouvrirMenu();
-  await page.locator('button[aria-label="Vente"]').first().click({ timeout: 8000 }).catch(() => {});
+  if (!(await dansLaFenetre(page.locator('button[aria-label="Caisse"]').first()))) await ouvrirMenu();
+  await page.locator('button[aria-label="Caisse"]').first().click({ timeout: 8000 }).catch(() => {});
   await page.keyboard.press('Escape').catch(() => {});
   await stabilise(page);
 

@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Loader2, ShieldCheck, Smartphone } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
 import { PLAN_LABELS } from '@/lib/utils/plans';
 
@@ -38,17 +39,33 @@ const ETATS: Record<Commande['status'], string> = {
 };
 
 export default function PaiementSandboxPage({ params }: { params: Promise<{ ref: string }> }) {
+  const { supabase } = useSupabase();
   const [reference, setReference] = useState('');
   const [commande, setCommande] = useState<Commande | null>(null);
   const [erreur, setErreur] = useState('');
   const [pret, setPret] = useState(false);
   const [enCours, setEnCours] = useState(false);
 
+  // Les routes paiement lisent le jeton dans l'en-tête Authorization
+  // (bearerOf, jamais les cookies) : sans lui, « Non authentifié » alors que
+  // la session existe — c'est ce qui cassait l'affichage PUIS la confirmation.
+  // useCallback : l'effet de chargement en dépend, un arrow inline le
+  // relancerait à chaque rendu.
+  const entetesSession = useCallback(async (): Promise<Record<string, string>> => {
+    const { data: { session } } = await supabase.auth.getSession();
+    return session?.access_token
+      ? { Authorization: `Bearer ${session.access_token}` }
+      : {};
+  }, [supabase]);
+
   useEffect(() => {
     let active = true;
     params.then(async (p) => {
       setReference(p.ref);
-      const res = await fetch(`/api/payments/order?ref=${encodeURIComponent(p.ref)}`).catch(() => null);
+      const res = await fetch(
+        `/api/payments/order?ref=${encodeURIComponent(p.ref)}`,
+        { headers: await entetesSession() },
+      ).catch(() => null);
       if (!active) return;
       if (!res) {
         setErreur('Réseau indisponible.');
@@ -63,7 +80,7 @@ export default function PaiementSandboxPage({ params }: { params: Promise<{ ref:
       setPret(true);
     });
     return () => { active = false; };
-  }, [params]);
+  }, [params, entetesSession]);
 
   const confirmer = async () => {
     setEnCours(true);
@@ -71,7 +88,7 @@ export default function PaiementSandboxPage({ params }: { params: Promise<{ ref:
     try {
       const res = await fetch('/api/payments/callback/sandbox', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...(await entetesSession()) },
         body: JSON.stringify({ reference }),
       });
       const json = await res.json().catch(() => null);

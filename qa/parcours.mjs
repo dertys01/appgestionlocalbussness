@@ -46,7 +46,7 @@ const page = await contexte.newPage();
 const erreursReseau = [];
 page.on('pageerror', (e) => erreursReseau.push(e.message.slice(0, 150)));
 
-await page.goto(BASE, { waitUntil: 'domcontentloaded' });
+await page.goto(BASE + '/connexion', { waitUntil: 'domcontentloaded' });
 await page.waitForTimeout(1200);
 await page.fill('input[type="email"]', EMAIL);
 await page.fill('input[type="password"]', PASSWORD);
@@ -139,7 +139,7 @@ const panier = () =>
   });
 
 // ─── Caisse : une vente complète, de la ligne au reçu ────────────────
-await onglet('Vente');
+await onglet('Caisse');
 await page.waitForTimeout(2000);
 
 // Une ligne à prix négocié, en quantité décimale : c'est le chemin le plus
@@ -288,7 +288,7 @@ verifie(
 );
 
 // ─── Une vente à crédit entre-t-elle dans le CA ? ────────────────────
-await onglet('Vente');
+await onglet('Caisse');
 await page.waitForTimeout(2500);
 await page.evaluate(() => {
   const liste = document.querySelector('.divide-y.divide-slate-100');

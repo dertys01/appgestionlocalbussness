@@ -10,6 +10,10 @@ export const metadata: Metadata = {
   title: "GestionLocal - ERP/POS",
   description: "Application de gestion commerciale pour petites entreprises",
   applicationName: "GestionLocal",
+  // Sans elle, les URL relatives d'openGraph (image de partage) restent
+  // relatives : WhatsApp ne peut pas afficher l'aperçu. L'adresse est
+  // publique par nature — ce n'est ni un secret ni une valeur d'offre.
+  metadataBase: new URL("https://appgestionlocalbussness.vercel.app"),
   // iOS ne lit pas le manifeste : il veut une icône dédiée.
   icons: { apple: "/apple-touch-icon.png" },
 };
