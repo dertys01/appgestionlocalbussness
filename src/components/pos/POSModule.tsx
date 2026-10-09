@@ -757,10 +757,79 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           p_client_ref: refVente,
         };
 
+    // Bascule hors-ligne : met la vente en file et affiche le reçu provisoire.
+    // Renvoie true si la vente a bien été mise en file — l'appelant s'arrête.
+    const basculerHorsLigne = async (): Promise<boolean> => {
+      if (!refVente || paymentMethod === 'credit') return false;
+      const mise = await mettreEnFile({
+        ref: refVente,
+        cree: Date.now(),
+        payload: payload as Record<string, unknown>,
+      });
+      if (!mise) return false;
+      // Reçu provisoire : total calculé localement (le serveur n'a rien
+      // renvoyé), aucun numéro de facture. La vente est en file, elle sera
+      // rejouée au retour du réseau — la référence la rend idempotente.
+      const waLink = generateWhatsAppReceiptLink(
+        {
+          items: cart.map((i) => ({
+            product_name: i.product.name,
+            quantity: i.quantity,
+            unit_price: linePrice(i),
+            subtotal: linePrice(i) * i.quantity,
+          })),
+          total,
+          paymentMethod,
+          date: new Date(),
+          businessName: org?.name,
+          plan,
+          advance: 0,
+          due: 0,
+        },
+        clientPhone.trim() || undefined
+      );
+      const given = parseFloat(String(amountGiven).replace(',', '.')) || 0;
+      setReceipt({
+        saleId: refVente,
+        invoiceNumber: null,
+        waLink,
+        items: [...cart],
+        total,
+        paymentMethod,
+        clientName: clientName.trim(),
+        clientPhone: clientPhone.trim(),
+        amountGiven: given,
+        change: paymentMethod === 'cash' && given >= total ? given - total : 0,
+        date: new Date(),
+        isCredit: false,
+        advance: 0,
+        due: 0,
+        offline: true,
+      });
+      setCart([]);
+      setClientName('');
+      setClientPhone('');
+      setAmountGiven('');
+      setAdvance('');
+      setPanierOuvert(false);
+      return true;
+    };
+
+    // Panne réseau, et non refus métier. La détection porte sur le message BRUT
+    // renvoyé par Supabase : la version traduite par readableSaleError() ne
+    // contient plus « failed to fetch », et c'est précisément ce qui empêchait
+    // la bascule hors-ligne de se déclencher.
+    const estPanneReseau = (msg: string) =>
+      /failed to fetch|networkerror|fetch failed|load failed|network request failed/i.test(msg);
+
     try {
       const { data, error: saleErr } = await supabase.rpc(fn, payload);
 
-      if (saleErr) throw new Error(readableSaleError(saleErr.message));
+      if (saleErr) {
+        // Réseau coupé : la vente n'est pas perdue, on la met en file.
+        if (estPanneReseau(saleErr.message) && await basculerHorsLigne()) return;
+        throw new Error(readableSaleError(saleErr.message));
+      }
       if (!data || typeof data !== 'object') throw new Error("La vente n'a pas pu être enregistrée.");
 
       // Total et numéro de facture sont ceux retenus par le serveur.
@@ -904,65 +973,9 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
       void chargerDerniereVente();
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Erreur inconnue';
-      // Vente hors-ligne : SEULE une panne réseau (pas un refus métier — stock
-      // insuffisant, produit introuvable) déclenche la mise en file. Le refus
-      // métier doit rester une erreur à l'écran, jamais une vente fantôme.
-      const panneReseau = /failed to fetch|networkerror|fetch failed|load failed|network request failed/i.test(message);
-      if (panneReseau && paymentMethod !== 'credit' && refVente) {
-        const mise = await mettreEnFile({
-          ref: refVente,
-          cree: Date.now(),
-          payload: payload as Record<string, unknown>,
-        });
-        if (mise) {
-          // Reçu provisoire : total calculé localement (le serveur n'a rien
-          // renvoyé), aucun numéro de facture. La vente est en file, elle sera
-          // rejouée au retour du réseau — la référence la rend idempotente.
-          const waLink = generateWhatsAppReceiptLink(
-            {
-              items: cart.map((i) => ({
-                product_name: i.product.name,
-                quantity: i.quantity,
-                unit_price: linePrice(i),
-                subtotal: linePrice(i) * i.quantity,
-              })),
-              total,
-              paymentMethod,
-              date: new Date(),
-              businessName: org?.name,
-              plan,
-              advance: 0,
-              due: 0,
-            },
-            clientPhone.trim() || undefined
-          );
-          const given = parseFloat(String(amountGiven).replace(',', '.')) || 0;
-          setReceipt({
-            saleId: refVente,
-            invoiceNumber: null,
-            waLink,
-            items: [...cart],
-            total,
-            paymentMethod,
-            clientName: clientName.trim(),
-            clientPhone: clientPhone.trim(),
-            amountGiven: given,
-            change: paymentMethod === 'cash' && given >= total ? given - total : 0,
-            date: new Date(),
-            isCredit: false,
-            advance: 0,
-            due: 0,
-            offline: true,
-          });
-          setCart([]);
-          setClientName('');
-          setClientPhone('');
-          setAmountGiven('');
-          setAdvance('');
-          setPanierOuvert(false);
-          return;
-        }
-      }
+      // Repli : l'appel RPC peut aussi rejeter directement (fetch qui lève) au
+      // lieu de renvoyer { error }. Même bascule, sur le message brut.
+      if (estPanneReseau(message) && await basculerHorsLigne()) return;
       setCheckoutError(message);
     } finally {
       setLoading(false);
