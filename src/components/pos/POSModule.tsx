@@ -875,6 +875,12 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         ref: refVente,
         cree: Date.now(),
         payload: payload as Record<string, unknown>,
+        // Résumé lisible pour l'écran « ventes en attente » : le payload ne
+        // porte que des identifiants, pas les noms.
+        resume: {
+          total,
+          libelle: cart.map((i) => `${formatQty(i.quantity)}× ${i.product.name}`).join(', '),
+        },
       });
       if (!mise) return false;
       // Reçu provisoire : total calculé localement (le serveur n'a rien

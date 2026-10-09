@@ -26,6 +26,8 @@ export interface VenteEnAttente {
   cree: number;
   /** Arguments de l'appel RPC, tels qu'ils seront rejoués. */
   payload: Record<string, unknown>;
+  /** Résumé lisible, pour l'écran des ventes en attente (optionnel). */
+  resume?: { total: number; libelle: string };
 }
 
 /** Vrai si le navigateur expose IndexedDB (sinon : pas de file possible). */

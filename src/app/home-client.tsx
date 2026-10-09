@@ -43,6 +43,9 @@ import { useProducts } from '@/lib/hooks/useProducts';
 import { useToday } from '@/lib/hooks/useToday';
 import { useHistoriqueOnglets } from '@/lib/hooks/useHistoriqueOnglets';
 import { useOfflineSync } from '@/lib/hooks/useOfflineSync';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { formatCFA } from '@/lib/utils/currency';
+import { lireFile, type VenteEnAttente } from '@/lib/offline/queue';
 import { isFeatureAllowed } from '@/lib/utils/plans';
 import type { NavItem, Product, ReportView, Tab } from '@/types';
 import { getEnabledModules, fallbackTab } from '@/lib/modules';
@@ -59,6 +62,13 @@ export default function HomePage() {
   // est rejouée (idempotente, voir migration_offline_sales.sql) et le catalogue
   // est rafraîchi — le stock a bougé.
   const { enAttente: ventesHorsLigne, syncing: syncHorsLigne, synchroniser: syncMaintenant } = useOfflineSync(fetchProducts);
+  // Écran « ventes en attente » : la liste lisible de ce qui reste à rejouer.
+  const [fileOuverte, setFileOuverte] = useState(false);
+  const [fileVentes, setFileVentes] = useState<VenteEnAttente[]>([]);
+  const ouvrirFile = async () => {
+    setFileVentes(await lireFile());
+    setFileOuverte(true);
+  };
   // Relu à chaque retour sur l'accueil : c'est ce qui le met à jour après une vente.
   const { today, todayError } = useToday(tab === 'dashboard' && !!org?.onboarding_done);
   const [showScanner, setShowScanner] = useState(false);
@@ -301,6 +311,12 @@ export default function HomePage() {
                 {ventesHorsLigne} vente{ventesHorsLigne > 1 ? 's' : ''} en attente de synchronisation.
               </span>
               <button
+                onClick={ouvrirFile}
+                className="rounded-md border border-amber-300 px-2 py-1 text-xs font-medium hover:bg-amber-100"
+              >
+                Voir
+              </button>
+              <button
                 onClick={syncMaintenant}
                 disabled={syncHorsLigne}
                 className="rounded-md border border-amber-300 px-2 py-1 text-xs font-medium hover:bg-amber-100 disabled:opacity-50"
@@ -468,6 +484,44 @@ export default function HomePage() {
           errorMessage={scanNotFound}
         />
       )}
+
+      {/* Ventes en attente (hors-ligne) : la liste de ce qui sera rejoué, avec
+          le résumé de chaque vente et un bouton pour tout synchroniser. */}
+      <Dialog open={fileOuverte} onOpenChange={setFileOuverte}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Ventes en attente de synchronisation</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2 py-2 max-h-80 overflow-y-auto">
+            {fileVentes.length === 0 ? (
+              <p className="text-sm text-slate-500 text-center py-4">Aucune vente en attente.</p>
+            ) : (
+              fileVentes.map((v) => (
+                <div key={v.ref} className="rounded-lg border border-slate-200 px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-sm text-slate-800 truncate">{v.resume?.libelle ?? 'Vente'}</span>
+                    <span className="text-sm font-semibold text-slate-700 shrink-0">
+                      {v.resume ? formatCFA(v.resume.total) : ''}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    {new Date(v.cree).toLocaleString('fr-FR')}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+          <div className="flex justify-end">
+            <button
+              onClick={async () => { await syncMaintenant(); setFileVentes(await lireFile()); }}
+              disabled={syncHorsLigne}
+              className="rounded-lg bg-indigo-600 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {syncHorsLigne ? 'Synchronisation…' : 'Tout synchroniser'}
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
