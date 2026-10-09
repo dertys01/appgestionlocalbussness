@@ -1,28 +1,44 @@
 /**
- * Service worker GestionLocal (P2) — volontairement minimal.
+ * Service worker GestionLocal (P7) — app shell hors-ligne.
  *
- * Il ne met en cache QUE les fichiers statiques de Next (`/_next/static/`),
- * reconnaissables à leur nom hashé : ils ne changent jamais en place, donc
- * un cache pour vieillir est inoffensif et accélère les revisions.
+ * Deux responsabilités, et rien d'autre :
  *
- * Aucune donnée de commerce ici : l'API Supabase, les ventes, le stock et
- * les dettes passent toujours par le réseau. Ce service worker n'apporte
- * PAS le mode hors ligne — c'est un chantier distinct (P7), qui n'a rien à
- * faire passer pour autre chose.
+ *   1. fichiers statiques de Next (`/_next/static/`, noms hashés) → cache-first.
+ *      Ils ne changent jamais en place, un cache qui vieillit est inoffensif.
+ *
+ *   2. NAVIGATIONS (chargements de page) → réseau d'abord, repli sur le cache.
+ *      C'est ce qui permet de ROUVRIR l'application sans réseau : sans lui, le
+ *      navigateur affichait une erreur de connexion, et le caissier ne pouvait
+ *      pas atteindre la caisse — alors même que la file de ventes hors-ligne
+ *      existait. Le réseau reste prioritaire : en ligne, la page est toujours
+ *      fraîche ; le cache ne sert qu'en secours.
+ *
+ * Ce qui n'est PAS mis en cache : les routes serveur (API) et les données
+ * Supabase (données vivantes). Le catalogue, lui, a son propre cache IndexedDB
+ * (voir src/lib/offline/catalogue.ts), indexé par boutique.
  */
 
-const CACHE = 'gestionlocal-statique-v1';
+const VERSION = 'v2';
+const STATIQUE = `gestionlocal-statique-${VERSION}`;
+const APP = `gestionlocal-app-${VERSION}`;
 
-self.addEventListener('install', () => {
-  // Pas d'attente : la version suivante prend le relais immédiatement.
-  self.skipWaiting();
+self.addEventListener('install', (event) => {
+  // Pré-cache de la coquille : dès l'installation (en ligne), on garde le HTML
+  // de la racine pour pouvoir le resservir hors-ligne.
+  event.waitUntil(
+    caches.open(APP)
+      .then((cache) => cache.add('/').catch(() => {}))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const anciennes = await caches.keys();
     await Promise.all(
-      anciennes.filter((nom) => nom !== CACHE).map((nom) => caches.delete(nom))
+      anciennes
+        .filter((nom) => nom !== STATIQUE && nom !== APP)
+        .map((nom) => caches.delete(nom))
     );
     await self.clients.claim();
   })());
@@ -31,17 +47,42 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Même origine, GET, et fichier statique hashé — rien d'autre.
+  // Même origine, GET, rien d'autre.
   if (url.origin !== self.location.origin) return;
   if (event.request.method !== 'GET') return;
-  if (!url.pathname.startsWith('/_next/static/')) return;
 
-  event.respondWith((async () => {
-    const cache = await caches.open(CACHE);
-    const enCache = await cache.match(event.request);
-    if (enCache) return enCache;
-    const reponse = await fetch(event.request);
-    if (reponse.ok) cache.put(event.request, reponse.clone());
-    return reponse;
-  })());
+  if (url.pathname.startsWith('/_next/static/')) {
+    event.respondWith(cacheFirst(event.request));
+    return;
+  }
+
+  // Navigations : réseau d'abord, cache en secours.
+  if (event.request.mode === 'navigate') {
+    event.respondWith(reseauPuisCache(event.request));
+  }
 });
+
+async function cacheFirst(requete) {
+  const cache = await caches.open(STATIQUE);
+  const enCache = await cache.match(requete);
+  if (enCache) return enCache;
+  const reponse = await fetch(requete);
+  if (reponse.ok) cache.put(requete, reponse.clone());
+  return reponse;
+}
+
+async function reseauPuisCache(requete) {
+  const cache = await caches.open(APP);
+  try {
+    const reponse = await fetch(requete);
+    if (reponse.ok) cache.put(requete, reponse.clone());
+    return reponse;
+  } catch {
+    const enCache = await cache.match(requete);
+    if (enCache) return enCache;
+    // Repli ultime : la coquille de la racine, pré-cachée à l'installation.
+    const coquille = await cache.match('/');
+    if (coquille) return coquille;
+    throw new Error('hors-ligne, aucune page en cache');
+  }
+}

@@ -51,7 +51,7 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('product_cost(uuid,integer)', 'd33441e87e3ffd248893a7024af5ff0e', '0f48633b1895a064c9aaa646118ade47'),
     ('purge_accepted_invitations(uuid,integer)', 'ddeff8d4c129880458a3b22c50c17fc9', '463d9c590e8166ae26d1309daf44b4f8'),
     ('purge_rate_limits()', '4b7a9b9d63f02a306a83ab8f5e29aac7', '809045c7d82f9d32e142716d707faf44'),
-    ('record_credit_sale(jsonb,text,text,text,numeric,text)', 'acda71063b51433c825ec6a2ee164349', 'ba220cfe297c4653d6b046cdf8772ff3'),
+    ('record_credit_sale(jsonb,text,text,text,numeric,text,text)', '648df951e01d4c3bf70acd4056df1498', '2e54595a4070ba57a0a42c4bbbd36a5b'),
     ('redeem_invitation(text,uuid,text)', '62597d5a8ef7b127a90c4354397b735e', '152bbebdabb4071781f1003954618caf'),
     ('require_feature(text)', '8e95a1aba9ea44b186021f6c44cad186', '58f6b3d5be92afdc51ce430688c49882'),
     ('restore_product(uuid)', 'a31eb65d699703f77adefa8827201769', '5a50f0cf4574e3016236455cd81ffa27'),

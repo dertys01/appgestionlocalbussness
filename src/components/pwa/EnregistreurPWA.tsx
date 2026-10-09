@@ -3,11 +3,13 @@
 import { useEffect } from 'react';
 
 /**
- * Enregistre le service worker (P2).
+ * Enregistre le service worker (P2/P7).
  *
- * Le service worker ne met en cache que les fichiers statiques de Next :
- * les données de la boutique (ventes, stock, dettes) passent toujours par
- * le réseau. Ce n'est pas le mode hors ligne — chantier distinct (P7).
+ * Le service worker met en cache les fichiers statiques de Next ET la coquille
+ * de navigation (le HTML des pages), ce qui permet de rouvrir l'application
+ * sans réseau. Les DONNÉES (ventes, stock, dettes) passent toujours par le
+ * réseau ; leur repli hors-ligne vit ailleurs (file IndexedDB des ventes,
+ * cache catalogue — voir src/lib/offline/).
  *
  * Rien en développement : un service worker actif en local fige les
  * ressources et brouille les recettes.

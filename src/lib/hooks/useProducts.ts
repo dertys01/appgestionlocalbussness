@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { useRealtimeRefresh } from '@/lib/hooks/useRealtimeRefresh';
+import { ecrireCatalogue, lireCatalogue } from '@/lib/offline/catalogue';
 import type { Product } from '@/types';
 
 /**
@@ -17,7 +18,7 @@ import type { Product } from '@/types';
  * redescendre, et le hook se rattache tout seul au bon locataire.
  */
 export function useProducts() {
-  const { supabase, user } = useSupabase();
+  const { supabase, user, ownerId } = useSupabase();
   const [products, setProducts] = useState<Product[]>([]);
   // Vrai DÈS le premier rendu : le catalogue n'est encore arrivé nulle part
   // (ni SSR ni hydratation ne l'ont). Partir à `false` affichait l'état
@@ -47,13 +48,28 @@ export function useProducts() {
       setProducts((data as Product[]) ?? []);
       // Sinon une erreur passée restait affichée après un rechargement réussi.
       setProductsError('');
+      // Cache local : repli si l'app est rouverte sans réseau.
+      if (ownerId) void ecrireCatalogue(ownerId, (data as Product[]) ?? []);
     } catch (e) {
       if (requestId !== requestIdRef.current) return;
-      setProductsError((e as Error).message);
+      const message = (e as Error).message;
+      // Réseau coupé : on sert le dernier catalogue connu plutôt qu'une caisse
+      // vide — sans lui, rouvrir l'app hors-ligne ne permettait plus de vendre,
+      // alors même que la file hors-ligne existait.
+      if (ownerId && /failed to fetch|networkerror|fetch failed|load failed/i.test(message)) {
+        const cache = await lireCatalogue(ownerId);
+        if (requestId !== requestIdRef.current) return;
+        if (cache) {
+          setProducts(cache as Product[]);
+          setProductsError('');
+          return;
+        }
+      }
+      setProductsError(message);
     } finally {
       if (requestId === requestIdRef.current) setLoadingProducts(false);
     }
-  }, [supabase, user]);
+  }, [supabase, user, ownerId]);
 
   // Chargement initial, puis à chaque changement de locataire : on réutilise
   // fetchProducts (état, garde d'ordre et annulation au démontage) au lieu de

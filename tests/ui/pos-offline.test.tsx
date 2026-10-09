@@ -93,4 +93,19 @@ describe('POS — vente hors-ligne', () => {
     await waitFor(() => expect(screen.getByText(/Stock insuffisant/i)).toBeInTheDocument());
     expect(mettreEnFile).not.toHaveBeenCalled();
   });
+
+  it('le crédit hors-ligne se rejoue par record_credit_sale', async () => {
+    rpc.mockResolvedValue({ data: null, error: { message: 'TypeError: Failed to fetch' } });
+    renderPOS();
+    fireEvent.click(screen.getByText('RIZ'));
+    fireEvent.click(screen.getByRole('button', { name: 'Crédit' }));
+    fireEvent.change(screen.getByLabelText('Nom du client'), { target: { value: 'Koffi' } });
+    fireEvent.change(screen.getByLabelText('Téléphone du client'), { target: { value: '97000000' } });
+    fireEvent.click(await screen.findByRole('button', { name: /Céder à crédit/ }));
+
+    await waitFor(() => expect(screen.getByText(/Vente enregistrée hors-ligne/i)).toBeInTheDocument());
+    const vente = mettreEnFile.mock.calls[0][0] as { fn?: string; payload: { p_client_ref?: string } };
+    expect(vente.fn).toBe('record_credit_sale');
+    expect(vente.payload.p_client_ref).toBeTruthy();
+  });
 });

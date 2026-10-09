@@ -190,9 +190,26 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
 
     supabase.auth
       .getUser()
-      .then(({ data, error }) => {
+      .then(async ({ data, error }) => {
         if (cancelled) return;
         if (error) {
+          // Réseau coupé : on NE déconnecte PAS. La session locale reste
+          // valide, la RLS protège les données, et getUser() re-vérifiera au
+          // retour du réseau. Déconnecter hors-ligne rendait la caisse
+          // inutilisable alors même que le mode hors-ligne existe.
+          const reseau =
+            (error as { status?: number }).status === 0 ||
+            (error as { name?: string }).name === 'AuthRetryableFetchError' ||
+            /fetch|network|load failed/i.test(error.message ?? '');
+          if (reseau) {
+            const { data: sess } = await supabase.auth.getSession();
+            if (cancelled) return;
+            const u = sess.session?.user ?? null;
+            setUser(u);
+            if (u) resolveMembership(u).finally(() => { if (!cancelled) setLoading(false); });
+            else setLoading(false);
+            return;
+          }
           // Le refresh token stocké ne vaut plus rien : on le purge pour éviter
           // de boucler sur la même erreur à chaque rechargement.
           console.warn('[auth] session invalide, déconnexion', error.message);

@@ -842,11 +842,10 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
     // encaissée. create_sale() refuse 'credit' volontairement — un appel
     // direct créerait une vente comptée comme encaissée, sans dette derrière.
     const fn = paymentMethod === 'credit' ? 'record_credit_sale' : 'create_sale';
-    // Référence idempotente de la vente (client_ref). Hors-ligne, une vente
-    // rejouée ne doit pas être créée deux fois : le serveur reconnaît la
-    // référence et renvoie la vente existante. Inutile pour le crédit, qui
-    // reste en ligne (numéro client + carnet de dettes).
-    const refVente = paymentMethod === 'credit' ? null : nouvelleRefVente();
+    // Référence idempotente de la vente (client_ref) : hors-ligne, une vente
+    // rejouée ne doit pas être créée deux fois. Vaut pour l'espèces, le MoMo
+    // ET le crédit — record_credit_sale() la vérifie aussi, dette comprise.
+    const refVente = nouvelleRefVente();
     const payload = paymentMethod === 'credit'
       ? {
           p_items: items,
@@ -859,6 +858,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           // Moyen du versement : compté en « cash » avant, un moyen déduit
           // et non choisi. Sans acompte, le serveur ne lit pas ce champ.
           p_advance_method: advanceMethod,
+          p_client_ref: refVente,
         }
       : {
           p_items: items,
@@ -870,10 +870,14 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
     // Bascule hors-ligne : met la vente en file et affiche le reçu provisoire.
     // Renvoie true si la vente a bien été mise en file — l'appelant s'arrête.
     const basculerHorsLigne = async (): Promise<boolean> => {
-      if (!refVente || paymentMethod === 'credit') return false;
+      if (!refVente) return false;
+      const estCredit = paymentMethod === 'credit';
       const mise = await mettreEnFile({
         ref: refVente,
         cree: Date.now(),
+        // Le crédit se rejoue par record_credit_sale() : c'est elle qui crée
+        // la dette, create_sale() la refuse.
+        fn: estCredit ? 'record_credit_sale' : 'create_sale',
         payload: payload as Record<string, unknown>,
         // Résumé lisible pour l'écran « ventes en attente » : le payload ne
         // porte que des identifiants, pas les noms.
@@ -899,8 +903,8 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
           date: new Date(),
           businessName: org?.name,
           plan,
-          advance: 0,
-          due: 0,
+          advance: estCredit ? advanceAmount : 0,
+          due: estCredit ? remaining : 0,
         },
         clientPhone.trim() || undefined
       );
@@ -917,9 +921,9 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         amountGiven: given,
         change: paymentMethod === 'cash' && given >= total ? given - total : 0,
         date: new Date(),
-        isCredit: false,
-        advance: 0,
-        due: 0,
+        isCredit: estCredit,
+        advance: estCredit ? advanceAmount : 0,
+        due: estCredit ? remaining : 0,
         offline: true,
       });
       setCart([]);

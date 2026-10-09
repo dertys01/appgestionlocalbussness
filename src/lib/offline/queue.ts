@@ -24,6 +24,8 @@ export interface VenteEnAttente {
   ref: string;
   /** Horodatage de mise en file (diagnostic et tri). */
   cree: number;
+  /** Fonction RPC à rejouer (create_sale par défaut, record_credit_sale en crédit). */
+  fn?: string;
   /** Arguments de l'appel RPC, tels qu'ils seront rejoués. */
   payload: Record<string, unknown>;
   /** Résumé lisible, pour l'écran des ventes en attente (optionnel). */

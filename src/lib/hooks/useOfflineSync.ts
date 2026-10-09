@@ -39,7 +39,7 @@ export function useOfflineSync(onRejoue?: () => void) {
     let rejoue = 0;
     try {
       for (const vente of file) {
-        const { error } = await supabase.rpc('create_sale', vente.payload);
+        const { error } = await supabase.rpc(vente.fn ?? 'create_sale', vente.payload);
         if (!error) {
           await retirerDeFile(vente.ref);
           rejoue += 1;

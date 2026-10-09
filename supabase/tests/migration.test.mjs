@@ -79,6 +79,8 @@ const ORDER = [
   // Hors-ligne : client_ref + create_sale() idempotente (5ᵉ paramètre).
   // Redéfinit create_sale() en entier, donc APRÈS la précédente.
   'migration_offline_sales.sql',
+  // Crédit hors-ligne : record_credit_sale() idempotente (7ᵉ paramètre).
+  'migration_offline_credit.sql',
   // Équipe : gestion des membres sans clé service role. Ne dépend que des
   // fonctions de migration_team.sql / migration_security.sql.
   'migration_equipe_sans_service_role.sql',
@@ -298,6 +300,9 @@ const DERNIERE_VERSION = [
   // rejouée en dernier, sinon la remise en état réinstalle la version à 4
   // arguments et les appels à p_client_ref échouent.
   'migration_offline_sales.sql',
+  // Crédit hors-ligne : dernière version de record_credit_sale (7 args). DOIT
+  // suivre ca_caisse (qui réinstalle la version à 6 args) et offline_sales.
+  'migration_offline_credit.sql',
   // Équipe : les deux fonctions de gestion de membre doivent être les
   // dernières réinstallées, sinon la rejouabilité laisserait la version
   // d'avant — qui ne vérifie pas l'appelant.
@@ -1930,8 +1935,8 @@ const credit = async (qty, nom, tel) => {
   const sigs = (await q(
     `SELECT pronargs FROM pg_proc WHERE proname = 'record_credit_sale'`
   )).rows.map((x) => Number(x.pronargs));
-  check("14av. record_credit_sale : une seule signature, 6 arguments",
-    sigs.length === 1 && sigs[0] === 6, `arités : ${sigs.join(', ')}`);
+  check("14av. record_credit_sale : une seule signature, 7 arguments",
+    sigs.length === 1 && sigs[0] === 7, `arités : ${sigs.join(', ')}`);
 }
 
 // ═══ 15. Deux boutiques Pro ════════════════════════════════

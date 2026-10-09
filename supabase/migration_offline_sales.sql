@@ -16,9 +16,8 @@
 -- lieu d'en créer une autre. Le rejeu devient donc idempotent, quelle que soit
 -- la cause (réponse perdue, double clic, deux onglets).
 --
--- PÉRIMÈTRE : la vente au comptoir (espèces / MoMo). Le crédit reste en ligne —
--- il exige un numéro de client et alimente le carnet de dettes, deux choses
--- qu'on ne veut pas réconcilier hors-ligne dans cette première version.
+-- PÉRIMÈTRE : toute vente au comptoir — espèces, MoMo ET crédit (ce dernier
+-- via record_credit_sale(), rendue idempotente par migration_offline_credit.sql).
 --
 -- Rejouable : IF NOT EXISTS / DROP IF EXISTS / CREATE OR REPLACE.
 -- ============================================================
