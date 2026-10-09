@@ -120,7 +120,14 @@ function purgeIsDue(): boolean {
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  const isSensitive = SENSITIVE_ROUTES.some((r) => pathname.startsWith(r));
+  // Chemin normalisé UNE fois : slash final retiré, casse unifiée. Il sert à
+  // la fois à reconnaître une route sensible et à construire la clé du
+  // compteur — sinon `/API/register` passait le filtre sensible (casse
+  // différente) mais `/api/register/` et `/api/register` créaient deux
+  // compteurs. Les deux moitiés devaient penser pareil.
+  const chemin = pathname.replace(/\/+$/, '').toLowerCase();
+
+  const isSensitive = SENSITIVE_ROUTES.some((r) => chemin.startsWith(r));
   if (!isSensitive) return NextResponse.next();
 
   const rule = ruleFor(req.method);
@@ -128,11 +135,7 @@ export async function proxy(req: NextRequest) {
   if (!rule) return NextResponse.next();
 
   const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-  // La clé était le pathname brut : `/api/register`, `/api/register/`,
-  // `/API/register` créaient trois compteurs distincts et multipliaient le
-  // budget. On normalise : slash final retiré, casse unifiée.
-  const normalizedPath = pathname.replace(/\/+$/, '').toLowerCase();
-  const allowed = await isAllowed(`proxy:${ip}:${normalizedPath}`, rule);
+  const allowed = await isAllowed(`proxy:${ip}:${chemin}`, rule);
 
   if (!allowed) {
     return NextResponse.json(

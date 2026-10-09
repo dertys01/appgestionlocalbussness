@@ -349,7 +349,11 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onImport, o
                         {p.stock_qty}
                       </span>
                       {isLow && (
-                        <Badge variant="destructive" className="ml-2 text-xs py-0">!</Badge>
+                        // Le « ! » seul ne dit rien à un lecteur d'écran (il
+                        // annonce « point d'exclamation ») : l'info « stock bas »
+                        // doit être dans le texte accessible, pas seulement dans
+                        // la couleur rouge.
+                        <Badge variant="destructive" className="ml-2 text-xs py-0" aria-label="Stock bas">!</Badge>
                       )}
                     </TableCell>
                     <TableCell>

@@ -5,16 +5,21 @@ import { resolve } from 'node:path';
 import { parseProductsCsv, lignesImportables } from '@/lib/utils/importProducts';
 
 /**
- * Le fichier réellement livré au mainteneur, lu depuis le disque.
+ * Deux fichiers, deux rôles.
  *
- * Les autres tests partent d'un CSV écrit à la main dans le test : ils
- * prouvent que l'analyseur tolère tel format, pas que le fichier qu'on livre
- * passe. Ce test là ferme l'écart : si quelqu'un régénère le CSV avec un
- * séparateur, une colonne renommée ou une catégorie mal orthographiée, la
- * suite tombe ici.
+ * 1. Le fichier RÉELLEMENT livré au mainteneur (`import-local/`, gitignoré car
+ *    il porte les prix d'achat) : présent en local, absent en CI. Ses
+ *    assertions sont spécifiques (35 produits, un prix précis) — d'où le
+ *    `skipIf`.
+ *
+ * 2. Un fichier d'EXEMPLE synthétique, COMMITÉ (`tests/fixtures/`) : mêmes
+ *    tours d'écriture que le vrai (séparateur `;`, en-têtes français, notation
+ *    `k`, catégorie avec espace parasite, nom entre guillemets avec `""`,
+ *    doublon, vente à perte), mais des données inventées. Il tourne donc en CI
+ *    et ferme le trou « aucun fichier livré n'est analysé en intégration ».
  */
-// Le fichier est gitignoré : présent en local, absent en CI. skipIf le rend
-// facultatif au lieu de faire tomber la suite hors de la machine du mainteneur.
+
+// ── 1. Le fichier réel (local seulement) ────────────────────
 const CSV_PATH = resolve(process.cwd(), 'import-local/produits-import.csv');
 const CSV = existsSync(CSV_PATH) ? readFileSync(CSV_PATH, 'utf8') : '';
 
@@ -54,7 +59,7 @@ describe.skipIf(!existsSync(CSV_PATH))('le fichier livré passe bien par l\'anal
 
   it('n\'a aucune catégorie porteuse d\'une espace parasite', () => {
     for (const p of ok) {
-      expect(p.category).not.toMatch(/[\s  ]$/);
+      expect(p.category).not.toMatch(/[\s ]$/);
       expect(p.category).toBe(p.category?.trim() ?? null);
     }
   });
@@ -80,5 +85,52 @@ describe.skipIf(!existsSync(CSV_PATH))('le fichier livré passe bien par l\'anal
       expect(p.stock_qty).toBe(0);
       expect(p.min_stock_level).toBe(0);
     }
+  });
+});
+
+// ── 2. Le fichier d'exemple (CI) ────────────────────────────
+describe('un fichier au format livré s\'analyse (exemple commité)', () => {
+  const EXEMPLE = readFileSync(resolve(process.cwd(), 'tests/fixtures/import-produits.exemple.csv'), 'utf8');
+  const r = parseProductsCsv(EXEMPLE, ['Câble']);
+  const ok = lignesImportables(r);
+  const statut = (nom: string) => r.rows.find((x) => x.name === nom)?.status;
+
+  it('s\'analyse sans erreur bloquante', () => {
+    expect(r.erreur).toBeNull();
+  });
+
+  it('détecte le séparateur « ; » et les en-têtes français', () => {
+    expect(r.colonnes).toContain('Prix vente (F)');
+  });
+
+  it('lit « 110k » comme 110 000 et garde le prix de vente', () => {
+    const ecran = ok.find((x) => x.name.startsWith('Écran'));
+    expect(ecran?.price_buy).toBe(110000);
+    expect(ecran?.price_sell).toBe(135000);
+  });
+
+  it('conserve un nom entre guillemets avec guillemet échappé', () => {
+    expect(ok.some((x) => x.name.includes('14"'))).toBe(true);
+  });
+
+  it('nettoie une catégorie suivie d\'une espace parasite', () => {
+    const ecran = ok.find((x) => x.name.startsWith('Écran'));
+    expect(ecran?.category).toBe('Informatique');
+  });
+
+  it('refuse une vente sous le prix d\'achat', () => {
+    expect(statut('Clavier')).toBe('erreur');
+  });
+
+  it('signale un doublon dans le fichier (seule la première ligne compte)', () => {
+    expect(r.rows.filter((x) => x.name === 'Souris' && x.status === 'doublon_fichier')).toHaveLength(1);
+  });
+
+  it('écarte un produit déjà en boutique', () => {
+    expect(statut('Câble')).toBe('deja_present');
+  });
+
+  it('ne garde que les lignes importables', () => {
+    expect(ok.map((x) => x.name)).toEqual(['Écran 14"', 'Souris']);
   });
 });

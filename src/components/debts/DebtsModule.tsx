@@ -105,6 +105,10 @@ export function DebtsModule() {
    * moment de compter.
    */
   const [method, setMethod] = useState<'cash' | 'momo'>('cash');
+  // Nombre de débiteurs affichés. Le carnet peut en compter des centaines :
+  // tout rendre d'un coup noierait le caissier. On en montre PAGE, et un
+  // bouton en charge d'autres — plutôt que de s'arrêter à 20 sans issue.
+  const [shown, setShown] = useState(PAGE);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -115,6 +119,7 @@ export function DebtsModule() {
       const { data, error: err } = await supabase.rpc('get_customer_debts');
       if (err) throw new Error(readablePlanError(err.message));
       setDebts((data ?? []) as Debt[]);
+      setShown(PAGE);
       // Candidats P6 : même passe de chargement, pour que la pastille de
       // navigation et la section disent la même chose. Échec silencieux —
       // le carnet reste, seul le rappel disparaît.
@@ -336,7 +341,7 @@ export function DebtsModule() {
         />
       ) : (
         <div className="space-y-2">
-          {debts.slice(0, PAGE).map((d) => {
+          {debts.slice(0, shown).map((d) => {
             const age = daysSince(d.oldest_sale_at);
             const urgent = age !== null && age >= 30;
             return (
@@ -457,10 +462,17 @@ export function DebtsModule() {
             );
           })}
 
-          {debts.length > PAGE && (
-            <p className="text-center text-xs text-slate-500 pt-1">
-              {debts.length} débiteurs, {PAGE} premiers
-            </p>
+          {debts.length > shown && (
+            <Button
+              variant="outline"
+              onClick={() => setShown((n) => n + PAGE)}
+              className="w-full gap-2"
+            >
+              Afficher plus de débiteurs
+              <span className="text-slate-500 font-normal">
+                {' '}({shown} / {debts.length})
+              </span>
+            </Button>
           )}
         </div>
       )}

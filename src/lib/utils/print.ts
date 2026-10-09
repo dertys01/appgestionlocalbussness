@@ -3,6 +3,11 @@ import { formatQty } from '@/lib/utils/currency';
 import { planEffectif } from '@/lib/utils/plans';
 import { piedDiffusion } from '@/lib/utils/whatsapp';
 import { ifuValide } from '@/lib/mecef/gate';
+import { escapeHtml } from '@/lib/utils/html';
+
+// Réexporté : `rapport.ts` importait `escapeHtml` depuis ce module. L'unique
+// implémentation vit dans `html.ts` (voir son en-tête).
+export { escapeHtml };
 
 interface PrintData {
   items: CartItem[];
@@ -23,25 +28,6 @@ interface PrintData {
 
 function fmtCFA(n: number) {
   return n.toLocaleString('fr-FR') + ' FCFA';
-}
-
-/**
- * Le reçu est rendu dans une fenêtre `blob:text/html`, qui hérite de l'origine
- * de l'app : sans échappement, un nom de produit contenant du HTML exécuterait
- * du JavaScript dans cette origine et pourrait voler la session Supabase
- * (stockée en localStorage). Toute donnée saisie par l'utilisateur passe ici.
- */
-export function escapeHtml(value: unknown): string {
-  return String(value ?? '').replace(/[&<>"']/g, (c) => {
-    switch (c) {
-      case '&': return '&amp;';
-      case '<': return '&lt;';
-      case '>': return '&gt;';
-      case '"': return '&quot;';
-      case "'": return '&#39;';
-      default: return c;
-    }
-  });
 }
 
 export function printReceipt(data: PrintData) {

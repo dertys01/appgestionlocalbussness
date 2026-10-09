@@ -58,7 +58,7 @@ export function OrgSetupRequired() {
             </form>
           </CardContent>
         </Card>
-        <button onClick={() => supabase.auth.signOut()} className="mt-4 w-full text-sm text-slate-500 hover:text-slate-600 underline">
+        <button onClick={() => { void supabase.auth.signOut().catch(() => {}); }} className="mt-4 w-full text-sm text-slate-500 hover:text-slate-600 underline">
           Se déconnecter
         </button>
       </div>

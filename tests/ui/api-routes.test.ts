@@ -29,11 +29,17 @@ vi.mock('@supabase/supabase-js', () => ({
 const stripeMock = vi.hoisted(() => ({
   constructEvent: vi.fn(),
   retrieve: vi.fn(),
+  customersCreate: vi.fn(),
+  checkoutCreate: vi.fn(),
+  portalCreate: vi.fn(),
 }));
 vi.mock('stripe', () => ({
   default: class {
     webhooks = { constructEvent: stripeMock.constructEvent };
     subscriptions = { retrieve: stripeMock.retrieve };
+    customers = { create: stripeMock.customersCreate };
+    checkout = { sessions: { create: stripeMock.checkoutCreate } };
+    billingPortal = { sessions: { create: stripeMock.portalCreate } };
   },
 }));
 
@@ -389,5 +395,88 @@ describe('POST /api/invitations', () => {
     const { POST } = await import('@/app/api/invitations/route');
     const res = await POST(post('/api/invitations', { email: 'pas-un-email' }, { authorization: 'Bearer j' }));
     expect(res.status).toBe(400);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+describe('POST /api/stripe/checkout', () => {
+  beforeEach(() => {
+    process.env.STRIPE_SECRET_KEY = 'sk_test';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'srk';
+    process.env.STRIPE_PRICE_STARTER = 'price_starter';
+    process.env.STRIPE_PRICE_PRO = 'price_pro';
+  });
+
+  const user = () => ({ data: { user: { id: 'u1', email: 'a@b.com' } }, error: null });
+
+  it('sans session → 401', async () => {
+    h.client = fakeClient({ getUser: () => ({ data: { user: null }, error: null }) });
+    const { POST } = await import('@/app/api/stripe/checkout/route');
+    const res = await POST(post('/api/stripe/checkout', { plan: 'pro' }));
+    expect(res.status).toBe(401);
+  });
+
+  it('plan invalide → 400', async () => {
+    h.client = fakeClient({ getUser: user });
+    const { POST } = await import('@/app/api/stripe/checkout/route');
+    const res = await POST(post('/api/stripe/checkout', { plan: 'gratuit' }, { authorization: 'Bearer j' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('abonnement déjà actif → 409 (pas de second abonnement)', async () => {
+    h.client = fakeClient({
+      getUser: user,
+      from: { subscriptions: { data: { status: 'active', stripe_customer_id: 'cus_1' }, error: null } },
+    });
+    const { POST } = await import('@/app/api/stripe/checkout/route');
+    const res = await POST(post('/api/stripe/checkout', { plan: 'pro' }, { authorization: 'Bearer j' }));
+    expect(res.status).toBe(409);
+  });
+
+  it('nouvel abonnement → 200 avec l’URL de session', async () => {
+    stripeMock.customersCreate.mockResolvedValue({ id: 'cus_new' });
+    stripeMock.checkoutCreate.mockResolvedValue({ url: 'https://checkout.stripe.com/x' });
+    h.client = fakeClient({ getUser: user, from: { subscriptions: { data: null, error: null } } });
+    const { POST } = await import('@/app/api/stripe/checkout/route');
+    const res = await POST(post('/api/stripe/checkout', { plan: 'pro' }, { authorization: 'Bearer j' }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).url).toBe('https://checkout.stripe.com/x');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+describe('POST /api/stripe/portal', () => {
+  beforeEach(() => {
+    process.env.STRIPE_SECRET_KEY = 'sk_test';
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'srk';
+  });
+
+  it('sans session → 401', async () => {
+    h.client = fakeClient({ getUser: () => ({ data: { user: null }, error: null }) });
+    const { POST } = await import('@/app/api/stripe/portal/route');
+    const res = await POST(post('/api/stripe/portal', {}));
+    expect(res.status).toBe(401);
+  });
+
+  it('aucun client Stripe → 404', async () => {
+    h.client = fakeClient({
+      getUser: () => ({ data: { user: { id: 'u1' } }, error: null }),
+      from: { subscriptions: { data: null, error: null } },
+    });
+    const { POST } = await import('@/app/api/stripe/portal/route');
+    const res = await POST(post('/api/stripe/portal', {}, { authorization: 'Bearer j' }));
+    expect(res.status).toBe(404);
+  });
+
+  it('client existant → 200 avec l’URL du portail', async () => {
+    stripeMock.portalCreate.mockResolvedValue({ url: 'https://billing.stripe.com/y' });
+    h.client = fakeClient({
+      getUser: () => ({ data: { user: { id: 'u1' } }, error: null }),
+      from: { subscriptions: { data: { stripe_customer_id: 'cus_1' }, error: null } },
+    });
+    const { POST } = await import('@/app/api/stripe/portal/route');
+    const res = await POST(post('/api/stripe/portal', {}, { authorization: 'Bearer j' }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).url).toBe('https://billing.stripe.com/y');
   });
 });

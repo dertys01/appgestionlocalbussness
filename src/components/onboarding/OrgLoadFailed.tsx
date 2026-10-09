@@ -37,7 +37,7 @@ export function OrgLoadFailed({ error }: { error: string }) {
             {retrying ? 'Nouvelle tentative…' : 'Réessayer'}
           </Button>
           <button
-            onClick={() => supabase.auth.signOut()}
+            onClick={() => { void supabase.auth.signOut().catch(() => {}); }}
             className="w-full text-sm text-slate-500 hover:text-slate-600 underline"
           >
             Se déconnecter

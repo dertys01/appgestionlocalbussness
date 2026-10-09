@@ -35,26 +35,32 @@ export function GuidedCash({ products, onProductsChanged, onSkip }: GuidedCashPr
     if (!ownerId) return;
     // L'étape est écrite dès la vente, pas à la fermeture du reçu : si le
     // téléphone s'éteint reçu ouvert, la reprise affiche les félicitations
-    // au lieu de redemander une première vente déjà faite.
-    await supabase
-      .from('organizations')
-      .update({ onboarding_step: 'congrats' } as Record<string, unknown>)
-      .eq('id', ownerId);
+    // au lieu de redemander une première vente déjà faite. Best-effort : un
+    // échec réseau ne doit pas faire remonter un rejet non géré.
+    try {
+      await supabase
+        .from('organizations')
+        .update({ onboarding_step: 'congrats' } as Record<string, unknown>)
+        .eq('id', ownerId);
+    } catch { /* non bloquant */ }
   };
 
   const apresRecu = async () => {
-    if (venteFaite.current) await refreshOrg();
+    if (!venteFaite.current) return;
+    try { await refreshOrg(); } catch { /* non bloquant */ }
   };
 
   const passer = async () => {
     if (!ownerId || sortie) return;
     setSortie(true);
-    await supabase
-      .from('organizations')
-      .update({ onboarding_done: true, onboarding_step: null } as Record<string, unknown>)
-      .eq('id', ownerId);
+    try {
+      await supabase
+        .from('organizations')
+        .update({ onboarding_done: true, onboarding_step: null } as Record<string, unknown>)
+        .eq('id', ownerId);
+    } catch { /* on sort quand même : bloquer ici enfermerait le patron */ }
     onSkip();
-    await refreshOrg();
+    try { await refreshOrg(); } catch { /* non bloquant */ }
   };
 
   return (

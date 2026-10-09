@@ -271,7 +271,7 @@ export default function HomePage() {
         onTab={setTab}
         onScan={() => setShowScanner(true)}
         onRefresh={fetchProducts}
-        onSignOut={() => supabase.auth.signOut()}
+        onSignOut={() => { void supabase.auth.signOut().catch(() => {}); }}
       />
 
       {/* Ouverture du tiroir. Occupe la place du rail, qui n'existe plus sous lg. */}

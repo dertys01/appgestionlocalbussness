@@ -30,7 +30,7 @@ export async function logActivity({ ownerId, actorId, actorEmail, actorName, act
   if (error) console.error('[activity] Échec écriture journal', error);
 
   // Nettoyage des logs > 90 jours pour cet owner. Échantillonné (1 vente sur
-  // PRUNE_ODD) pour ne pas ajouter un aller-retour réseau à chaque encaissement.
+  // PRUNE_EVERY_N) pour ne pas ajouter un aller-retour réseau à chaque encaissement.
   // `await` obligatoire : les builders Supabase sont des thenables lazy, sans
   // `await` la requête n'est jamais exécutée.
   if (Math.random() * PRUNE_EVERY_N < 1) {

@@ -1,4 +1,5 @@
 import type { Organization } from '@/types';
+import { escapeHtml } from '@/lib/utils/html';
 
 /**
  * Le ticket de cuisine.
@@ -30,19 +31,6 @@ export interface KitchenTicket {
   openedAt: string | null;
   items: KitchenTicketItem[];
   org: Organization;
-}
-
-function escapeHtml(value: unknown): string {
-  return String(value ?? '').replace(/[&<>"']/g, (c) => {
-    switch (c) {
-      case '&': return '&amp;';
-      case '<': return '&lt;';
-      case '>': return '&gt;';
-      case '"': return '&quot;';
-      case "'": return '&#39;';
-      default: return c;
-    }
-  });
 }
 
 /** 80 mm : la largeur d'un imprimante thermique de cuisine, pas d'une A4. */

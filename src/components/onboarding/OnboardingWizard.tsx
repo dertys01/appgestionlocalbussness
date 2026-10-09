@@ -65,18 +65,20 @@ export function OnboardingWizard({ onProductsChanged, onGoToCash, onFinish }: On
     if (!ownerId) return false;
     setLoading(true);
     setError('');
-    const { error: err } = await supabase
-      .from('organizations')
-      .update({ onboarding_step: suivante, ...extra } as Record<string, unknown>)
-      .eq('id', ownerId);
-    if (err) {
-      setLoading(false);
-      setError(err.message);
+    try {
+      const { error: err } = await supabase
+        .from('organizations')
+        .update({ onboarding_step: suivante, ...extra } as Record<string, unknown>)
+        .eq('id', ownerId);
+      if (err) { setError(err.message); return false; }
+      await refreshOrg();
+      return true;
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Enregistrement impossible.');
       return false;
+    } finally {
+      setLoading(false);
     }
-    await refreshOrg();
-    setLoading(false);
-    return true;
   };
 
   const choisirActivite = async () => {
@@ -90,18 +92,20 @@ export function OnboardingWizard({ onProductsChanged, onGoToCash, onFinish }: On
     if (!ownerId) return;
     setLoading(true);
     setError('');
-    // Un second passage (retour arrière, double tap, reprise après coupure) ne
-    // doit pas créer les exemples en double.
-    if ((await hasStarterCatalog(supabase, ownerId)) === 0) {
-      const { error: err } = await supabase.from('products').insert(sampleRows(type, ownerId));
-      if (err) {
-        setLoading(false);
-        setError(err.message);
-        return;
+    try {
+      // Un second passage (retour arrière, double tap, reprise après coupure) ne
+      // doit pas créer les exemples en double.
+      if ((await hasStarterCatalog(supabase, ownerId)) === 0) {
+        const { error: err } = await supabase.from('products').insert(sampleRows(type, ownerId));
+        if (err) { setError(err.message); return; }
       }
+      onProductsChanged();
+      await avancer('first_sale');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ajout des exemples impossible.');
+    } finally {
+      setLoading(false);
     }
-    onProductsChanged();
-    await avancer('first_sale');
   };
 
   const ajouterMonProduit = async (e: React.FormEvent) => {
@@ -116,35 +120,45 @@ export function OnboardingWizard({ onProductsChanged, onGoToCash, onFinish }: On
 
     setLoading(true);
     setError('');
-    const { error: err } = await supabase.from('products').insert({
-      user_id: ownerId,
-      name: nom.trim(),
-      price_buy: 0,
-      price_sell: prixVente,
-      stock_qty: stock,
-      min_stock_level: 0,
-    });
-    setLoading(false);
-    if (err) { setError(err.message); return; }
-    setAjoutes((a) => [...a, { name: nom.trim(), price: prixVente }]);
-    setNom('');
-    setPrix('');
-    setQuantite('');
-    onProductsChanged();
+    try {
+      const { error: err } = await supabase.from('products').insert({
+        user_id: ownerId,
+        name: nom.trim(),
+        price_buy: 0,
+        price_sell: prixVente,
+        stock_qty: stock,
+        min_stock_level: 0,
+      });
+      if (err) { setError(err.message); return; }
+      setAjoutes((a) => [...a, { name: nom.trim(), price: prixVente }]);
+      setNom('');
+      setPrix('');
+      setQuantite('');
+      onProductsChanged();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Ajout impossible.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const terminer = async (exit: OnboardingExit) => {
     if (!ownerId) return;
     setLoading(true);
     setError('');
-    const { error: err } = await supabase
-      .from('organizations')
-      .update({ onboarding_done: true, onboarding_step: null } as Record<string, unknown>)
-      .eq('id', ownerId);
-    if (err) { setLoading(false); setError(err.message); return; }
-    onFinish(exit);
-    await refreshOrg();
-    setLoading(false);
+    try {
+      const { error: err } = await supabase
+        .from('organizations')
+        .update({ onboarding_done: true, onboarding_step: null } as Record<string, unknown>)
+        .eq('id', ownerId);
+      if (err) { setError(err.message); return; }
+      onFinish(exit);
+      await refreshOrg();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Enregistrement impossible.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const ecrans: OnboardingStep[] = ['welcome', 'business', 'samples', 'first_sale', 'congrats'];

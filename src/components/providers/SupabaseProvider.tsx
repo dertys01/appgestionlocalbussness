@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
 import { modeOuverture } from '@/lib/pwa/installation';
 import { planEffectif } from '@/lib/utils/plans';
@@ -47,6 +47,11 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
   const [org, setOrg] = useState<Organization | null>(null);
   const [plan, setPlan] = useState<Plan>('free');
   const [orgError, setOrgError] = useState<string | null>(null);
+  // Le journal de connexion ne doit s'écrire qu'UNE fois par montage. En
+  // StrictMode (dev), l'effet de montage s'exécute deux fois : sans ce garde,
+  // chaque connexion en développement produisait deux lignes « s'est
+  // connecté(e) ».
+  const loginJournalise = useRef(false);
 
   // useCallback : sans lui, loadOrg et refreshOrg changent de référence à chaque
   // render — et comme refreshOrg entre dans la valeur du contexte, la valeur
@@ -145,18 +150,6 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
           actorName: resolvedName,
           canManageProducts: ['owner', 'manager'].includes(data.role ?? 'employee'),
         });
-        // Journal d'audit : non bloquant. Une écriture qui échoue ne doit pas
-        // remplacer l'écran entier par une erreur — le catch ci-dessous n'a
-        // donc plus vocation à l'attraper.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (supabase as any).from('activity_logs').insert({
-          business_owner_id: resolvedOwnerId,
-          actor_id: u.id,
-          actor_email: u.email ?? '',
-          actor_name: resolvedName,
-          action: 'login',
-          description: `${resolvedName} s'est connecté(e)`,
-        }).then(() => {}, () => {});
       } else {
         resolvedOwnerId = u.id;
         resolvedName = u.email ?? u.id;
@@ -166,6 +159,13 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
         setActorName(resolvedName);
         // Cache du rattachement : « patron » se retrouve hors-ligne.
         void ecrireMembre(u.id, { ownerId: resolvedOwnerId, isEmployee: false, actorName: resolvedName, canManageProducts: true });
+      }
+
+      // Journal d'audit : non bloquant, et UNE seule fois par montage. Une
+      // écriture qui échoue ne doit pas remplacer l'écran par une erreur, et
+      // StrictMode (dev) ne doit pas produire deux lignes « s'est connecté(e) ».
+      if (!loginJournalise.current) {
+        loginJournalise.current = true;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (supabase as any).from('activity_logs').insert({
           business_owner_id: resolvedOwnerId,
@@ -173,7 +173,7 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
           actor_email: u.email ?? '',
           actor_name: resolvedName,
           action: 'login',
-          description: 'Connexion patron',
+          description: data ? `${resolvedName} s'est connecté(e)` : 'Connexion patron',
         }).then(() => {}, () => {});
       }
 
