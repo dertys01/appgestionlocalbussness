@@ -167,7 +167,7 @@ export default function TarifsPage() {
           </p>
           <p>
             Paiement Mobile Money (MTN, Moov) en cours de mise en place ·{' '}
-            <Link href="/" className="underline hover:text-slate-800">
+            <Link href="/connexion" className="underline hover:text-slate-800">
               Se connecter
             </Link>
           </p>

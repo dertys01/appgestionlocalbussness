@@ -145,7 +145,7 @@ export default function RegisterPage() {
               </Button>
               <p className="text-center text-sm text-slate-500">
                 Déjà un compte ?{' '}
-                <Link href="/" className="text-indigo-600 hover:underline font-medium">Se connecter</Link>
+                <Link href="/connexion" className="text-indigo-600 hover:underline font-medium">Se connecter</Link>
               </p>
             </form>
           </CardContent>

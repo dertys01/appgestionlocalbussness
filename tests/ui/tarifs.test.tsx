@@ -85,9 +85,11 @@ describe('Page /tarifs', () => {
     expect(screen.getByText(/une seule fois par boutique/)).toBeDefined();
     expect(screen.getByText(/Paramètres → Abonnement/)).toBeDefined();
 
-    // Tous les appels mènent à l'inscription : la page ne démarre rien elle-même.
+    // La page ne démarre rien elle-même : tous ses appels mènent à
+    // l'inscription, au retour sur l'accueil, ou au formulaire de connexion
+    // (depuis P8 : /connexion, l'accueil étant la page publique).
     const hrefs = screen.getAllByRole('link').map((l) => l.getAttribute('href'));
-    expect(hrefs.every((h) => h === '/register' || h === '/')).toBe(true);
+    expect(hrefs.every((h) => h === '/register' || h === '/' || h === '/connexion')).toBe(true);
     expect(hrefs.filter((h) => h === '/register').length).toBeGreaterThanOrEqual(3);
   });
 

@@ -162,7 +162,7 @@ export default function InvitationPage({
         </Card>
 
         <p className="text-center text-xs text-slate-500 mt-6">
-          <Link href="/" className="hover:text-indigo-600 underline">
+          <Link href="/connexion" className="hover:text-indigo-600 underline">
             J&apos;ai déjà un compte
           </Link>
         </p>
