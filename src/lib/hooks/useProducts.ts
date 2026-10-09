@@ -17,7 +17,10 @@ import type { Product } from '@/types';
 export function useProducts() {
   const { supabase, user } = useSupabase();
   const [products, setProducts] = useState<Product[]>([]);
-  const [loadingProducts, setLoadingProducts] = useState(false);
+  // Vrai DÈS le premier rendu : le catalogue n'est encore arrivé nulle part
+  // (ni SSR ni hydratation ne l'ont). Partir à `false` affichait l'état
+  // « boutique neuve » pendant une peinture — le flash vu en recette.
+  const [loadingProducts, setLoadingProducts] = useState(true);
   const [productsError, setProductsError] = useState('');
 
   const fetchProducts = async () => {
