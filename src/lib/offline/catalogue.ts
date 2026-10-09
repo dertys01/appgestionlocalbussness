@@ -1,28 +1,33 @@
 /**
- * Cache local du catalogue (P7 — app utilisable hors-ligne).
+ * Cache local par clé (P7 — app utilisable hors-ligne).
  *
- * Sans lui, rouvrir l'application sans réseau montrait une caisse VIDE : le
- * caissier ne pouvait plus rien vendre, alors même que la file hors-ligne
- * existait. On conserve donc le dernier catalogue lu, par boutique, dans un
- * IndexedDB dédié.
+ * Trois choses y vivent, toutes indexées par identifiant pour ne jamais
+ * mélanger deux commerces sur le même appareil :
  *
- * Ce cache n'est PAS une source de vérité : il ne sert qu'en repli quand la
- * lecture réseau échoue. Dès que le réseau revient, la lecture serveur
- * l'écrase. Il est indexé par `ownerId` : deux boutiques sur le même appareil
- * ne se voient pas.
+ *   • `catalogue:<ownerId>` → les produits. Sans lui, rouvrir l'app sans
+ *     réseau montrait une caisse VIDE.
+ *   • `boutique:<ownerId>`  → l'organisation. Sans lui, `home-client` restait
+ *     bloqué sur « Lecture de la boutique impossible » et NE RENDAIT PAS la
+ *     caisse — le cache catalogue devenait donc inutile.
+ *   • `membre:<userId>`     → le rattachement (patron/employé, ownerId). Sans
+ *     lui, un employé hors-ligne était pris pour un patron, et cherchait un
+ *     catalogue sous le mauvais identifiant.
  *
- * IndexedDB absent (rendu serveur, navigation privée stricte) : toutes les
- * fonctions s'effacent proprement, l'appelant retombe sur son erreur réseau.
+ * Ce n'est PAS une source de vérité : on n'y lit qu'en repli quand le réseau
+ * échoue. Dès que le réseau revient, la lecture serveur écrase. La RLS reste
+ * la garde réelle : ce cache ne donne accès à rien qui ne soit déjà local.
+ *
+ * IndexedDB absent (rendu serveur, navigation privée stricte) : tout s'efface
+ * proprement, l'appelant retombe sur son erreur réseau.
  */
 
-const DB_NAME = 'gestionlocal-catalogue';
+const DB_NAME = 'gestionlocal-cache';
 const DB_VERSION = 1;
-const STORE = 'catalogue';
+const STORE = 'cache';
 
-/** Une entrée = { ownerId, produits, maj }. `ownerId` est la clé. */
-interface EntreeCatalogue {
-  ownerId: string;
-  produits: unknown[];
+interface Entree {
+  cle: string;
+  valeur: unknown;
   maj: number;
 }
 
@@ -36,7 +41,7 @@ function ouvrir(): Promise<IDBDatabase> {
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(STORE)) {
-        db.createObjectStore(STORE, { keyPath: 'ownerId' });
+        db.createObjectStore(STORE, { keyPath: 'cle' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -54,23 +59,33 @@ function transaction<T>(mode: IDBTransactionMode, travail: (s: IDBObjectStore) =
   }));
 }
 
-/** Enregistre le catalogue courant pour cette boutique. */
-export async function ecrireCatalogue(ownerId: string, produits: unknown[]): Promise<void> {
-  if (!disponible() || !ownerId) return;
+async function ecrire(cle: string, valeur: unknown): Promise<void> {
+  if (!disponible()) return;
   try {
-    await transaction('readwrite', (s) => s.put({ ownerId, produits, maj: Date.now() } satisfies EntreeCatalogue));
+    await transaction('readwrite', (s) => s.put({ cle, valeur, maj: Date.now() } satisfies Entree));
   } catch {
     /* stockage plein / privé : le cache est un confort, pas une condition */
   }
 }
 
-/** Lit le dernier catalogue enregistré pour cette boutique, ou null. */
-export async function lireCatalogue(ownerId: string): Promise<unknown[] | null> {
-  if (!disponible() || !ownerId) return null;
+async function lire<T>(cle: string): Promise<T | null> {
+  if (!disponible()) return null;
   try {
-    const e = await transaction<EntreeCatalogue | undefined>('readonly', (s) => s.get(ownerId));
-    return e?.produits ?? null;
+    const e = await transaction<Entree | undefined>('readonly', (s) => s.get(cle));
+    return e ? (e.valeur as T) : null;
   } catch {
     return null;
   }
 }
+
+// ── Catalogue ───────────────────────────────────────────────
+export const ecrireCatalogue = (ownerId: string, produits: unknown[]) => ecrire(`catalogue:${ownerId}`, produits);
+export const lireCatalogue = <T = unknown[]>(ownerId: string) => lire<T>(`catalogue:${ownerId}`);
+
+// ── Boutique (organisation) ─────────────────────────────────
+export const ecrireBoutique = (ownerId: string, org: unknown) => ecrire(`boutique:${ownerId}`, org);
+export const lireBoutique = <T>(ownerId: string) => lire<T>(`boutique:${ownerId}`);
+
+// ── Rattachement (membre) ───────────────────────────────────
+export const ecrireMembre = (userId: string, membre: unknown) => ecrire(`membre:${userId}`, membre);
+export const lireMembre = <T>(userId: string) => lire<T>(`membre:${userId}`);

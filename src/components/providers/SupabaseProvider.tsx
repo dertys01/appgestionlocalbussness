@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import { createClient } from '@/lib/supabase/client';
 import { modeOuverture } from '@/lib/pwa/installation';
 import { planEffectif } from '@/lib/utils/plans';
+import { ecrireBoutique, ecrireMembre, lireBoutique, lireMembre } from '@/lib/offline/catalogue';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
 import type { Organization, Plan } from '@/types';
 
@@ -51,6 +52,15 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
   // render — et comme refreshOrg entre dans la valeur du contexte, la valeur
   // changeait aussi, re-rendant les 20 consommateurs (dont le POS) pour rien.
   const loadOrg = useCallback(async (ownerIdVal: string): Promise<Organization | null> => {
+    // Applique une organisation (serveur OU cache) et calcule le plan effectif.
+    const appliquer = (o: Organization) => {
+      setOrg(o);
+      // Plan EFFECTIF : un essai Starter actif rend le plan utile 'starter',
+      // alors que organizations.plan dit encore 'free' (le brut reste
+      // l'affaire du webhook Stripe). Miroir de current_org_plan() en base.
+      setPlan(planEffectif(o.plan, o.trial_ends_at, o.plan_valid_until));
+    };
+
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const { data, error } = await (supabase as any)
@@ -59,29 +69,31 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
         .eq('id', ownerIdVal)
         .maybeSingle();
 
-      // supabase-js ne LÈVE pas : il renvoie { error }. Le try/catch ci-dessus
-      // n'a donc jamais rien attrapé, et l'erreur était lue nulle part —
-      // d'où l'écran « Configuration requise » affiché à tort.
-      if (error) {
-        setOrgError(error.message ?? 'Lecture de la boutique impossible.');
-        return null;
-      }
+      // supabase-js ne LÈVE pas : il renvoie { error }. On le transforme en
+      // exception pour un seul chemin d'erreur (réseau vs autre).
+      if (error) throw new Error(error.message ?? 'Lecture de la boutique impossible.');
       setOrgError(null);
       if (data) {
-        setOrg(data as Organization);
-        // Plan EFFECTIF : un essai Starter actif rend le plan utile 'starter',
-        // alors que organizations.plan dit encore 'free' (le brut reste
-        // l'affaire du webhook Stripe). Miroir de current_org_plan() en base.
-        setPlan(planEffectif(
-          (data as Organization).plan,
-          (data as Organization).trial_ends_at,
-          (data as Organization).plan_valid_until,
-        ));
+        appliquer(data as Organization);
+        void ecrireBoutique(ownerIdVal, data);
         return data as Organization;
       }
       return null;
     } catch (e) {
-      setOrgError(e instanceof Error ? e.message : 'Lecture de la boutique impossible.');
+      const message = e instanceof Error ? e.message : 'Lecture de la boutique impossible.';
+      // Réseau coupé : on sert la boutique en cache plutôt que de bloquer
+      // l'application sur « Lecture impossible ». Sans elle, `home-client`
+      // n'affiche JAMAIS la caisse (écran OrgLoadFailed) — et tout le mode
+      // hors-ligne (file de ventes, cache catalogue) devenait inutile.
+      if (/failed to fetch|networkerror|fetch failed|load failed/i.test(message)) {
+        const cache = await lireBoutique<Organization>(ownerIdVal);
+        if (cache) {
+          appliquer(cache);
+          setOrgError(null);
+          return cache;
+        }
+      }
+      setOrgError(message);
       return null;
     }
   }, [supabase]);
@@ -93,11 +105,26 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
   const resolveMembership = async (u: User) => {
     try {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data } = await (supabase as any)
+      const { data, error: errMembre } = await (supabase as any)
         .from('business_members')
         .select('owner_id, member_name, role')
         .eq('member_id', u.id)
-        .maybeSingle() as { data: { owner_id: string; member_name: string; role: string } | null };
+        .maybeSingle() as { data: { owner_id: string; member_name: string; role: string } | null; error: { message: string } | null };
+
+      // Réseau coupé : on relit le rattachement en cache plutôt que de prendre
+      // un employé pour un patron — il chercherait alors un catalogue sous son
+      // propre identifiant et ne trouverait rien.
+      if (!data && errMembre && /failed to fetch|networkerror|fetch failed|load failed/i.test(errMembre.message)) {
+        const cache = await lireMembre<{ ownerId: string; isEmployee: boolean; actorName: string; canManageProducts: boolean }>(u.id);
+        if (cache) {
+          setOwnerId(cache.ownerId);
+          setIsEmployee(cache.isEmployee);
+          setActorName(cache.actorName);
+          setCanManageProducts(cache.canManageProducts);
+          await loadOrg(cache.ownerId);
+          return;
+        }
+      }
 
       let resolvedOwnerId: string;
       let resolvedName: string;
@@ -111,6 +138,13 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
         // Rôle 'owner' ou 'manager' requis pour gérer le catalogue ; sinon
         // simple caissier.
         setCanManageProducts(['owner', 'manager'].includes(data.role ?? 'employee'));
+        // Cache du rattachement : permet de retrouver le patron hors-ligne.
+        void ecrireMembre(u.id, {
+          ownerId: resolvedOwnerId,
+          isEmployee: true,
+          actorName: resolvedName,
+          canManageProducts: ['owner', 'manager'].includes(data.role ?? 'employee'),
+        });
         // Journal d'audit : non bloquant. Une écriture qui échoue ne doit pas
         // remplacer l'écran entier par une erreur — le catch ci-dessous n'a
         // donc plus vocation à l'attraper.
@@ -130,6 +164,8 @@ export function SupabaseProvider({ children }: { children: React.ReactNode }) {
         setIsEmployee(false);
         setCanManageProducts(true);
         setActorName(resolvedName);
+        // Cache du rattachement : « patron » se retrouve hors-ligne.
+        void ecrireMembre(u.id, { ownerId: resolvedOwnerId, isEmployee: false, actorName: resolvedName, canManageProducts: true });
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (supabase as any).from('activity_logs').insert({
           business_owner_id: resolvedOwnerId,
