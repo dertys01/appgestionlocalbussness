@@ -71,6 +71,40 @@ describe('DashboardTab — boutique neuve (0 produit)', () => {
   });
 });
 
+describe('DashboardTab — chargement initial (zéro produit, catalogue en route)', () => {
+  function renderCharge() {
+    render(
+      <DashboardTab products={[]} loadingProducts canManageProducts onNewSale={vi.fn()}
+        onAddProduct={vi.fn()} onRestock={vi.fn()} />
+    );
+  }
+
+  it('ne dit jamais « Rien n’est enregistré » à une boutique dont on ne sait rien encore', () => {
+    renderCharge();
+    // La régression vue en recette : après chaque rechargement, le tableau
+    // affichait « Bienvenue : vos trois premiers pas » sur une boutique
+    // pleine, le temps que le catalogue arrive — une petite page angoissante
+    // avant la vraie.
+    expect(screen.queryByText(/Bienvenue : vos trois premiers pas/)).toBeNull();
+    expect(screen.queryByText(/Rien n’est enregistré/)).toBeNull();
+    expect(screen.getByLabelText('Chargement du tableau de bord')).toBeInTheDocument();
+  });
+
+  it('les vraies cartes remplacent le chargement à l’arrivée du catalogue', () => {
+    const vue = render(
+      <DashboardTab products={[]} loadingProducts canManageProducts onNewSale={vi.fn()}
+        onAddProduct={vi.fn()} onRestock={vi.fn()} />
+    );
+    expect(screen.getByLabelText('Chargement du tableau de bord')).toBeInTheDocument();
+    vue.rerender(
+      <DashboardTab products={[product()]} loadingProducts={false} canManageProducts
+        onNewSale={vi.fn()} onAddProduct={vi.fn()} onRestock={vi.fn()} />
+    );
+    expect(screen.queryByLabelText('Chargement du tableau de bord')).toBeNull();
+    expect(screen.getByText(/Encaissé aujourd/)).toBeInTheDocument();
+  });
+});
+
 describe('DashboardTab — boutique en activité', () => {
   const today = { revenue: 42300, cash: 30000, momo: 12300, sales: 7, debtTotal: 15500, debtClients: 2 };
 

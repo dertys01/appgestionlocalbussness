@@ -11,6 +11,8 @@ import type { Product } from '@/types';
 
 interface DashboardTabProps {
   products: Product[];
+  /** Vrai pendant le (re)chargement du catalogue. */
+  loadingProducts?: boolean;
   canManageProducts: boolean;
   onNewSale: () => void;
   onAddProduct: () => void;
@@ -33,7 +35,7 @@ interface DashboardTabProps {
  * page, pour qui les cherche.
  */
 export function DashboardTab({
-  products, canManageProducts, onNewSale, onAddProduct, onRestock, today = null, todayError = '', onOpenDebts,
+  products, loadingProducts = false, canManageProducts, onNewSale, onAddProduct, onRestock, today = null, todayError = '', onOpenDebts,
 }: DashboardTabProps) {
   const totalProducts = products.length;
   const stockBas = useMemo(
@@ -56,7 +58,20 @@ export function DashboardTab({
 
       <InstallPrompt />
 
-      {totalProducts === 0 ? (
+      {totalProducts === 0 && loadingProducts ? (
+        /* Chargement initial : le catalogue n'est pas encore arrivé. Afficher
+           la carte de bienvenue ici dirait « Rien n'est enregistré » à une
+           boutique pleine — le flash vu en recette après chaque rechargement
+           (spinner plein écran, puis « trois premiers pas », puis les vraies
+           cartes). Un écran neutre, puis le vrai contenu. */
+        <div aria-label="Chargement du tableau de bord" className="space-y-3 animate-pulse">
+          <div className="h-28 rounded-xl bg-slate-100" />
+          <div className="grid grid-cols-2 gap-3">
+            <div className="h-20 rounded-xl bg-slate-100" />
+            <div className="h-20 rounded-xl bg-slate-100" />
+          </div>
+        </div>
+      ) : totalProducts === 0 ? (
         /* Boutique neuve : les cartes afficheraient 0 partout — aucune
             information, et aucune indication de par où commencer. On les
             remplace par l'ordre des opérations ; elles réapparaissent dès le

@@ -288,6 +288,7 @@ export default function HomePage() {
           {tab === 'dashboard' && (
             <DashboardTab
               products={products}
+              loadingProducts={loadingProducts}
               canManageProducts={canManageProducts}
               onNewSale={() => setTab('pos')}
               onAddProduct={openAdd}
