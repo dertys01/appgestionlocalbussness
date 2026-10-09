@@ -13,6 +13,7 @@ import {
   Menu,
   UtensilsCrossed,
   ChefHat,
+  WifiOff,
 } from 'lucide-react';
 import { LandingPage } from '@/components/marketing/LandingPage';
 import { InventoryTab } from '@/components/inventory/InventoryTab';
@@ -41,6 +42,7 @@ import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { useProducts } from '@/lib/hooks/useProducts';
 import { useToday } from '@/lib/hooks/useToday';
 import { useHistoriqueOnglets } from '@/lib/hooks/useHistoriqueOnglets';
+import { useOfflineSync } from '@/lib/hooks/useOfflineSync';
 import { isFeatureAllowed } from '@/lib/utils/plans';
 import type { NavItem, Product, ReportView, Tab } from '@/types';
 import { getEnabledModules, fallbackTab } from '@/lib/modules';
@@ -53,6 +55,10 @@ export default function HomePage() {
   // voir en fermant la boutique) ; l'historique complet reste à un clic.
   const [salesView, setSalesView] = useState<'journal' | 'historique'>('journal');
   const { products, loadingProducts, productsError, fetchProducts } = useProducts();
+  // Rejeu des ventes encaissées hors-ligne (P7) : au retour du réseau, la file
+  // est rejouée (idempotente, voir migration_offline_sales.sql) et le catalogue
+  // est rafraîchi — le stock a bougé.
+  const { enAttente: ventesHorsLigne, syncing: syncHorsLigne, synchroniser: syncMaintenant } = useOfflineSync(fetchProducts);
   // Relu à chaque retour sur l'accueil : c'est ce qui le met à jour après une vente.
   const { today, todayError } = useToday(tab === 'dashboard' && !!org?.onboarding_done);
   const [showScanner, setShowScanner] = useState(false);
@@ -85,6 +91,7 @@ export default function HomePage() {
   // Retour système (Android, navigateur) : voir useHistoriqueOnglets — sans
   // lui, le bouton retour quitte l'application au lieu de revenir en arrière.
   useHistoriqueOnglets(tab, setTab);
+
   // Identité stable : passé en dépendance de l'effet du POS, un arrow inline
   // le relancerait à chaque render.
   const handleAddToCartHandled = useCallback(() => setAddToCartRequest(null), []);
@@ -100,6 +107,17 @@ export default function HomePage() {
    * n'a plus d'effet.
    */
   const [menuOuvert, setMenuOuvert] = useState(false);
+
+  // Le tiroir mobile ne doit jamais rester ouvert en passant au grand écran :
+  // sur lg le rail est permanent, et le `inert` posé sur le contenu bloquerait
+  // toute interaction. On le referme donc dès qu'on atteint 1024 px.
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(min-width: 1024px)');
+    const suivre = () => { if (mq.matches) setMenuOuvert(false); };
+    mq.addEventListener('change', suivre);
+    return () => mq.removeEventListener('change', suivre);
+  }, []);
   // Écran 4 de l'onboarding → la caisse guidée. Local et non en base : après un
   // rechargement, le patron revoit la consigne « Faites votre première
   // vente » avant la caisse, ce qui ne coûte qu'un clic.
@@ -267,12 +285,30 @@ export default function HomePage() {
           panier, à droite, sortait de l'écran. min-w-0 rend au navigateur la
           permission de rétrécir la colonne, et `truncate` fait enfin son
           travail. */}
-      <main className="flex-1 min-w-0 lg:ml-56 min-h-screen bg-slate-50 pt-14 lg:pt-0">
+      <main className="flex-1 min-w-0 lg:ml-56 min-h-screen bg-slate-50 pt-14 lg:pt-0" inert={menuOuvert}>
         {/* max-w-none sur la caisse : catalogue + panier (320 px) réclament
             toute la largeur. Borné à 5xl comme les autres onglets, la caisse
             affichait de larges marges mortes sur grand écran et le panier
             se faisait écraser par la colonne produits. */}
         <div className={`p-4 mx-auto ${tab === 'pos' ? 'max-w-none' : 'max-w-5xl'}`}>
+          {/* Ventes hors-ligne en attente : l'information est en haut de TOUS
+              les onglets — un commerçant qui vient d'encaisser sans réseau doit
+              pouvoir vérifier d'un coup d'œil que rien n'est perdu. */}
+          {ventesHorsLigne > 0 && (
+            <div className="mb-3 flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              <WifiOff className="h-4 w-4 shrink-0" />
+              <span className="flex-1">
+                {ventesHorsLigne} vente{ventesHorsLigne > 1 ? 's' : ''} en attente de synchronisation.
+              </span>
+              <button
+                onClick={syncMaintenant}
+                disabled={syncHorsLigne}
+                className="rounded-md border border-amber-300 px-2 py-1 text-xs font-medium hover:bg-amber-100 disabled:opacity-50"
+              >
+                {syncHorsLigne ? 'Synchronisation…' : 'Synchroniser'}
+              </button>
+            </div>
+          )}
 
           {/* Erreur de chargement des produits : HORS condition d'onglet.
               Rendue uniquement dans le dashboard, elle était invisible dès

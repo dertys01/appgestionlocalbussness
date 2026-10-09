@@ -300,7 +300,7 @@ export function SalesHistory() {
             const isOpen = expanded === sale.id;
             return (
               <Card key={sale.id} className="border-slate-200 overflow-hidden">
-                <button className="w-full text-left" onClick={() => setExpanded(isOpen ? null : sale.id)}>
+                <button className="w-full text-left" aria-expanded={isOpen} onClick={() => setExpanded(isOpen ? null : sale.id)}>
                   <CardContent className="p-4 flex items-center gap-3">
                     <div className={`h-9 w-9 rounded-full flex items-center justify-center shrink-0 ${
                       sale.payment_method === 'momo' ? 'bg-emerald-100 text-emerald-700'

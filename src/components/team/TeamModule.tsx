@@ -298,6 +298,7 @@ export function TeamModule() {
       <div className="flex gap-2">
         <button
           onClick={() => setPanel('team')}
+          aria-pressed={panel === 'team'}
           className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
             panel === 'team' ? 'bg-indigo-600 text-white' : 'border border-slate-200 text-slate-500 hover:bg-slate-50'
           }`}
@@ -306,6 +307,7 @@ export function TeamModule() {
         </button>
         <button
           onClick={() => setPanel('logs')}
+          aria-pressed={panel === 'logs'}
           className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
             panel === 'logs' ? 'bg-indigo-600 text-white' : 'border border-slate-200 text-slate-500 hover:bg-slate-50'
           }`}
@@ -414,6 +416,7 @@ export function TeamModule() {
                       <button
                         onClick={() => revokeInvitation(inv.id)}
                         title="Révoquer le lien"
+                        aria-label={`Révoquer le lien d'invitation de ${inv.email}`}
                         className="p-1.5 text-amber-600 hover:text-red-600 rounded-lg shrink-0"
                       >
                         <XCircle className="h-4 w-4" />
@@ -482,6 +485,7 @@ export function TeamModule() {
                           onClick={() => setConfirmDeleteId(m.member_id)}
                           className="p-1.5 text-red-500 hover:text-red-600 hover:bg-red-50 rounded-lg"
                           title="Retirer de l'équipe"
+                          aria-label={`Retirer ${m.member_name} de l'équipe`}
                         >
                           <Trash2 className="h-4 w-4" />
                         </button>

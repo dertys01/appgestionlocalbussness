@@ -256,9 +256,10 @@ export function SettingsModule() {
   return (
     <div className="space-y-4">
       {/* Tabs */}
-      <div className="flex gap-2">
+      <div className="flex gap-2" role="group" aria-label="Sections des paramètres">
         {(['org', 'billing'] as const).map((t) => (
           <button key={t} onClick={() => setTab(t)}
+            aria-pressed={tab === t}
             className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
               tab === t ? 'bg-indigo-600 text-white' : 'border border-slate-200 text-slate-500 hover:bg-slate-50'
             }`}>

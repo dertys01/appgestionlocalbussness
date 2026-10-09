@@ -311,13 +311,13 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
           {/* Unité — affichage seulement, mais indispensable : sans elle
               l'écran affiche « 1,5 » et le commerçant ne sait pas de quoi. */}
           <div className="space-y-1">
-            <label className="text-sm font-medium text-slate-700">
+            <label id="unit-label" className="text-sm font-medium text-slate-700">
               Unité de vente
               <span className="text-slate-500 font-normal ml-1">
                 (le stock et les quantités s&apos;expriment dans cette unité)
               </span>
             </label>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-1.5" role="group" aria-labelledby="unit-label">
               {UNITES.map((u) => (
                 <button
                   key={u}

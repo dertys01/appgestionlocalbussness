@@ -24,6 +24,10 @@ jobs:
 
       - run: npm test
 
+      # Seuil de couverture : empêche qu'elle recule sans qu'on le voie.
+      - name: Couverture (seuil)
+        run: npm run test:coverage
+
       # Les routes évaluent requireEnv() au chargement du module et le client
       # refuse de démarrer sans URL/clé : le build a besoin de leurres.
       - name: Build
@@ -34,6 +38,43 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ci-service-key
           STRIPE_SECRET_KEY: sk_test_ci
           NEXT_PUBLIC_APP_URL: http://localhost:3000
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx playwright install --with-deps chromium
+
+      # Même build « leurre » que le job test : les pages publiques se rendent
+      # sans backend, donc l'URL Supabase pointe sur un port fermé (échec
+      # immédiat, pas d'attente réseau) et aucune donnée n'est nécessaire.
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_SUPABASE_URL: http://127.0.0.1:9
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: ci-anon-key
+          SUPABASE_SERVICE_ROLE_KEY: ci-service-key
+          STRIPE_SECRET_KEY: sk_test_ci
+          NEXT_PUBLIC_APP_URL: http://localhost:3100
+          NEXT_PUBLIC_PLANS_CONFIG: '{"quotas":{"free":{"products":50,"employees":0,"historyDays":30}},"prices":{"starter":{"monthly":5000,"yearly":50000},"pro":{"monthly":10000,"yearly":100000}}}'
+
+      - name: E2E (Playwright)
+        run: npx playwright test
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
 
   secrets:
     runs-on: ubuntu-latest

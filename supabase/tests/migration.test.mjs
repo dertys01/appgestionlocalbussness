@@ -76,6 +76,9 @@ const ORDER = [
   // comme current_org_plan(). Redéfinit create_sale() en entier, donc APRÈS la
   // précédente.
   'migration_facture_plan_effectif.sql',
+  // Hors-ligne : client_ref + create_sale() idempotente (5ᵉ paramètre).
+  // Redéfinit create_sale() en entier, donc APRÈS la précédente.
+  'migration_offline_sales.sql',
   // Équipe : gestion des membres sans clé service role. Ne dépend que des
   // fonctions de migration_team.sql / migration_security.sql.
   'migration_equipe_sans_service_role.sql',
@@ -288,6 +291,10 @@ const DERNIERE_VERSION = [
   // sinon la remise en état réinstalle la version qui lit le plan brut et la
   // rejouabilité testerait la mauvaise version.
   'migration_facture_plan_effectif.sql',
+  // Hors-ligne : dernière version de create_sale (idempotente). DOIT être
+  // rejouée en dernier, sinon la remise en état réinstalle la version à 4
+  // arguments et les appels à p_client_ref échouent.
+  'migration_offline_sales.sql',
   // Équipe : les deux fonctions de gestion de membre doivent être les
   // dernières réinstallées, sinon la rejouabilité laisserait la version
   // d'avant — qui ne vérifie pas l'appelant.
@@ -451,6 +458,24 @@ await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
 
   // Remise en état : PATRON reste Pro sans échéance pour le reste de la suite.
   await q(`UPDATE organizations SET plan='pro', plan_valid_until = NULL WHERE id='${PATRON}'`);
+}
+
+// 3c3. Rejeu idempotent d'une vente hors-ligne (P7).
+// Deux appels avec le MÊME client_ref ne doivent produire qu'UNE vente : c'est
+// la garde qui empêche un rejeu (réponse perdue) de doubler le stock et le CA.
+{
+  const PZ = 'aaaaaaaa-0000-0000-0000-0000000000ee';
+  await q(`INSERT INTO products (id, user_id, name, sku, price_buy, price_sell, stock_qty, min_stock_level)
+           VALUES ('${PZ}', '${PATRON}', 'Test hors-ligne', 'OFFL', 100, 200, 10, 1)`);
+
+  const ref = '11112222-3333-4444-5555-666677778888';
+  const venteAvant = await count(`SELECT count(*) FROM sales`);
+  const r1 = await q(`SELECT create_sale('[{"product_id":"${PZ}","quantity":2}]'::jsonb, 'cash', NULL, NULL, '${ref}') AS v`);
+  const r2 = await q(`SELECT create_sale('[{"product_id":"${PZ}","quantity":2}]'::jsonb, 'cash', NULL, NULL, '${ref}') AS v`);
+  const venteApres = await count(`SELECT count(*) FROM sales`);
+  check('3c3. rejeu : la MÊME vente est renvoyée', r1.rows[0].v.id === r2.rows[0].v.id, `${r1.rows[0].v.id} vs ${r2.rows[0].v.id}`);
+  check('3c3. rejeu : une seule vente créée', venteApres === venteAvant + 1, `${venteAvant} → ${venteApres}`);
+  check('3c3. rejeu : stock déduit une seule fois (10 → 8)', (await stock(PZ)) === 8, `obtenu ${await stock(PZ)}`);
 }
 
 // 3d. Stock insuffisant → rien n'est écrit

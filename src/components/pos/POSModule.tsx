@@ -31,6 +31,8 @@ import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { isFeatureAllowed } from '@/lib/utils/plans';
 import { peutDelivrerFacture } from '@/lib/mecef/gate';
 import { useLiaisonMecef } from '@/lib/hooks/useLiaisonMecef';
+import { mettreEnFile } from '@/lib/offline/queue';
+import { nouvelleRefVente } from '@/lib/offline/ref';
 import type { Product, CartItem } from '@/types';
 
 interface POSModuleProps {
@@ -88,6 +90,8 @@ interface ReceiptState {
   advance: number;
   /** Reste à recouvrer, renvoyé par la base. */
   due: number;
+  /** Vente mise en file hors-ligne : en attente de synchronisation. */
+  offline?: boolean;
 }
 
 /**
@@ -712,39 +716,48 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
     setCheckoutError('');
     setLoading(true);
 
+    // Tout ce qui prépare l'appel est calculé AVANT le try : le catch a besoin
+    // de `payload` et `refVente` pour mettre la vente en file hors-ligne. Rien
+    // ici ne lève.
+    const items = cart.map((i) => ({
+      product_id: i.product.id,
+      quantity: i.quantity,
+      // Absent quand le prix catalogue s'applique : le serveur garde alors
+      // son comportement habituel. Envoyé seulement s'il y a eu marchandage.
+      ...(i.unitPrice !== null ? { unit_price: i.unitPrice } : {}),
+    }));
+
+    // Le crédit passe par record_credit_sale() et non create_sale() : c'est
+    // elle qui rattache la vente à un numéro de téléphone et la marque non
+    // encaissée. create_sale() refuse 'credit' volontairement — un appel
+    // direct créerait une vente comptée comme encaissée, sans dette derrière.
+    const fn = paymentMethod === 'credit' ? 'record_credit_sale' : 'create_sale';
+    // Référence idempotente de la vente (client_ref). Hors-ligne, une vente
+    // rejouée ne doit pas être créée deux fois : le serveur reconnaît la
+    // référence et renvoie la vente existante. Inutile pour le crédit, qui
+    // reste en ligne (numéro client + carnet de dettes).
+    const refVente = paymentMethod === 'credit' ? null : nouvelleRefVente();
+    const payload = paymentMethod === 'credit'
+      ? {
+          p_items: items,
+          p_client_name: clientName.trim(),
+          p_client_phone: clientPhone.trim(),
+          // Acompte : 0 = crédit total. La colonne amount_received en base ne
+          // connaît que ce montant, donc c'est le seul endroit où il doit être
+          // décidé.
+          p_advance: advanceAmount,
+          // Moyen du versement : compté en « cash » avant, un moyen déduit
+          // et non choisi. Sans acompte, le serveur ne lit pas ce champ.
+          p_advance_method: advanceMethod,
+        }
+      : {
+          p_items: items,
+          p_payment_method: paymentMethod,
+          p_client_name: clientName.trim() || null,
+          p_client_ref: refVente,
+        };
+
     try {
-      const items = cart.map((i) => ({
-        product_id: i.product.id,
-        quantity: i.quantity,
-        // Absent quand le prix catalogue s'applique : le serveur garde alors
-        // son comportement habituel. Envoyé seulement s'il y a eu marchandage.
-        ...(i.unitPrice !== null ? { unit_price: i.unitPrice } : {}),
-      }));
-
-      // Le crédit passe par record_credit_sale() et non create_sale() : c'est
-      // elle qui rattache la vente à un numéro de téléphone et la marque non
-      // encaissée. create_sale() refuse 'credit' volontairement — un appel
-      // direct créerait une vente comptée comme encaissée, sans dette derrière.
-      const fn = paymentMethod === 'credit' ? 'record_credit_sale' : 'create_sale';
-      const payload = paymentMethod === 'credit'
-        ? {
-            p_items: items,
-            p_client_name: clientName.trim(),
-            p_client_phone: clientPhone.trim(),
-            // Acompte : 0 = crédit total. La colonne amount_received en base ne
-            // connaît que ce montant, donc c'est le seul endroit où il doit être
-            // décidé.
-            p_advance: advanceAmount,
-            // Moyen du versement : compté en « cash » avant, un moyen déduit
-            // et non choisi. Sans acompte, le serveur ne lit pas ce champ.
-            p_advance_method: advanceMethod,
-          }
-        : {
-            p_items: items,
-            p_payment_method: paymentMethod,
-            p_client_name: clientName.trim() || null,
-          };
-
       const { data, error: saleErr } = await supabase.rpc(fn, payload);
 
       if (saleErr) throw new Error(readableSaleError(saleErr.message));
@@ -890,7 +903,67 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
       // vente, immédiatement.
       void chargerDerniereVente();
     } catch (err) {
-      setCheckoutError(err instanceof Error ? err.message : 'Erreur inconnue');
+      const message = err instanceof Error ? err.message : 'Erreur inconnue';
+      // Vente hors-ligne : SEULE une panne réseau (pas un refus métier — stock
+      // insuffisant, produit introuvable) déclenche la mise en file. Le refus
+      // métier doit rester une erreur à l'écran, jamais une vente fantôme.
+      const panneReseau = /failed to fetch|networkerror|fetch failed|load failed|network request failed/i.test(message);
+      if (panneReseau && paymentMethod !== 'credit' && refVente) {
+        const mise = await mettreEnFile({
+          ref: refVente,
+          cree: Date.now(),
+          payload: payload as Record<string, unknown>,
+        });
+        if (mise) {
+          // Reçu provisoire : total calculé localement (le serveur n'a rien
+          // renvoyé), aucun numéro de facture. La vente est en file, elle sera
+          // rejouée au retour du réseau — la référence la rend idempotente.
+          const waLink = generateWhatsAppReceiptLink(
+            {
+              items: cart.map((i) => ({
+                product_name: i.product.name,
+                quantity: i.quantity,
+                unit_price: linePrice(i),
+                subtotal: linePrice(i) * i.quantity,
+              })),
+              total,
+              paymentMethod,
+              date: new Date(),
+              businessName: org?.name,
+              plan,
+              advance: 0,
+              due: 0,
+            },
+            clientPhone.trim() || undefined
+          );
+          const given = parseFloat(String(amountGiven).replace(',', '.')) || 0;
+          setReceipt({
+            saleId: refVente,
+            invoiceNumber: null,
+            waLink,
+            items: [...cart],
+            total,
+            paymentMethod,
+            clientName: clientName.trim(),
+            clientPhone: clientPhone.trim(),
+            amountGiven: given,
+            change: paymentMethod === 'cash' && given >= total ? given - total : 0,
+            date: new Date(),
+            isCredit: false,
+            advance: 0,
+            due: 0,
+            offline: true,
+          });
+          setCart([]);
+          setClientName('');
+          setClientPhone('');
+          setAmountGiven('');
+          setAdvance('');
+          setPanierOuvert(false);
+          return;
+        }
+      }
+      setCheckoutError(message);
     } finally {
       setLoading(false);
     }
@@ -1649,13 +1722,17 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
       <Dialog open={!!receipt} onOpenChange={(ouvert) => { if (!ouvert) fermerRecu(); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle className={`flex items-center gap-2 ${receipt?.isCredit ? 'text-amber-700' : 'text-emerald-700'}`}>
-              {receipt?.isCredit ? 'Vente cédée à crédit' : 'Vente enregistrée !'}
+            <DialogTitle className={`flex items-center gap-2 ${receipt?.offline || receipt?.isCredit ? 'text-amber-700' : 'text-emerald-700'}`}>
+              {receipt?.offline
+                ? 'Vente enregistrée hors-ligne'
+                : receipt?.isCredit ? 'Vente cédée à crédit' : 'Vente enregistrée !'}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <p className="text-slate-600 text-sm text-center">
-              {receipt?.isCredit
+              {receipt?.offline
+                ? 'Pas de réseau : la vente est mise en attente. Elle sera synchronisée automatiquement, sans double comptage.'
+                : receipt?.isCredit
                 ? receipt.advance > 0
                   // Avec acompte, la phrase doit dire ce qui est payé et ce qui
                   // reste — sinon la caissière ne sait pas quoi annoncer au
@@ -1721,8 +1798,9 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
               {/* Facture normalisée — délivrance verrouillée :
                   Pro (numéro attribué par create_sale) + IFU + connexion DGI.
                   Tant que le verrou est fermé, l'emplacement explique pourquoi
-                  au lieu d'un bouton mort. */}
-              {factureEtat.delivrable ? (
+                  au lieu d'un bouton mort. Masquée sur une vente hors-ligne :
+                  sans numéro attribué, il n'y a rien à délivrer. */}
+              {!receipt?.offline && (factureEtat.delivrable ? (
                 <Button
                   variant="outline"
                   className="w-full gap-2 border-amber-300 text-amber-700 hover:bg-amber-50"
@@ -1739,7 +1817,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                   <FileText className="h-3 w-3 shrink-0" />
                   {factureEtat.motif}
                 </p>
-              )}
+              ))}
 
               <Button variant="ghost" onClick={fermerRecu} className="w-full gap-2 text-slate-500">
                 <X className="h-4 w-4" />

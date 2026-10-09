@@ -35,9 +35,10 @@ export function ReportsTab({ view, onView }: ReportsTabProps) {
           que de couper le sélecteur de vue. */}
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-xl font-bold text-slate-800">Rapports &amp; Analyses</h2>
-        <div className="ml-auto flex rounded-lg bg-slate-100 p-0.5 text-sm">
+        <div className="ml-auto flex rounded-lg bg-slate-100 p-0.5 text-sm" role="group" aria-label="Vue des rapports">
           <button
             onClick={() => onView('sales')}
+            aria-pressed={view === 'sales'}
             className={`px-3 py-1 rounded-md font-medium transition-colors ${
               view === 'sales' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'
             }`}
@@ -46,6 +47,7 @@ export function ReportsTab({ view, onView }: ReportsTabProps) {
           </button>
           <button
             onClick={() => onView('profit')}
+            aria-pressed={view === 'profit'}
             className={`px-3 py-1 rounded-md font-medium transition-colors ${
               view === 'profit' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'
             }`}
@@ -54,6 +56,7 @@ export function ReportsTab({ view, onView }: ReportsTabProps) {
           </button>
           <button
             onClick={() => onView('expenses')}
+            aria-pressed={view === 'expenses'}
             className={`px-3 py-1 rounded-md font-medium transition-colors ${
               view === 'expenses' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'
             }`}
