@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { RestockModal } from '@/components/products/RestockModal';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
+import { whatsappNumber } from '@/lib/utils/phone';
 import { readablePlanError } from '@/lib/utils/planErrors';
 import type { Product } from '@/types';
 
@@ -17,6 +18,8 @@ interface ProductForecast {
   avgPerDay: number;
   daysUntilStockout: number | null; // null = pas de ventes récentes
   suggestedReorder: number;
+  /** Stock à zéro ou moins ALORS qu'il se vend : vente perdue maintenant. */
+  rupture: boolean;
   /** Fournisseur principal : « commander » n'a pas de sens sans savoir à qui. */
   supplierName: string | null;
   supplierPhone: string | null;
@@ -24,6 +27,22 @@ interface ProductForecast {
 
 const ANALYSIS_DAYS = 30;
 const REORDER_HORIZON = 30; // vouloir avoir du stock pour 30 jours
+
+/**
+ * Lien WhatsApp vers le fournisseur, prérempli comme une relance client :
+ * le commerçant envoie, il ne retape ni le produit ni la quantité.
+ * Sans quantité suggérée, lien nu — un message sans quantité ferait
+ * retaper quand même. Exportée pour le test.
+ */
+export function lienFournisseur(
+  telephone: string, nom: string, produit: string, quantite: number, unite: string,
+): string {
+  const base = `https://wa.me/${whatsappNumber(telephone)}`;
+  if (quantite <= 0) return base;
+  const uniteLisible = unite === 'pce' ? (quantite > 1 ? 'pièces' : 'pièce') : (unite || 'unités');
+  const message = `Bonjour ${nom}, je voudrais commander ${quantite} ${uniteLisible} de ${produit}. Merci !`;
+  return `${base}?text=${encodeURIComponent(message)}`;
+}
 
 /** Ligne de products_with_supplier : un produit, plus son fournisseur résolu. */
 type ProductForecastRow = Product & {
@@ -37,6 +56,9 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [restockProduct, setRestockProduct] = useState<Product | null>(null);
+  // Quantité suggérée pré-remplie dans le modal : le commerçant valide, il
+  // ne retape pas le chiffre affiché deux lignes plus haut.
+  const [quantiteSuggeree, setQuantiteSuggeree] = useState<number | undefined>(undefined);
 
   const fetchForecasts = async (cancelled = false) => {
     setLoading(true);
@@ -80,26 +102,31 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
       soldMap[row.product_id] = Number(row.quantity);
     });
 
-    const result: ProductForecast[] = (products as ProductForecastRow[]).map((p) => {
-      const soldLast30Days = soldMap[p.id] ?? 0;
-      const avgPerDay = soldLast30Days / ANALYSIS_DAYS;
-      const daysUntilStockout =
-        avgPerDay > 0 ? Math.floor(p.stock_qty / avgPerDay) : null;
-      const suggestedReorder = Math.max(
-        0,
-        Math.ceil(avgPerDay * REORDER_HORIZON) - p.stock_qty
-      );
+    const result: ProductForecast[] = (products as ProductForecastRow[])
+      // Archivés exclus : un article retiré du catalogue n'a rien à faire
+      // dans les seaux ni les compteurs — même filtre qu'InventoryTable.
+      .filter((p) => p.is_active !== false)
+      .map((p) => {
+        const soldLast30Days = soldMap[p.id] ?? 0;
+        const avgPerDay = soldLast30Days / ANALYSIS_DAYS;
+        const daysUntilStockout =
+          avgPerDay > 0 ? Math.floor(p.stock_qty / avgPerDay) : null;
+        const suggestedReorder = Math.max(
+          0,
+          Math.ceil(avgPerDay * REORDER_HORIZON) - p.stock_qty
+        );
 
-      return {
-        product: p,
-        soldLast30Days,
-        avgPerDay,
-        daysUntilStockout,
-        suggestedReorder,
-        supplierName: p.supplier_name ?? null,
-        supplierPhone: p.supplier_phone ?? null,
-      };
-    });
+        return {
+          product: p,
+          soldLast30Days,
+          avgPerDay,
+          daysUntilStockout,
+          suggestedReorder,
+          rupture: p.stock_qty <= 0 && avgPerDay > 0,
+          supplierName: p.supplier_name ?? null,
+          supplierPhone: p.supplier_phone ?? null,
+        };
+      });
 
     // Trier par urgence : d'abord ceux qui vont manquer bientôt
     result.sort((a, b) => {
@@ -124,9 +151,17 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
 
   const urgent = forecasts.filter((f) => f.daysUntilStockout !== null && f.daysUntilStockout <= 7);
   const warning = forecasts.filter((f) => f.daysUntilStockout !== null && f.daysUntilStockout > 7 && f.daysUntilStockout <= 14);
-  const ok = forecasts.filter((f) => f.daysUntilStockout === null || f.daysUntilStockout > 14);
+  // « Suffisant » compte les stocks sains, PAS les sans-données : additionner
+  // « tout va bien » et « on ne sait pas » fabriquait un compteur malhonnête.
+  const ok = forecasts.filter((f) => f.daysUntilStockout !== null && f.daysUntilStockout > 14);
+  // Trésorerie : remettre TOUT à niveau coûterait combien, pour combien
+  // d'articles — la question que le commerçant se pose avant de commander.
+  const totalReassort = forecasts.reduce(
+    (s, f) => s + f.suggestedReorder * (f.product.price_buy ?? 0), 0);
+  const nbReassort = forecasts.filter((f) => f.suggestedReorder > 0).length;
 
   const getStatus = (f: ProductForecast) => {
+    if (f.rupture) return 'rupture';
     if (f.daysUntilStockout === null) return 'nodata';
     if (f.daysUntilStockout <= 7) return 'urgent';
     if (f.daysUntilStockout <= 14) return 'warning';
@@ -134,6 +169,7 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
   };
 
   const statusConfig = {
+    rupture: { color: 'border-red-300 bg-red-50', badge: 'bg-red-600 text-white hover:bg-red-600', label: 'En rupture' },
     urgent: { color: 'border-red-200 bg-red-50', badge: 'bg-red-100 text-red-700 hover:bg-red-100', label: 'Urgent' },
     warning: { color: 'border-amber-200 bg-amber-50', badge: 'bg-amber-100 text-amber-700 hover:bg-amber-100', label: 'Attention' },
     ok: { color: 'border-emerald-200 bg-emerald-50', badge: 'bg-emerald-100 text-emerald-700 hover:bg-emerald-100', label: 'OK' },
@@ -188,6 +224,15 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
         </Card>
       </div>
 
+      {/* Trésorerie : remettre TOUT à niveau coûterait combien — la question
+          avant de commander, que les lignes une par une ne répondent pas. */}
+      {totalReassort > 0 && (
+        <p className="text-sm text-slate-600">
+          Pour tout remettre à niveau : <strong className="tabular-nums">{formatCFA(totalReassort)}</strong>
+          {' '}({nbReassort} article{nbReassort > 1 ? 's' : ''})
+        </p>
+      )}
+
       {/* Liste produits */}
       {loading ? (
         <div className="text-center text-slate-500 py-10 text-sm">Analyse en cours...</div>
@@ -213,6 +258,7 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
                           {f.product.name}
                         </span>
                         <Badge className={`text-xs py-0 ${cfg.badge}`}>
+                          {status === 'rupture' && 'En rupture, à commander'}
                           {status === 'urgent' && `Rupture dans ${f.daysUntilStockout}j`}
                           {status === 'warning' && `${f.daysUntilStockout}j restants`}
                           {status === 'ok' && f.daysUntilStockout !== null && `${f.daysUntilStockout}j restants`}
@@ -245,7 +291,9 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
 
                       {/* Le fournisseur ne sert qu'ici : « commander » sans savoir
                           à qui aboutit à ouvrir le carnet. Le lien WhatsApp est
-                          direct — c'est déjà le canal de la cible. */}
+                          direct — c'est déjà le canal de la cible — et prérempli
+                          comme une relance client : le commerçant n'a qu'à
+                          envoyer, pas à retaper la quantité. */}
                       {f.supplierName && (
                         <div className="mt-1.5 flex items-center gap-2 flex-wrap">
                           <span className="text-xs text-slate-500 flex items-center gap-1">
@@ -254,7 +302,10 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
                           </span>
                           {f.supplierPhone && (
                             <a
-                              href={`https://wa.me/${f.supplierPhone.replace(/[^0-9]/g, '')}`}
+                              href={lienFournisseur(
+                                f.supplierPhone, f.supplierName,
+                                f.product.name, f.suggestedReorder, f.product.unit,
+                              )}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="text-xs text-emerald-700 hover:text-emerald-700 font-medium inline-flex items-center gap-1"
@@ -267,11 +318,12 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
                       )}
                     </div>
 
-                    {(status === 'urgent' || status === 'warning') && (
+                    {(status === 'rupture' || status === 'urgent' || status === 'warning') && (
                       <button
-                        onClick={() => setRestockProduct(f.product)}
+                        onClick={() => { setRestockProduct(f.product); setQuantiteSuggeree(f.suggestedReorder); }}
                         className="shrink-0 p-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700"
                         title="Réapprovisionner"
+                        aria-label={`Réapprovisionner ${f.product.name}`}
                       >
                         <PackagePlus className="h-4 w-4" />
                       </button>
@@ -287,7 +339,8 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
       {restockProduct && (
         <RestockModal
           product={restockProduct}
-          onClose={() => setRestockProduct(null)}
+          initialQty={quantiteSuggeree}
+          onClose={() => { setRestockProduct(null); setQuantiteSuggeree(undefined); }}
           onSaved={() => { fetchForecasts(); onRestock(); }}
         />
       )}

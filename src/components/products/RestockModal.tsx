@@ -11,6 +11,8 @@ import type { Product } from '@/types';
 
 interface RestockModalProps {
   product: Product;
+  /** Quantité pré-remplie (prévisions) : le commerçant valide, il ne retape pas. */
+  initialQty?: number;
   onClose: () => void;
   onSaved: () => void;
 }
@@ -26,9 +28,9 @@ const parseQty = (raw: string): number => {
   return Number.isFinite(n) ? n : NaN;
 };
 
-export function RestockModal({ product, onClose, onSaved }: RestockModalProps) {
+export function RestockModal({ product, initialQty, onClose, onSaved }: RestockModalProps) {
   const { supabase, ownerId, actorName } = useSupabase();
-  const [qty, setQty] = useState('');
+  const [qty, setQty] = useState(initialQty !== undefined ? String(initialQty) : '');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
