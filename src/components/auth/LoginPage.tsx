@@ -31,33 +31,41 @@ export function LoginPage() {
     setError('');
     setInfo('');
 
-    // window.location.origin : le lien part vers la boite mail du client, pas
-    // vers l'API Supabase. Si l'origine n'est pas dans la liste blanche
-    // (Authentication > URL Configuration), Supabase redirige vers le Site URL
-    // configure et le client atterrit sur la page d'accueil au lieu de
-    // /reset-password.
-    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-      redirectTo: `${window.location.origin}/reset-password`,
-    });
+    try {
+      // window.location.origin : le lien part vers la boite mail du client, pas
+      // vers l'API Supabase. Si l'origine n'est pas dans la liste blanche
+      // (Authentication > URL Configuration), Supabase redirige vers le Site URL
+      // configure et le client atterrit sur la page d'accueil au lieu de
+      // /reset-password.
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
 
-    if (error) {
-      console.error('[auth] resetPasswordForEmail', error.status, error.message);
-      const m = error.message || '';
-      if (/redirect|not.*allow/i.test(m)) {
-        setError("La demande a été refusée : l'adresse du site n'est pas autorisée. Contactez le support.");
-      } else if (/rate limit|too many|seconds/i.test(m)) {
-        setError('Trop de demandes envoyées. Patientez une minute avant de réessayer.');
+      if (error) {
+        console.error('[auth] resetPasswordForEmail', error.status, error.message);
+        const m = error.message || '';
+        if (/redirect|not.*allow/i.test(m)) {
+          setError("La demande a été refusée : l'adresse du site n'est pas autorisée. Contactez le support.");
+        } else if (/rate limit|too many|seconds/i.test(m)) {
+          setError('Trop de demandes envoyées. Patientez une minute avant de réessayer.');
+        } else {
+          // Un envoi d'email ne doit jamais reveler si l'adresse existe : on ne
+          // distingue donc pas "compte inconnu" de "echec d'envoi". Mais on
+          // affiche le detail technique, sinon un incident serveur reste
+          // impossible a diagnostiquer depuis l'ecran.
+          setError(`L'email n'a pas pu être envoyé. Détail technique : ${m}`);
+        }
       } else {
-        // Un envoi d'email ne doit jamais reveler si l'adresse existe : on ne
-        // distingue donc pas "compte inconnu" de "echec d'envoi". Mais on
-        // affiche le detail technique, sinon un incident serveur reste
-        // impossible a diagnostiquer depuis l'ecran.
-        setError(`L'email n'a pas pu être envoyé. Détail technique : ${m}`);
+        setInfo('Email envoyé ! Vérifiez votre boîte mail pour réinitialiser votre mot de passe.');
       }
-    } else {
-      setInfo('Email envoyé ! Vérifiez votre boîte mail pour réinitialiser votre mot de passe.');
+    } catch (err) {
+      // Une panne réseau peut rejeter au lieu de renvoyer { error } : sans ce
+      // catch, setLoading(false) n'était jamais atteint (bouton figé).
+      console.error('[auth] resetPasswordForEmail a rejeté', err);
+      setError(err instanceof Error ? err.message : "L'email n'a pas pu être envoyé. Réessayez.");
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   // Un "email ou mot de passe incorrect" affiche quand toute requete a
@@ -87,12 +95,20 @@ export function LoginPage() {
     e.preventDefault();
     setLoading(true);
     setError('');
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      console.error('[auth] signInWithPassword', error.status, error.message);
-      setError(describeAuthError(error));
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        console.error('[auth] signInWithPassword', error.status, error.message);
+        setError(describeAuthError(error));
+      }
+    } catch (err) {
+      // signInWithPassword renvoie normalement { error }, mais une panne
+      // réseau peut rejeter : sans ce catch, le bouton tournait sans fin.
+      console.error('[auth] signInWithPassword a rejeté', err);
+      setError(err instanceof Error ? err.message : 'Connexion impossible. Vérifiez votre réseau.');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleRegister = async (e: React.FormEvent) => {

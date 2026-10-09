@@ -124,10 +124,11 @@ export function RestockModal({ product, initialQty, onClose, onSaved }: RestockM
           </div>
 
           <div className="space-y-1">
-            <label className="text-sm font-medium text-slate-700">
+            <label htmlFor="restock-qty" className="text-sm font-medium text-slate-700">
               Quantité à ajouter ({product.unit})
             </label>
             <Input
+              id="restock-qty"
               type="number"
               value={qty}
               onChange={(e) => setQty(e.target.value)}

@@ -41,6 +41,11 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onImport, o
   const [nettoyage, setNettoyage] = useState(false);
   const [avertissement, setAvertissement] = useState('');
 
+  // Produits actifs : le tableau masque déjà les archivés (`is_active === false`).
+  // Les compteurs, l'export et le total les incluaient pourtant — une alerte
+  // stock et un CSV qui comptaient des articles retirés du catalogue.
+  const actifs = useMemo(() => products.filter((p) => p.is_active !== false), [products]);
+
   // Compté à partir de la liste déjà chargée, pas d'une requête de plus : le
   // stock est rafraîchi après chaque écriture, donc la bannière suit tout
   // seul et ne peut pas afficher un nombre périmé.
@@ -62,7 +67,7 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onImport, o
   };
 
   const handleExport = () => {
-    const csv = toCSV(products as unknown as Record<string, unknown>[], [
+    const csv = toCSV(actifs as unknown as Record<string, unknown>[], [
       { key: 'name', label: 'Produit' },
       { key: 'sku', label: 'SKU' },
       { key: 'category', label: 'Catégorie' },
@@ -89,10 +94,15 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onImport, o
     setCurrentPage(1);
   };
 
+  // Valeur d'`aria-sort` pour l'en-tête de colonne : annonce aux lecteurs
+  // d'écran quelle colonne trie, et dans quel sens.
+  const sortAria = (key: SortKey): 'ascending' | 'descending' | 'none' =>
+    sortKey === key ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none';
+
   const handleSearch = (value: string) => {
     setSearch(value);
     setCurrentPage(1);
-  };;
+  };
 
   const filtered = useMemo(() => {
     const q = search.toLowerCase();
@@ -180,7 +190,7 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onImport, o
     return message;
   }
 
-  const lowStock = products.filter((p) => p.stock_qty < p.min_stock_level).length;
+  const lowStock = actifs.filter((p) => p.stock_qty < p.min_stock_level).length;
 
   return (
     <div className="space-y-4">
@@ -281,17 +291,25 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onImport, o
         <Table>
           <TableHeader>
             <TableRow className="bg-slate-50">
-              <TableHead className="cursor-pointer select-none" onClick={() => toggleSort('name')}>
-                <span className="flex items-center gap-1">Produit <ArrowUpDown className="h-3 w-3" /></span>
+              <TableHead className="select-none" aria-sort={sortAria('name')}>
+                <button type="button" onClick={() => toggleSort('name')} className="flex w-full items-center gap-1 text-left font-medium">
+                  Produit <ArrowUpDown className="h-3 w-3" />
+                </button>
               </TableHead>
-              <TableHead className="cursor-pointer select-none" onClick={() => toggleSort('category')}>
-                <span className="flex items-center gap-1">Catégorie <ArrowUpDown className="h-3 w-3" /></span>
+              <TableHead className="select-none" aria-sort={sortAria('category')}>
+                <button type="button" onClick={() => toggleSort('category')} className="flex w-full items-center gap-1 text-left font-medium">
+                  Catégorie <ArrowUpDown className="h-3 w-3" />
+                </button>
               </TableHead>
-              <TableHead className="cursor-pointer select-none text-right" onClick={() => toggleSort('price_sell')}>
-                <span className="flex items-center justify-end gap-1">Prix <ArrowUpDown className="h-3 w-3" /></span>
+              <TableHead className="select-none text-right" aria-sort={sortAria('price_sell')}>
+                <button type="button" onClick={() => toggleSort('price_sell')} className="flex w-full items-center justify-end gap-1 font-medium">
+                  Prix <ArrowUpDown className="h-3 w-3" />
+                </button>
               </TableHead>
-              <TableHead className="cursor-pointer select-none text-right" onClick={() => toggleSort('stock_qty')}>
-                <span className="flex items-center justify-end gap-1">Stock <ArrowUpDown className="h-3 w-3" /></span>
+              <TableHead className="select-none text-right" aria-sort={sortAria('stock_qty')}>
+                <button type="button" onClick={() => toggleSort('stock_qty')} className="flex w-full items-center justify-end gap-1 font-medium">
+                  Stock <ArrowUpDown className="h-3 w-3" />
+                </button>
               </TableHead>
               <TableHead className="text-center">Actions</TableHead>
             </TableRow>
@@ -382,7 +400,7 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onImport, o
 
       <div className="flex items-center justify-between">
         <p className="text-xs text-slate-500">
-          {filtered.length} / {products.length} produit{products.length > 1 ? 's' : ''}
+          {filtered.length} / {actifs.length} produit{actifs.length > 1 ? 's' : ''}
         </p>
         {totalPages > 1 && (
           <div className="flex items-center gap-2">

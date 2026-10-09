@@ -53,9 +53,17 @@ export default function ResetPasswordPage() {
     if (password.length < 6) { setError('Le mot de passe doit faire au moins 6 caractères.'); return; }
     setLoading(true);
     setError('');
-    const { error } = await supabase.auth.updateUser({ password });
-    if (error) { setError(error.message); setLoading(false); return; }
-    router.push('/');
+    try {
+      const { error } = await supabase.auth.updateUser({ password });
+      if (error) { setError(error.message); return; }
+      router.push('/');
+    } catch (err) {
+      // updateUser peut rejeter (réseau) : sans ce catch, le bouton restait
+      // bloqué sur « Enregistrement… ».
+      setError(err instanceof Error ? err.message : 'Mise à jour impossible. Réessayez.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const inputClass = "w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500";
@@ -82,9 +90,10 @@ export default function ResetPasswordPage() {
             ) : (
               <form onSubmit={handleSubmit} className="space-y-4">
                 <div className="space-y-1">
-                  <label className="text-sm font-medium text-slate-700">Nouveau mot de passe</label>
+                  <label htmlFor="reset-password" className="text-sm font-medium text-slate-700">Nouveau mot de passe</label>
                   <div className="relative">
                     <input
+                      id="reset-password"
                       type={showPassword ? 'text' : 'password'}
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
@@ -115,8 +124,9 @@ export default function ResetPasswordPage() {
                   </div>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-sm font-medium text-slate-700">Confirmer</label>
+                  <label htmlFor="reset-confirm" className="text-sm font-medium text-slate-700">Confirmer</label>
                   <input
+                    id="reset-confirm"
                     type={showPassword ? 'text' : 'password'}
                     value={confirm}
                     onChange={(e) => setConfirm(e.target.value)}

@@ -116,7 +116,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         success: true,
         reused: true,
-        url: invitationUrl(newToken),
+        url: invitationUrl(req, newToken),
         expiresAt: newExpiry,
       });
     }
@@ -181,7 +181,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      url: invitationUrl(token),
+      url: invitationUrl(req, token),
       expiresAt: inv.expires_at,
     });
   } catch (e) {
@@ -215,7 +215,11 @@ export async function DELETE(req: NextRequest) {
   }
 }
 
-function invitationUrl(token: string): string {
-  const base = APP_URL || 'https://appgestionlocalbussness.vercel.app';
+// Base du lien : NEXT_PUBLIC_APP_URL si configurée, sinon l'origine de la
+// requête. L'ancien repli était une URL de PRODUCTION codée en dur — un
+// déploiement de test (ou un local sans variable) envoyait les employés vers la
+// mauvaise application. `req.nextUrl.origin` suit l'hôte réellement appelé.
+function invitationUrl(req: NextRequest, token: string): string {
+  const base = (APP_URL || req.nextUrl.origin).replace(/\/$/, '');
   return `${base}/invitation/${token}`;
 }

@@ -255,7 +255,11 @@ export function ReportsModule() {
                         <div
                           className="h-1.5 rounded-full"
                           style={{
-                            width: `${(p.qty / topProducts[0].qty) * 100}%`,
+                            // Le premier produit est le plus vendu : sa barre
+                            // fait 100 %. Sans le garde, un `qty` à 0 (ou
+                            // absent) produisait NaN/Infinity et faisait
+                            // disparaître toute la barre.
+                            width: `${topProducts[0]?.qty ? (p.qty / topProducts[0].qty) * 100 : 0}%`,
                             backgroundColor: COLORS[i % COLORS.length],
                           }}
                         />

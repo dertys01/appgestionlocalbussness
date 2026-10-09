@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ChevronDown, ChevronUp, CreditCard, Handshake, Smartphone, RefreshCw, Receipt, FileSpreadsheet, FileText } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -37,6 +37,11 @@ export function SalesHistory() {
   const [currentPage, setCurrentPage] = useState(1);
   const [error, setError] = useState('');
 
+  // Numéro de la dernière requête lancée. Un changement rapide de période ou de
+  // page peut faire arriver une réponse ANCIENNE après une plus récente : sans
+  // ce garde, le lot périmé écrasait l'état affiché.
+  const requestIdRef = useRef(0);
+
   // Bornes appliquées à la fois au filtre choisi et au plafond du plan : une
   // période demandée au-delà de salesHistoryDays est ramenée dans les limites.
   const bornes = (f: DateRange) => {
@@ -54,6 +59,7 @@ export function SalesHistory() {
   };
 
   const fetchSales = async (f: DateRange, page: number) => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError('');
     try {
@@ -84,17 +90,21 @@ export function SalesHistory() {
       if (pageRes.error) throw new Error(pageRes.error.message);
       if (sumRes.error) throw new Error(sumRes.error.message);
 
+      // Réponse d'une requête plus ancienne : ignorée.
+      if (requestId !== requestIdRef.current) return;
+
       const jours = (sumRes.data ?? []) as { revenue: number }[];
       setTotalPeriode(jours.reduce((n, d) => n + Number(d.revenue), 0));
       setTotalRows(pageRes.count ?? 0);
       setSales((pageRes.data as SaleWithItems[]) ?? []);
     } catch (e) {
+      if (requestId !== requestIdRef.current) return;
       setError((e as Error).message);
       setSales([]);
       setTotalRows(0);
       setTotalPeriode(0);
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) setLoading(false);
     }
   };
 

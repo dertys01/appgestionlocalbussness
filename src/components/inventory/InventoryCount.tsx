@@ -35,11 +35,22 @@ export function InventoryCount({ products, onComplete }: InventoryCountProps) {
 
   // entries était initialisé une seule fois depuis props : un refresh en cours
   // d'inventaire laissait des lignes obsolètes, et handleSave écrivait alors
-  // des stock_before / stock_after faux.
+  // des stock_before / stock_after faux. On resynchronise donc à chaque nouveau
+  // tableau `products` (motif React officiel « ajuster un état quand une prop
+  // change ») — mais en PRÉSERVANT les quantités déjà saisies, par identifiant.
+  // Tout réinitialiser à '' effaçait un comptage entier dès que le parent
+  // rechargeait le catalogue : bouton rafraîchir, vente, réappro, création de
+  // produit recréent tous un nouveau tableau `products`.
   const [syncedFor, setSyncedFor] = useState(products);
   if (syncedFor !== products) {
     setSyncedFor(products);
-    setEntries(products.map((p) => ({ product: p, counted: '' })));
+    setEntries((prev) => {
+      const counts = new Map(prev.map((e) => [e.product.id, e.counted]));
+      return products.map((p) => ({
+        product: p,
+        counted: counts.has(p.id) ? (counts.get(p.id) as number | '') : '',
+      }));
+    });
   }
 
   const filtered = useMemo(() => {
@@ -196,6 +207,7 @@ export function InventoryCount({ products, onComplete }: InventoryCountProps) {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
           <Input
             placeholder="Rechercher un produit..."
+            aria-label="Rechercher un produit dans l'inventaire"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="pl-9"
@@ -267,6 +279,7 @@ export function InventoryCount({ products, onComplete }: InventoryCountProps) {
                     value={counted}
                     onChange={(e) => setCount(entry.product.id, e.target.value)}
                     placeholder="—"
+                    aria-label={`Quantité comptée pour ${entry.product.name}`}
                     className="w-16 text-center rounded-lg border border-slate-200 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
                 </div>

@@ -16,6 +16,16 @@ import { FORMULES_TEST } from './formules.fixture';
 process.env.NEXT_PUBLIC_PLANS_CONFIG = JSON.stringify(FORMULES_TEST);
 
 /**
+ * Environnement Supabase minimal : plusieurs modules serveur (routes API,
+ * user-client) appellent `requireEnv('NEXT_PUBLIC_SUPABASE_URL')` au chargement.
+ * Sans ces valeurs, importer une route API lèverait dans les tests. Les vraies
+ * valeurs n'ont pas d'importance : `@supabase/supabase-js` est mocké dans les
+ * tests de route, aucune requête réseau n'est faite.
+ */
+process.env.NEXT_PUBLIC_SUPABASE_URL ??= 'https://test.supabase.co';
+process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??= 'test-anon-key';
+
+/**
  * jsdom n'implémente pas `matchMedia`. Un composant qui s'en sert pour
  * distinguer le mobile du grand écran ne se retrouvait donc jamais dans sa
  * configuration mobile : ses tests ne validaient rien de ce chemin.

@@ -464,10 +464,18 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
             ? ligne.quantity + qte
             : Math.min(ligne.quantity + qte, produit.stock_qty);
         } else {
+          // Prix négocié repris aussi : « reprendre la dernière vente » doit
+          // redonner la vente telle qu'elle a été conclusé, pas au prix
+          // catalogue. On ne le pose que s'il diffère du catalogue — sinon
+          // `null` garde le comportement habituel (prix courant du produit).
+          const prixConvenu = Number(l.unit_price);
+          const prixCatalogue = Number(produit.price_sell);
           suivant.push({
             product: produit,
             quantity: dishIds.has(produit.id) ? qte : Math.min(qte, produit.stock_qty),
-            unitPrice: null,
+            unitPrice: Number.isFinite(prixConvenu) && prixConvenu !== prixCatalogue
+              ? prixConvenu
+              : null,
           });
         }
       }
@@ -748,40 +756,13 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
       const invoiceNumber = (data.invoice_number as string | null) ?? null;
       const creditPhone = (data as { client_phone?: string }).client_phone ?? null;
 
-      // Journal d'activité : best-effort, ne doit pas faire échouer l'encaissement
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user && ownerId) {
-        const itemsDesc = cart
-          .map((i) => `${i.quantity}x ${i.product.name}`)
-          .join(', ');
-        // La remise est mentionnée dans le journal : c'est elle qui rend la
-        // concession lisible plus tard, quand le prix convenu n'est plus
-        // déductible de la ligne de vente.
-        const remise = Number((data as { discount_amount?: number })?.discount_amount ?? 0);
-        const moyen = paymentMethod === 'cash' ? 'Espèces'
-          : paymentMethod === 'momo' ? 'MoMo' : 'Crédit';
-        await logActivity({
-          ownerId,
-          actorId: user.id,
-          actorEmail: user.email ?? '',
-          actorName,
-          action: 'sale',
-          description:
-            `Vente ${formatCFA(serverTotal)} (${moyen}) : ${itemsDesc}` +
-            (remise > 0 ? `, remise ${formatCFA(remise)}` : ''),
-          metadata: {
-            sale_id: saleId,
-            total: serverTotal,
-            payment_method: paymentMethod,
-            discount: remise,
-            // Un crédit cède la marchandise sans encaissement : le dire dans le
-            // journal est ce qui permet, des mois plus tard, de comprendre
-            // pourquoi le chiffre d'affaires ne correspond pas aux articles
-            // sortis du stock.
-            ...(paymentMethod === 'credit' ? { credit_to: creditPhone } : {}),
-          },
-        });
-      }
+      // ── À partir d'ici, la vente EST commitée. ────────────────────────
+      // Ce qui suit ne doit JAMAIS pouvoir la faire passer pour un échec : le
+      // catch plus bas afficherait « la vente n'a pas été enregistrée » et
+      // laisserait le panier intact, alors que le stock est déjà sorti et le
+      // chiffre d'affaires écrit. La caissière re-saisirait la vente — double
+      // décrément, double chiffre d'affaires. Tout ce bloc est donc synchrone,
+      // ou lancé sans être attendu.
 
       // Lien WhatsApp. businessName et phone n'étaient jamais transmis : tous
       // les reçus disaient « Notre Boutique » et s'ouvraient sans destinataire.
@@ -845,7 +826,59 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
       // vide pour la vente suivante, pas un panier vide à faire fermer.
       setPanierOuvert(false);
       if (paymentMethod === 'credit') setPaymentMethod('cash');
-      onSaleComplete?.();
+
+      // Journal d'activité : best-effort ET hors du chemin critique. On ne
+      // l'attend pas : son échec (réseau, RLS) ne doit ni retarder ni invalider
+      // l'affichage du reçu. cart, paymentMethod, data et serverTotal sont figés
+      // par cette closure — setCart([]) ci-dessus ne les altère pas.
+      void (async () => {
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (!user || !ownerId) return;
+          const itemsDesc = cart
+            .map((i) => `${i.quantity}x ${i.product.name}`)
+            .join(', ');
+          // La remise est mentionnée dans le journal : c'est elle qui rend la
+          // concession lisible plus tard, quand le prix convenu n'est plus
+          // déductible de la ligne de vente.
+          const remise = Number((data as { discount_amount?: number })?.discount_amount ?? 0);
+          const moyen = paymentMethod === 'cash' ? 'Espèces'
+            : paymentMethod === 'momo' ? 'MoMo' : 'Crédit';
+          await logActivity({
+            ownerId,
+            actorId: user.id,
+            actorEmail: user.email ?? '',
+            actorName,
+            action: 'sale',
+            description:
+              `Vente ${formatCFA(serverTotal)} (${moyen}) : ${itemsDesc}` +
+              (remise > 0 ? `, remise ${formatCFA(remise)}` : ''),
+            metadata: {
+              sale_id: saleId,
+              total: serverTotal,
+              payment_method: paymentMethod,
+              discount: remise,
+              // Un crédit cède la marchandise sans encaissement : le dire dans
+              // le journal est ce qui permet, des mois plus tard, de comprendre
+              // pourquoi le chiffre d'affaires ne correspond pas aux articles
+              // sortis du stock.
+              ...(paymentMethod === 'credit' ? { credit_to: creditPhone } : {}),
+            },
+          });
+        } catch (e) {
+          // Une écriture d'audit manquée ne remonte jamais à l'écran.
+          console.error("[pos] journal d'activité non écrit", e);
+        }
+      })();
+
+      // Callbacks du parent : un throw synchrone ne doit pas non plus être pris
+      // pour un échec d'encaissement.
+      try {
+        onSaleComplete?.();
+      } catch (e) {
+        console.error('[pos] onSaleComplete a échoué', e);
+      }
+
       // Le bandeau « Reprendre la dernière vente » doit basculer sur la
       // vente qu'on vient de valider sans attendre le rechargement du
       // catalogue du parent. Ce lien indirect — un nouveau tableau de

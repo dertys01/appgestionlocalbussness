@@ -37,14 +37,18 @@ interface DashboardTabProps {
 export function DashboardTab({
   products, loadingProducts = false, canManageProducts, onNewSale, onAddProduct, onRestock, today = null, todayError = '', onOpenDebts,
 }: DashboardTabProps) {
-  const totalProducts = products.length;
+  // Les archivés (is_active === false) sont hors catalogue : les compter
+  // gonflait le total, l'alerte stock bas et la valeur du stock avec des
+  // articles que la caisse ne propose plus.
+  const actifs = useMemo(() => products.filter((p) => p.is_active !== false), [products]);
+  const totalProducts = actifs.length;
   const stockBas = useMemo(
-    () => products.filter((p) => p.stock_qty < p.min_stock_level),
-    [products]
+    () => actifs.filter((p) => p.stock_qty < p.min_stock_level),
+    [actifs]
   );
   const totalStockValue = useMemo(
-    () => products.reduce((s, p) => s + p.price_sell * p.stock_qty, 0),
-    [products]
+    () => actifs.reduce((s, p) => s + p.price_sell * p.stock_qty, 0),
+    [actifs]
   );
   const dateDuJour = new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' });
   const chiffre = (v: string) => (today ? v : '…');

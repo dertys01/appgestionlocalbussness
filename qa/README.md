@@ -42,11 +42,11 @@ Les identifiants de comptes de test ne sont jamais écrits dans un fichier
 versionné : ce sont des arguments de ligne de commande, pour qu'ils ne se
 retrouvent ni dans l'historique de git ni dans un `.env` partagé.
 
-Seule la clé **publique** Supabase est en dur dans `parcours.mjs`, pour
-pouvoir lire la base sans configuration. C'est la même valeur que celle que le
-navigateur reçoit de toute façon — elle est publique par construction, pas un
-secret. Elle reste surchargeable par `QA_SUPABASE_KEY`, et l'adresse du projet
-par `QA_BASE` / la constante `SUPA`.
+Le projet Supabase ciblé n'est **jamais** codé en dur : `parcours.mjs` lit
+`NEXT_PUBLIC_SUPABASE_URL` et `NEXT_PUBLIC_SUPABASE_ANON_KEY` depuis
+`.env.local` (le même projet que l'app testée), surchargeables par
+`QA_SUPABASE_URL` / `QA_SUPABASE_KEY`. Un script QA ne peut donc pas écrire dans
+la production par accident. `QA_BASE` choisit l'URL de l'app.
 
 ## `audit.mjs` — le balayage visuel
 

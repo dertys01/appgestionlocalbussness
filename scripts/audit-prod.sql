@@ -31,7 +31,7 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('claim_webhook_event(text,text,text)', '40a1a3cbee1bf96bae5f60debca639fa', '0c164db9340e69ec622cd45bae135cb4'),
     ('close_beta_program()', '28a8854e2d5e4e0ebf74288bfa0a0cae', '5a82cf9f604a045ca4f163abc3cd1650'),
     ('close_table_order(uuid,text,numeric,integer,text,text,numeric)', '0203a702c3229e4d060d929cfb7e1285', '3954e9994a8ec5e873973912f02ebd0a'),
-    ('create_sale(jsonb,text,text,text)', 'd08703ca15f146827f8479ea7e9c9f30', 'c528887ee89306bc0a071f9ea39a08f6'),
+    ('create_sale(jsonb,text,text,text)', '998c867e37ff5606c6211e3e80c3a6f2', '57de0873c7d4666393e64aeb4c89bec7'),
     ('current_org_plan()', 'ca233084cdc9d653a98bd164a4eae2ac', 'db407b6e27b88cf7f4a0e454971fd30a'),
     ('dettes_a_relancer()', '7a77668c91d18e50b57f655efd059296', '8394e999b5a1b5ece8bf510fb16e8c5c'),
     ('fill_amount_received()', '35e03e2e5bc95e91ad3d43a5e0c5e8e2', '5e1305ee23c60dc867e4b46cd49f9219'),

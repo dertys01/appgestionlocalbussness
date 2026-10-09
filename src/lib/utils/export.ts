@@ -32,6 +32,11 @@ export function downloadCSV(csv: string, filename: string) {
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
+  // Rattaché au DOM (Firefox notamment ignore le clic sur un lien détaché),
+  // puis retiré. La révocation est différée : appelée juste après click(), elle
+  // pouvait annuler le téléchargement avant que le navigateur ait lu le blob.
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }

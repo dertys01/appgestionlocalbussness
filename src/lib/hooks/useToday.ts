@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
+import { useRealtimeRefresh } from '@/lib/hooks/useRealtimeRefresh';
 import { localTimeZone, todayISO } from '@/lib/utils/period';
 
 /** Les chiffres du jour affichés sur l'accueil. */
@@ -29,6 +30,10 @@ export function useToday(actif: boolean) {
   const { supabase, user } = useSupabase();
   const [today, setToday] = useState<Today | null>(null);
   const [error, setError] = useState('');
+  // Incrémenté par le temps réel (une autre caisse encaisse) : relance la
+  // lecture ci-dessous sans changer la logique de fetch.
+  const [tick, setTick] = useState(0);
+  useRealtimeRefresh(['sales'], () => setTick((t) => t + 1));
 
   useEffect(() => {
     if (!actif || !user) return;
@@ -61,7 +66,7 @@ export function useToday(actif: boolean) {
       });
     })();
     return () => { annule = true; };
-  }, [actif, user, supabase]);
+  }, [actif, user, supabase, tick]);
 
   return { today, todayError: error };
 }

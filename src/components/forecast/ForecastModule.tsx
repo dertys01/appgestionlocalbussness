@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AlertTriangle, TrendingDown, CheckCircle, PackagePlus, RefreshCw, Truck, MessageCircle } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -60,7 +60,15 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
   // ne retape pas le chiffre affiché deux lignes plus haut.
   const [quantiteSuggeree, setQuantiteSuggeree] = useState<number | undefined>(undefined);
 
-  const fetchForecasts = async (cancelled = false) => {
+  // Numéro de la dernière requête lancée. Un chargement dont le numéro n'est
+  // plus le courant est ignoré : démontage, ou rechargement plus récent parti
+  // entre-temps. L'ancien `cancelled` passé par VALEUR ne pouvait pas
+  // fonctionner — le drapeau modifié par le cleanup n'était jamais relu par le
+  // corps de la fonction, d'où des setState après démontage.
+  const requestIdRef = useRef(0);
+
+  const fetchForecasts = async () => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError('');
 
@@ -88,12 +96,18 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
     // Les erreurs étaient ignorées : un échec de sale_items faisait passer
     // chaque produit en « Pas de données » (silencieusement), et celui de
     // products figeait l'écran sur le chargement.
-    if (productsRes.error) { setError(productsRes.error.message); setLoading(false); return; }
-    if (soldRes.error) { setError(readablePlanError(soldRes.error.message)); setLoading(false); return; }
+    if (productsRes.error) {
+      if (requestId === requestIdRef.current) { setError(productsRes.error.message); setLoading(false); }
+      return;
+    }
+    if (soldRes.error) {
+      if (requestId === requestIdRef.current) { setError(readablePlanError(soldRes.error.message)); setLoading(false); }
+      return;
+    }
 
     const products = productsRes.data;
     const sold = soldRes.data;
-    if (!products) { setLoading(false); return; }
+    if (!products) { if (requestId === requestIdRef.current) setLoading(false); return; }
 
     // Quantités vendues par produit. Déjà agrégées en base : le navigateur
     // reçoit une ligne par produit, et non une ligne par vente.
@@ -136,17 +150,19 @@ export function ForecastModule({ onRestock }: { onRestock: () => void }) {
       return a.daysUntilStockout - b.daysUntilStockout;
     });
 
-    if (cancelled) return;
+    if (requestId !== requestIdRef.current) return;
     setForecasts(result);
     setLoading(false);
   };
 
   // Chargement asynchrone encapsulé : aucun setState synchrone dans le corps de
-  // l'effet, et le résultat est ignoré si le composant a été démonté entre-temps.
+  // l'effet, et le résultat est ignoré si le composant a été démonté entre-temps
+  // (le cleanup invalide la requête en vol).
   useEffect(() => {
-    let cancelled = false;
-    (async () => { await fetchForecasts(cancelled); })();
-    return () => { cancelled = true; };
+    // IIFE asynchrone : le setState de fetchForecasts n'est plus « synchrone
+    // dans le corps de l'effet » aux yeux du lint react-hooks/set-state-in-effect.
+    void (async () => { await fetchForecasts(); })();
+    return () => { requestIdRef.current += 1; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const urgent = forecasts.filter((f) => f.daysUntilStockout !== null && f.daysUntilStockout <= 7);

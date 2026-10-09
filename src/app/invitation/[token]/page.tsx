@@ -97,10 +97,11 @@ export default function InvitationPage({
 
         <Card className="border-slate-200 shadow-md">
           <CardContent className="p-6">
-            <div className="space-y-4">
+            <form className="space-y-4" onSubmit={handleSubmit}>
               <div className="space-y-1">
-                <label className="text-sm font-medium text-slate-700">Votre nom</label>
+                <label htmlFor="inv-nom" className="text-sm font-medium text-slate-700">Votre nom</label>
                 <input
+                  id="inv-nom"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Ex : Marie Koffi"
@@ -110,9 +111,10 @@ export default function InvitationPage({
               </div>
 
               <div className="space-y-1">
-                <label className="text-sm font-medium text-slate-700">Mot de passe</label>
+                <label htmlFor="inv-password" className="text-sm font-medium text-slate-700">Mot de passe</label>
                 <div className="relative">
                   <input
+                    id="inv-password"
                     type={show ? 'text' : 'password'}
                     value={password}
                     onChange={(e) => setPassword(e.target.value)}
@@ -132,8 +134,9 @@ export default function InvitationPage({
               </div>
 
               <div className="space-y-1">
-                <label className="text-sm font-medium text-slate-700">Confirmer</label>
+                <label htmlFor="inv-confirm" className="text-sm font-medium text-slate-700">Confirmer</label>
                 <input
+                  id="inv-confirm"
                   type={show ? 'text' : 'password'}
                   value={confirm}
                   onChange={(e) => setConfirm(e.target.value)}
@@ -146,8 +149,7 @@ export default function InvitationPage({
               {error && <p className="text-red-600 text-sm">{error}</p>}
 
               <Button
-                type="button"
-                onClick={handleSubmit}
+                type="submit"
                 disabled={loading}
                 className="w-full bg-indigo-600 hover:bg-indigo-700 font-semibold gap-2"
               >
@@ -157,7 +159,7 @@ export default function InvitationPage({
                   'Rejoindre la boutique'
                 )}
               </Button>
-            </div>
+            </form>
           </CardContent>
         </Card>
 

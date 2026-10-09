@@ -165,7 +165,15 @@ export async function POST(req: NextRequest) {
     if (orgError) {
       // Rollback : supprimer le user si l'org échoue
       await adminClient.auth.admin.deleteUser(userId);
-      return NextResponse.json({ error: 'Erreur création boutique : ' + orgError.message }, { status: 500 });
+      // Message technique dans les logs serveur uniquement : le message brut
+      // d'un client Supabase peut contenir des détails de schéma, voire
+      // l'en-tête Authorization (cf. SECURITY.md). On ne renvoie qu'un texte
+      // générique, jamais `orgError.message`.
+      console.error('[register] création boutique', sanitizeError(orgError));
+      return NextResponse.json(
+        { error: 'Erreur interne du serveur. Réessayez dans un moment.' },
+        { status: 500 }
+      );
     }
 
     // Connecter l'utilisateur via le client anon (retourne une session)

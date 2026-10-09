@@ -188,6 +188,11 @@ export function ExpensesModule() {
     return acc;
   }, {});
   const topCategories = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
+  // Base des barres : la somme des CATÉGORIES, pas `totalExpenses`. Cette
+  // dernière vient de get_cash_flow(), vidé quand le plan verrouille les
+  // rapports — les barres tombaient alors toutes à 0 % alors que les charges
+  // étaient bien listées.
+  const totalCategories = topCategories.reduce((s, [, v]) => s + v, 0);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -389,8 +394,9 @@ export function ExpensesModule() {
             <form onSubmit={handleSubmit} className="space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-slate-700">Catégorie</label>
+                  <label htmlFor="exp-categorie" className="text-xs font-medium text-slate-700">Catégorie</label>
                   <select
+                    id="exp-categorie"
                     value={category}
                     onChange={(e) => setCategory(e.target.value)}
                     className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
@@ -401,8 +407,9 @@ export function ExpensesModule() {
                   </select>
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-slate-700">Montant (FCFA)</label>
+                  <label htmlFor="exp-montant" className="text-xs font-medium text-slate-700">Montant (FCFA)</label>
                   <Input
+                    id="exp-montant"
                     type="number"
                     value={amount}
                     onChange={(e) => setAmount(e.target.value)}
@@ -414,8 +421,9 @@ export function ExpensesModule() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-slate-700">Description</label>
+                  <label htmlFor="exp-description" className="text-xs font-medium text-slate-700">Description</label>
                   <Input
+                    id="exp-description"
                     value={label}
                     onChange={(e) => setLabel(e.target.value)}
                     placeholder="Ex : Loyer juin"
@@ -424,8 +432,9 @@ export function ExpensesModule() {
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-slate-700">Date</label>
+                  <label htmlFor="exp-date" className="text-xs font-medium text-slate-700">Date</label>
                   <Input
+                    id="exp-date"
                     type="date"
                     value={day}
                     onChange={(e) => setDay(e.target.value)}
@@ -460,7 +469,7 @@ export function ExpensesModule() {
                   <div className="flex-1 h-2 bg-slate-100 rounded-full">
                     <div
                       className="h-2 bg-red-400 rounded-full"
-                      style={{ width: `${totalExpenses > 0 ? (value / totalExpenses) * 100 : 0}%` }}
+                      style={{ width: `${totalCategories > 0 ? (value / totalCategories) * 100 : 0}%` }}
                     />
                   </div>
                   <span className="text-sm font-medium text-slate-700 tabular-nums w-24 text-right">

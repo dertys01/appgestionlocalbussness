@@ -72,6 +72,10 @@ const ORDER = [
   // Facturation : une boutique dont le compteur est désaligné doit pouvoir
   // vendre. Elle redéfinit create_sale() en entier, donc DERNIÈRE.
   'migration_facture_sequentielle.sql',
+  // Facture : la numérotation suit le plan EFFECTIF (essai / échéance prépayée),
+  // comme current_org_plan(). Redéfinit create_sale() en entier, donc APRÈS la
+  // précédente.
+  'migration_facture_plan_effectif.sql',
   // Équipe : gestion des membres sans clé service role. Ne dépend que des
   // fonctions de migration_team.sql / migration_security.sql.
   'migration_equipe_sans_service_role.sql',
@@ -108,6 +112,10 @@ const ORDER = [
   // Triggers de quotas en propriétaire : ils lisent plan_config, révoquée
   // au navigateur — en INVOKER, la création produit répondait 403 en prod.
   'migration_plan_definer.sql',
+  // Temps réel multi-caisses : ajoute products et sales à la publication
+  // supabase_realtime. Aucun effet sur le schéma ni les données ; la partie
+  // client reste inerte tant que NEXT_PUBLIC_REALTIME ≠ « 1 ».
+  'migration_realtime.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -276,6 +284,10 @@ const DERNIERE_VERSION = [
   // bloque une boutique dont le compteur est désaligné — et les tests 29*
   // passeraient à vide.
   'migration_facture_sequentielle.sql',
+  // Facture : plan effectif. DOIT être rejouée après facture_sequentielle,
+  // sinon la remise en état réinstalle la version qui lit le plan brut et la
+  // rejouabilité testerait la mauvaise version.
+  'migration_facture_plan_effectif.sql',
   // Équipe : les deux fonctions de gestion de membre doivent être les
   // dernières réinstallées, sinon la rejouabilité laisserait la version
   // d'avant — qui ne vérifie pas l'appelant.
@@ -416,6 +428,29 @@ await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
 {
   const nums = (await q(`SELECT invoice_number FROM sales WHERE invoice_number IS NOT NULL ORDER BY created_at`)).rows.map((r) => r.invoice_number);
   check('3c. numéros de facture uniques', new Set(nums).size === nums.length, nums.join(', '));
+}
+
+// 3c2. La facture suit le plan EFFECTIF, pas le plan brut (S-1).
+// Une boutique Pro PRÉPAYÉE échue (plan='pro', plan_valid_until passée) n'est
+// plus Pro pour require_feature() : elle ne doit pas non plus émettre de numéro
+// de facture, sinon peutDelivrerFacture() — qui se base sur la présence du
+// numéro — la croirait encore Pro. Produit dédié pour ne pas fausser le stock
+// des sections suivantes.
+{
+  const PX = 'aaaaaaaa-0000-0000-0000-0000000000ff';
+  await q(`INSERT INTO products (id, user_id, name, sku, price_buy, price_sell, stock_qty, min_stock_level)
+           VALUES ('${PX}', '${PATRON}', 'Test plan', 'PLANX', 100, 200, 50, 1)`);
+
+  await q(`UPDATE organizations SET plan='pro', plan_valid_until = now() - interval '1 day' WHERE id='${PATRON}'`);
+  const res = await sale(`[{"product_id":"${PX}","quantity":1}]`, 'cash');
+  check('3c2. Pro prépayé ÉCHU : aucune facture émise', (await invoiceOf(res.id)) === null, `obtenu ${await invoiceOf(res.id)}`);
+
+  await q(`UPDATE organizations SET plan='pro', plan_valid_until = now() + interval '1 month' WHERE id='${PATRON}'`);
+  const res2 = await sale(`[{"product_id":"${PX}","quantity":1}]`, 'cash');
+  check('3c2. Pro prépayé EN COURS : facture attribuée', /^FAC-\d{4}-\d{5}$/.test(await invoiceOf(res2.id)), await invoiceOf(res2.id));
+
+  // Remise en état : PATRON reste Pro sans échéance pour le reste de la suite.
+  await q(`UPDATE organizations SET plan='pro', plan_valid_until = NULL WHERE id='${PATRON}'`);
 }
 
 // 3d. Stock insuffisant → rien n'est écrit

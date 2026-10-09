@@ -43,8 +43,9 @@ export function OrgSetupRequired() {
           <CardContent className="p-6">
             <form onSubmit={handleCreate} className="space-y-4">
               <div className="space-y-1">
-                <label className="text-sm font-medium text-slate-700">Nom de la boutique</label>
+                <label htmlFor="org-nom" className="text-sm font-medium text-slate-700">Nom de la boutique</label>
                 <input
+                  id="org-nom"
                   type="text" value={name} onChange={(e) => setName(e.target.value)} required
                   placeholder="Ex: Épicerie Adjonou"
                   className="w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"

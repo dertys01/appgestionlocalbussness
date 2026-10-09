@@ -496,9 +496,12 @@ export function FloorModule({
     return actifs
       .map((p) => {
         const n = norm(p.name);
-        if (n.includes(nq)) return { p, rang: 0 };
-        if (norm(p.sku ?? '').includes(nq)) return { p, rang: 1 };
-        if (n.startsWith(nq)) return { p, rang: 2 };
+        // Préfixe avant « contient » : sinon un plat dont le nom commence par
+        // la requête tombait dans le rang 0 de `includes`, et le rang de
+        // préfixe (2) n'était jamais atteint.
+        if (n.startsWith(nq)) return { p, rang: 0 };
+        if (n.includes(nq)) return { p, rang: 1 };
+        if (norm(p.sku ?? '').includes(nq)) return { p, rang: 2 };
         return null;
       })
       .filter((x): x is { p: Product; rang: number } => x !== null)
@@ -1222,7 +1225,7 @@ export function FloorModule({
                 <button
                   type="button"
                   onClick={() => setMenuDuJour((v) => !v)}
-                  aria-pressed={!menuDuJour}
+                  aria-pressed={menuDuJour}
                   title={menuDuJour
                     ? 'Carte du jour : seuls les plats servis aujourd\'hui sont proposés'
                     : 'Toute la carte est proposée, y compris les plats du jour'}

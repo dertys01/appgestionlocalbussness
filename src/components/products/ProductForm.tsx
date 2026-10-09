@@ -111,70 +111,75 @@ export function ProductForm({ product, onClose, onSaved, currentProductCount = 0
 
     setLoading(true);
 
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user || !ownerId) {
-      setError('Session expirée, reconnectez-vous.');
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user || !ownerId) {
+        setError('Session expirée, reconnectez-vous.');
+        return;
+      }
+
+      const priceBuy = lireMontant(form.price_buy);
+      const priceSell = lireMontant(form.price_sell);
+      const stockQty = lireMontant(form.stock_qty);
+      const minStock = lireMontant(form.min_stock_level);
+      // 1,5 kg de riz est une quantité valide : lireMontant accepte la virgule.
+
+      if (priceBuy === null || priceSell === null || stockQty === null || minStock === null) {
+        setError('Montant ou quantité invalide.');
+        return;
+      }
+      if (priceBuy < 0 || priceSell < 0 || stockQty < 0 || minStock < 0) {
+        setError('Les prix et quantités doivent être positifs.');
+        return;
+      }
+
+      const payload = {
+        name: form.name.trim(),
+        sku: form.sku.trim() || null,
+        // trim() : « smartphones » et « smartphones » doivent rester le même
+        // rayon. Sans ça, la saisie ajoute une catégorie à un espace près de
+        // l'existante, et les filtres de la caisse en affichent deux.
+        category: form.category.trim() || null,
+        price_buy: priceBuy,
+        price_sell: priceSell,
+        stock_qty: stockQty,
+        min_stock_level: minStock,
+        // null explicite : sans cela, retirer le fournisseur d'un article ne
+        // detachait rien, la colonne gardait l'ancienne valeur.
+        supplier_id: form.supplier_id,
+        unit: form.unit.trim() || 'pce',
+      };
+
+      let err;
+      if (product) {
+        ({ error: err } = await supabase.from('products').update(payload).eq('id', product.id));
+      } else {
+        ({ error: err } = await supabase.from('products').insert({ ...payload, user_id: ownerId }));
+      }
+
+      if (err) { setError(err.message); return; }
+
+      // Le produit EST écrit : on ferme d'abord, on journalise ensuite. Le
+      // journal est best-effort — son échec (réseau, RLS) ne doit pas laisser
+      // la fenêtre ouverte sur un produit pourtant enregistré, ce qui ferait
+      // re-cliquer l'utilisateur et recréerait la fiche.
+      onSaved();
+      onClose();
+      void logActivity({
+        ownerId,
+        actorId: user.id,
+        actorEmail: user.email ?? '',
+        actorName,
+        action: product ? 'product_edit' : 'product_add',
+        description: product
+          ? `Produit modifié : ${payload.name}`
+          : `Nouveau produit : ${payload.name} (${payload.price_sell} F)`,
+      }).catch(() => {});
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Erreur inconnue');
+    } finally {
       setLoading(false);
-      return;
     }
-
-    const priceBuy = lireMontant(form.price_buy);
-    const priceSell = lireMontant(form.price_sell);
-    const stockQty = lireMontant(form.stock_qty);
-    const minStock = lireMontant(form.min_stock_level);
-    // 1,5 kg de riz est une quantité valide : lireMontant accepte la virgule.
-
-    if (priceBuy === null || priceSell === null || stockQty === null || minStock === null) {
-      setError('Montant ou quantité invalide.');
-      setLoading(false);
-      return;
-    }
-    if (priceBuy < 0 || priceSell < 0 || stockQty < 0 || minStock < 0) {
-      setError('Les prix et quantités doivent être positifs.');
-      setLoading(false);
-      return;
-    }
-
-    const payload = {
-      name: form.name.trim(),
-      sku: form.sku.trim() || null,
-      // trim() : « smartphones » et « smartphones » doivent rester le même
-      // rayon. Sans ça, la saisie ajoute une catégorie à un espace près de
-      // l'existante, et les filtres de la caisse en affichent deux.
-      category: form.category.trim() || null,
-      price_buy: priceBuy,
-      price_sell: priceSell,
-      stock_qty: stockQty,
-      min_stock_level: minStock,
-      // null explicite : sans cela, retirer le fournisseur d'un article ne
-      // detachait rien, la colonne gardait l'ancienne valeur.
-      supplier_id: form.supplier_id,
-      unit: form.unit.trim() || 'pce',
-    };
-
-    let err;
-    if (product) {
-      ({ error: err } = await supabase.from('products').update(payload).eq('id', product.id));
-    } else {
-      ({ error: err } = await supabase.from('products').insert({ ...payload, user_id: ownerId }));
-    }
-
-    setLoading(false);
-    if (err) { setError(err.message); return; }
-
-    await logActivity({
-      ownerId,
-      actorId: user.id,
-      actorEmail: user.email ?? '',
-      actorName,
-      action: product ? 'product_edit' : 'product_add',
-      description: product
-        ? `Produit modifié : ${payload.name}`
-        : `Nouveau produit : ${payload.name} (${payload.price_sell} F)`,
-    });
-
-    onSaved();
-    onClose();
   };
 
   return (

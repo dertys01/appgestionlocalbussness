@@ -12,6 +12,9 @@
  */
 
 import { chromium } from 'playwright';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const [, , EMAIL = '', PASSWORD = '', PROFIL = 'retail'] = process.argv;
 if (!EMAIL || !PASSWORD) {
@@ -19,9 +22,27 @@ if (!EMAIL || !PASSWORD) {
   process.exit(1);
 }
 
+// Projet Supabase ciblé : celui de .env.local (le même que l'app testée), jamais
+// une adresse codée en dur — un script QA ne doit pas écrire dans la production
+// par accident. Surchargeable par QA_SUPABASE_URL / QA_SUPABASE_KEY.
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const env = {};
+try {
+  for (const line of fs.readFileSync(path.join(ROOT, '.env.local'), 'utf8').split('\n')) {
+    const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/.exec(line);
+    if (m) env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+  }
+} catch {
+  // Pas de .env.local : on s'en remet aux variables d'environnement ci-dessous.
+}
+
 const BASE = process.env.QA_BASE ?? 'http://localhost:3001';
-const SUPA = 'https://lmygvpruffpspixrsixh.supabase.co';
-const CLE = process.env.QA_SUPABASE_KEY ?? 'sb_publishable_DIVKAgzDFbWsJQyfeBjvSQ_x6axbuw1';
+const SUPA = process.env.QA_SUPABASE_URL ?? env.NEXT_PUBLIC_SUPABASE_URL ?? '';
+const CLE = process.env.QA_SUPABASE_KEY ?? env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? '';
+if (!SUPA || !CLE) {
+  console.error("✗ QA_SUPABASE_URL / QA_SUPABASE_KEY introuvables (ni dans l'environnement, ni dans .env.local).");
+  process.exit(2);
+}
 
 const resultats = [];
 let echecs = 0;
