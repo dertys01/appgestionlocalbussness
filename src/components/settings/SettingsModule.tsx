@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Save, Loader2, CreditCard, Zap, CheckCircle, ExternalLink, Building2, Globe, Smartphone, CalendarClock } from 'lucide-react';
+import { Save, Loader2, CreditCard, Zap, CheckCircle, ExternalLink, Building2, Globe, Smartphone, CalendarClock, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -13,6 +13,8 @@ import {
 } from '@/lib/utils/plans';
 import { formatCFA } from '@/lib/utils/currency';
 import { normalizeDomain, normalizeUiMode, DOMAIN_LABELS, DOMAIN_DESCRIPTIONS, type Domain, type UiMode } from '@/lib/modules';
+import { ifuValide } from '@/lib/mecef/gate';
+import { useLiaisonMecef } from '@/lib/hooks/useLiaisonMecef';
 import type { Plan } from '@/types';
 
 /**
@@ -42,6 +44,8 @@ const PLANS: { id: Plan; features: string[] }[] = [
 export function SettingsModule() {
   const { supabase, org, plan, refreshOrg, user } = useSupabase();
   const [tab, setTab] = useState<'org' | 'billing'>('org');
+  /** Verrou de délivrance des factures : IFU + connexion e-MECeF. */
+  const connexionMecef = useLiaisonMecef();
 
   // Org form
   const [orgName, setOrgName] = useState(org?.name ?? '');
@@ -123,6 +127,16 @@ export function SettingsModule() {
   const saveOrg = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!orgName.trim()) return;
+    // L'IFU est la clé de la facturation normalisée : une valeur fausse
+    // n'est pas un détail de formulaire, elle produirait des factures mal
+    // identifiées. On refuse d'enregistrer tant qu'elle n'est pas bonne,
+    // et le message renvoie au champ concerné.
+    const ifu = orgIfu.trim();
+    if (ifu && !ifuValide(ifu)) {
+      setOrgSuccess('');
+      setOrgError("L'IFU comporte 13 caractères (chiffres ou lettres). Corrigez-le ou laissez le champ vide.");
+      return;
+    }
     setSavingOrg(true);
     setOrgSuccess('');
     setOrgError('');
@@ -132,7 +146,7 @@ export function SettingsModule() {
       .update({
         name: orgName.trim(),
         address: orgAddress.trim() || null,
-        ifu: orgIfu.trim() || null,
+        ifu: ifu || null,
       } as Record<string, unknown>)
       .eq('id', org?.id);
 
@@ -272,7 +286,7 @@ export function SettingsModule() {
                 <div className="space-y-1">
                   <div className="flex items-baseline gap-1">
                     <label htmlFor="org-ifu" className="text-sm font-medium text-slate-700">IFU</label>
-                    <span id="org-ifu-hint" className="text-xs text-slate-500 font-normal">(pour factures normalisées, Plan Pro)</span>
+                    <span id="org-ifu-hint" className="text-xs text-slate-500 font-normal">(13 caractères, requis pour délivrer une facture, Plan Pro)</span>
                   </div>
                   <Input
                     id="org-ifu"
@@ -300,6 +314,43 @@ export function SettingsModule() {
                   Enregistrer
                 </Button>
               </form>
+            </CardContent>
+          </Card>
+
+          {/* Facture normalisée (e-MECeF) — l'état du verrou, dit clairement.
+              Deux conditions, deux lignes : l'IFU (à la commerçant·e) et la
+              connexion DGI (à nous). Tant qu'elles ne sont pas réunies, la
+              caisse n'offre que le reçu simple, et cet écran dit pourquoi. */}
+          <Card className="border-slate-200">
+            <CardContent className="p-5 space-y-3">
+              <h3 className="font-semibold text-slate-800 text-sm">Facture normalisée (e-MECeF)</h3>
+              <p className="text-xs text-slate-500">
+                Pour délivrer une facture au lieu d&apos;un reçu simple, deux
+                conditions doivent être réunies. Le reçu, lui, reste toujours
+                disponible.
+              </p>
+              <ul className="space-y-2 text-sm">
+                <li className="flex items-start gap-2">
+                  {ifuValide(org?.ifu)
+                    ? <CheckCircle className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
+                    : <X className="h-4 w-4 text-slate-400 shrink-0 mt-0.5" />}
+                  <span className={ifuValide(org?.ifu) ? 'text-slate-700' : 'text-slate-500'}>
+                    {ifuValide(org?.ifu)
+                      ? 'IFU enregistré.'
+                      : "IFU non enregistré : renseignez-le dans le formulaire ci-dessus."}
+                  </span>
+                </li>
+                <li className="flex items-start gap-2">
+                  {connexionMecef
+                    ? <CheckCircle className="h-4 w-4 text-emerald-600 shrink-0 mt-0.5" />
+                    : <X className="h-4 w-4 text-slate-400 shrink-0 mt-0.5" />}
+                  <span className={connexionMecef ? 'text-slate-700' : 'text-slate-500'}>
+                    {connexionMecef
+                      ? 'Connexion au service de facturation ouverte.'
+                      : 'Connexion au service de facturation : ouverture en cours de notre côté, la délivrance des factures sera activée dès qu’elle sera prête.'}
+                  </span>
+                </li>
+              </ul>
             </CardContent>
           </Card>
 

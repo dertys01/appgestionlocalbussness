@@ -29,6 +29,8 @@ import { printReceipt } from '@/lib/utils/print';
 import { loadDishIds } from '@/lib/utils/dishes';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { isFeatureAllowed } from '@/lib/utils/plans';
+import { peutDelivrerFacture } from '@/lib/mecef/gate';
+import { useLiaisonMecef } from '@/lib/hooks/useLiaisonMecef';
 import type { Product, CartItem } from '@/types';
 
 interface POSModuleProps {
@@ -200,6 +202,17 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
     setReceipt(null);
     onReceiptClosed?.();
   };
+  /**
+   * Verrou de délivrance de la facture normalisée (e-MECeF) :
+   * Plan Pro (numéro attribué) + IFU enregistré + connexion DGI ouverte.
+   * Le reçu simple, lui, n'est jamais concerné — voir lib/mecef/gate.ts.
+   */
+  const connexionMecef = useLiaisonMecef();
+  const factureEtat = peutDelivrerFacture({
+    numero: receipt?.invoiceNumber ?? null,
+    ifu: org?.ifu ?? null,
+    connexion: connexionMecef,
+  });
   /**
    * Sur mobile, le panier est un panneau plein écran plutôt qu'une colonne
    * sous la grille. En colonne il arrivait après les produits : avec 40
@@ -1655,23 +1668,28 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                 </p>
               )}
 
-              {/* Reçu simple — tous les plans */}
+              {/* Reçu simple — tous les plans, jamais bloqué. Il est
+                  TOUJOURS imprimé sans numéro : « FACTURE N° » n'apparaît
+                  que sur le bouton facture, une fois le verrou rempli.
+                  Sans ça, les deux boutons seraient identiques et le
+                  verrou se contournerait par le premier. */}
               <Button
                 variant="outline"
                 className="w-full gap-2"
                 onClick={() => {
                   if (!receipt || !org) return;
-                  printReceipt({ ...receipt, org });
+                  printReceipt({ ...receipt, org, invoiceNumber: null });
                 }}
               >
                 <Printer className="h-4 w-4" />
                 Imprimer le reçu
               </Button>
 
-              {/* Facture normalisée — Pro uniquement.
-                  Le numéro est attribué par create_sale au moment de l'encaissement
-                  (incrément atomique côté serveur), il n'est plus recalculé ici. */}
-              {receipt?.invoiceNumber ? (
+              {/* Facture normalisée — délivrance verrouillée :
+                  Pro (numéro attribué par create_sale) + IFU + connexion DGI.
+                  Tant que le verrou est fermé, l'emplacement explique pourquoi
+                  au lieu d'un bouton mort. */}
+              {factureEtat.delivrable ? (
                 <Button
                   variant="outline"
                   className="w-full gap-2 border-amber-300 text-amber-700 hover:bg-amber-50"
@@ -1684,13 +1702,10 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                   Facture normalisée
                 </Button>
               ) : (
-                <button
-                  className="text-xs text-slate-500 flex items-center justify-center gap-1"
-                  onClick={fermerRecu}
-                >
-                  <FileText className="h-3 w-3" />
-                  Facture normalisée (Plan Pro uniquement)
-                </button>
+                <p className="text-xs text-slate-500 flex items-center justify-center gap-1 text-center">
+                  <FileText className="h-3 w-3 shrink-0" />
+                  {factureEtat.motif}
+                </p>
               )}
 
               <Button variant="ghost" onClick={fermerRecu} className="w-full gap-2 text-slate-500">

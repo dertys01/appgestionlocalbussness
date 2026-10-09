@@ -2,6 +2,7 @@ import type { CartItem, Organization } from '@/types';
 import { formatQty } from '@/lib/utils/currency';
 import { planEffectif } from '@/lib/utils/plans';
 import { piedDiffusion } from '@/lib/utils/whatsapp';
+import { ifuValide } from '@/lib/mecef/gate';
 
 interface PrintData {
   items: CartItem[];
@@ -44,7 +45,11 @@ export function escapeHtml(value: unknown): string {
 }
 
 export function printReceipt(data: PrintData) {
-  const isNormalized = !!data.invoiceNumber;
+  // Double verrou (défense en profondeur) : un papier ne dit « FACTURE N° »
+  // que s'il porte un numéro ET un IFU valide. La caisse vérifie déjà le
+  // verrou complet (lib/mecef/gate.ts) ; si ce point d'entrée est appelé
+  // ailleurs, un reçu sans IFU sort en reçu, jamais en facture de façade.
+  const isNormalized = !!data.invoiceNumber && ifuValide(data.org?.ifu);
   const dateStr = data.date.toLocaleDateString('fr-FR', {
     day: '2-digit', month: '2-digit', year: 'numeric',
     hour: '2-digit', minute: '2-digit',

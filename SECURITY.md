@@ -113,6 +113,35 @@ Le dépôt est **public** : c'est la donnée qui doit être protégée, pas le c
   ne se devinent jamais) et pas de prix vendus — d'où l'ordre de déploiement
   ci-dessous, qui n'est pas une recommandation.
 
+## Facture normalisée e-MECeF (DGI Bénin)
+
+L'application jouera le rôle de SFE (système de facturation électronique) pour
+les boutiques : IFU enregistré + connexion DGI ouverte = la caisse délivre une
+facture ; sinon seul le reçu simple sort. Tant que la DGI n'a pas délivré ses
+accès, **personne ne peut délivrer de facture** — c'est le choix assumé.
+
+- **`MECEF_TOKEN`** : clé de connexion à la DGI, serveur uniquement, jamais dans
+  le dépôt ni dans le navigateur (`.env.local.example` n'en montre que le nom).
+  Comme `PAYMENTS_SANDBOX`, le verrou est **double** : un jeton posé n'ouvre
+  rien tant que `APPELS_DGI` dans `src/lib/mecef/index.ts` n'est pas passé à
+  true — dans le même commit que les appels réels. On ne peut donc ni oublier
+  les accès, ni faire croire à une facturation qui n'arriverait nulle part.
+- **`/api/mecef/status`** : GET répond `{ branche: boolean }` après une session
+  (caissier·e ou patron·ne — les deux impriment). Aucun jeton, aucun motif de
+  diagnostique ne sort de cette route. Sans session : 401, et le verrou client
+  reste fermé (fail-closed, y compris hors-ligne).
+- **`src/lib/mecef/gate.ts`** : le verrou pur (IFU 13 caractères + connexion),
+  partagé par la caisse et les Paramètres, testé sans serveur. `printReceipt()`
+  applique le même invariant en défense : un papier sans IFU valide ne dit
+  jamais « FACTURE N° ».
+- **Le reçu simple n'est jamais bloqué** : c'est l'article non négociable. Le
+  reçu est imprimé SANS numéro ; « FACTURE N° » n'existe que sur le bouton
+  facture, une fois les trois conditions réunies.
+- **`emettreFacture()`** : squelette qui rejette, comme `FedaPay.creerPaiement`
+  — aucun appel réseau avant les accès réels. Quand ils arriveront, seules cette
+  fonction et `APPELS_DGI` bougent : le verrou, les routes et les écrans sont
+  posés.
+
 ## Ce qui empêche le retour
 
 - **Gitleaks en CI** (`.github/workflows/ci.yml`) : toute nouvelle fuite fait
