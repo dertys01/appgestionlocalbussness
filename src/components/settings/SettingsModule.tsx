@@ -35,7 +35,7 @@ const PLANS: { id: Plan; features: string[] }[] = [
   },
   {
     id: 'pro',
-    features: [...lignesQuotas('pro'), 'Prévisions IA', 'Support prioritaire'],
+    features: [...lignesQuotas('pro'), 'Prévisions', 'Support prioritaire'],
   },
 ];
 
