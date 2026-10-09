@@ -71,6 +71,17 @@ le serveur). Le bandeau « N ventes en attente » est le seul signal : il ne doi
 jamais rester affiché durablement. Si un rejeu échoue (stock insuffisant), la
 vente **reste** dans la file — elle n'est jamais avalée en silence.
 
+## Jetons privilégiés
+
+- **`SUPABASE_ACCESS_TOKEN`** (dans `.env.local`) : jeton **personnel** de la
+  Management API. Il ouvre **tous** les projets du compte, pas seulement
+  `lmygvpruffpspixrsixh`. Il n'est utilisé que par les scripts locaux
+  (`supabase-sql.mjs`, `sync-plan-config.mjs`, `funnel.mjs`) — jamais par
+  l'application déployée. À traiter comme un secret de compte : jamais
+  committé, à révoquer au moindre doute (Dashboard → Account → Access Tokens).
+- **`SUPABASE_SERVICE_ROLE_KEY`** : contourne toute la RLS. Voir `SECURITY.md`
+  pour les routes qui l'utilisent et la procédure en cas de fuite.
+
 ## Incidents — réflexes
 
 1. **La caisse ne répond plus** : `/api/health` (503 = base/config), puis logs
