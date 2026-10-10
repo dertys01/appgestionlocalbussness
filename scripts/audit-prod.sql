@@ -10,7 +10,7 @@
 --    MANQUANTE    = fonction absente de la base
 --    EN PLUS      = fonction présente en base mais pas dans le dépôt
 --
---  56 fonctions · ordre des sections = APPLY_MIGRATIONS.sql
+--  57 fonctions · ordre des sections = APPLY_MIGRATIONS.sql
 -- ============================================================================
 WITH expect(sig, brut_md5, code_md5) AS (
   VALUES
@@ -60,6 +60,7 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('redeem_invitation(text,uuid,text)', '62597d5a8ef7b127a90c4354397b735e', '152bbebdabb4071781f1003954618caf'),
     ('require_feature(text)', '8e95a1aba9ea44b186021f6c44cad186', '58f6b3d5be92afdc51ce430688c49882'),
     ('restore_product(uuid)', 'a31eb65d699703f77adefa8827201769', '5a50f0cf4574e3016236455cd81ffa27'),
+    ('return_sale(uuid,jsonb,text)', '6e0b862e73992e29b610fdce5ec15dec', '57f32fd9d89323098b7b1cfe7d99fd1f'),
     ('revoke_all_beta()', 'bef8042ef6262d0e9e84f43c66c76af6', '3e7a05ccee825530eba9ddf348668145'),
     ('sale_items_consume_ingredients()', 'bbdfd78bf377342e2f7632d127d4caa2', '760ec933a9325c49396b08fb2bf08381'),
     ('sale_items_set_unit_cost()', '98677a4e07d5385423a01dab4a7e57de', '8784429620953e858e6fa37cc8c2e34b'),

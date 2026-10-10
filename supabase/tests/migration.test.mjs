@@ -128,6 +128,8 @@ const ORDER = [
   'migration_cash_sessions.sql',
   // Bons de commande fournisseur : création, réception (entrée en stock), annulation.
   'migration_purchase_orders.sql',
+  // Retours / avoirs : vente comptoir remboursée, stock remis, avoir tracé.
+  'migration_returns.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -5800,6 +5802,55 @@ console.log('\n▸ Bons de commande fournisseur');
   await canRead('41h. employé lit les commandes', `SELECT count(*) FROM purchase_orders`, true, EMPLOYE);
   await canWrite('41i. insertion directe refusée',
     `INSERT INTO purchase_orders (user_id, status) VALUES ('${PATRON}', 'ordered')`, false, PATRON);
+}
+
+// ═══ 42. Retours / avoirs ════════════════════════════════════
+console.log('\n▸ Retours / avoirs');
+{
+  const RT = 'dddddddd-0000-0000-0000-000000000042';
+  await q(`INSERT INTO products (id, user_id, name, sku, price_buy, price_sell, stock_qty, min_stock_level)
+           VALUES ('${RT}', '${PATRON}', 'Test retour', 'RET', 100, 1000, 10, 1)`);
+  await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+
+  const saleId = (await q(
+    `SELECT create_sale('[{"product_id":"${RT}","quantity":2}]'::jsonb, 'cash') AS v`
+  )).rows[0].v.id;
+  check('42a. vente de 2 (stock 10 → 8)', (await stock(RT)) === 8, `stock ${await stock(RT)}`);
+
+  // Retour partiel d'1 unité.
+  const r = (await q(
+    `SELECT return_sale('${saleId}', '[{"product_id":"${RT}","quantity":1}]'::jsonb, 'cassé') AS r`
+  )).rows[0].r;
+  check('42b. retour : montant rendu 1000', Number(r.amount) === 1000, `montant ${r.amount}`);
+  check('42c. stock remis (8 → 9)', (await stock(RT)) === 9, `stock ${await stock(RT)}`);
+  check('42d. amount_received réduit (2000 → 1000)',
+    Number((await q(`SELECT amount_received FROM sales WHERE id='${saleId}'`)).rows[0].amount_received) === 1000);
+  check('42e. journal de retour écrit',
+    (await count(`SELECT count(*) FROM stock_logs WHERE movement_type='return' AND reference_id='${r.return_id}'`)) === 1);
+
+  let trop = '';
+  try {
+    await q(`SELECT return_sale('${saleId}', '[{"product_id":"${RT}","quantity":2}]'::jsonb)`);
+  } catch (ex) { trop = ex.message; }
+  check('42f. retour supérieur au reste dû refusé', /supérieur/i.test(trop), trop);
+
+  await q(`SELECT return_sale('${saleId}', '[{"product_id":"${RT}","quantity":1}]'::jsonb)`);
+  check('42g. retour total : stock 10, amount_received 0',
+    (await stock(RT)) === 10 &&
+    Number((await q(`SELECT amount_received FROM sales WHERE id='${saleId}'`)).rows[0].amount_received) === 0);
+
+  const vc = (await q(
+    `SELECT record_credit_sale('[{"product_id":"${RT}","quantity":1}]'::jsonb, 'Client X', '97000000') AS v`
+  )).rows[0].v;
+  let creditRefus = '';
+  try {
+    await q(`SELECT return_sale('${vc.id}', '[{"product_id":"${RT}","quantity":1}]'::jsonb)`);
+  } catch (ex) { creditRefus = ex.message; }
+  check('42h. retour sur vente à crédit refusé', /crédit/i.test(creditRefus), creditRefus);
+
+  await canRead('42i. employé lit les retours', `SELECT count(*) FROM sale_returns`, true, EMPLOYE);
+  await canWrite('42j. insertion directe refusée',
+    `INSERT INTO sale_returns (user_id, sale_id, amount) VALUES ('${PATRON}', '${saleId}', 1)`, false, PATRON);
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);

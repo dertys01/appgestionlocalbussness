@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { PeriodPicker } from '@/components/ui/PeriodPicker';
+import { ReturnSaleModal } from '@/components/sales/ReturnSaleModal';
 import { formatCFA, formatQty } from '@/lib/utils/currency';
 import { imprimerRapport } from '@/lib/utils/rapport';
 import { toCSV, downloadCSV } from '@/lib/utils/export';
@@ -33,6 +34,8 @@ export function SalesHistory() {
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
+  // Vente en cours de retour (voir ReturnSaleModal).
+  const [retourVente, setRetourVente] = useState<SaleWithItems | null>(null);
   const [filter, setFilter] = useState<DateRange>(() => rangeFromDays(7));
   const [currentPage, setCurrentPage] = useState(1);
   const [error, setError] = useState('');
@@ -362,6 +365,14 @@ export function SalesHistory() {
                       <span>Total</span>
                       <span className="text-indigo-600">{formatCFA(sale.total_amount)}</span>
                     </div>
+                    {sale.payment_method !== 'credit' && (
+                      <button
+                        onClick={() => setRetourVente(sale)}
+                        className="mt-1 text-xs text-red-600 hover:text-red-700 underline"
+                      >
+                        Retourner un article
+                      </button>
+                    )}
                   </div>
                 )}
               </Card>
@@ -391,6 +402,14 @@ export function SalesHistory() {
             →
           </button>
         </div>
+      )}
+
+      {retourVente && (
+        <ReturnSaleModal
+          vente={retourVente}
+          onClose={() => setRetourVente(null)}
+          onDone={() => fetchSales(filter, currentPage)}
+        />
       )}
     </div>
   );
