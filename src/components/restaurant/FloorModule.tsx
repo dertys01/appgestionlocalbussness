@@ -10,6 +10,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Input } from '@/components/ui/input';
 import { logActivity } from '@/lib/utils/activity';
 import { formatCFA, formatQty } from '@/lib/utils/currency';
@@ -149,6 +150,9 @@ export function FloorModule({
   // Numéro de la dernière requête de lignes : ouvrir Table A puis Table B sans
   // attendre ne doit pas laisser A écraser B (ou lever le spinner de B).
   const linesReqRef = useRef(0);
+  // Ligne en attente de confirmation de retrait : un mis-tap ne doit pas
+  // effacer une ligne en plein service.
+  const [aRetirer, setARetirer] = useState<OrderLine | null>(null);
 
   // Saisie
   const [clientName, setClientName] = useState('');
@@ -197,6 +201,14 @@ export function FloorModule({
     setNote('');
     setSearch('');
   };
+
+  // « 42 min » doit avancer tout seul : sans ce tic, l'écart de service ne
+  // bougeait qu'au prochain rendu (action ou temps réel), jamais avec l'horloge.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 60_000);
+    return () => clearInterval(t);
+  }, []);
 
   const loadTables = useCallback(async () => {
     setLoading(true);
@@ -281,6 +293,12 @@ export function FloorModule({
   // Temps réel (si NEXT_PUBLIC_REALTIME=1) : une commande ouverte sur un autre
   // appareil (le serveur, la caisse) rafraîchit le plan de salle.
   useRealtimeRefresh(['restaurant_orders'], loadTables);
+
+  // Et les LIGNES de la commande ouverte : une ligne ajoutée par un autre
+  // appareil sur la même table n'apparaissait qu'en rouvrant la table.
+  useRealtimeRefresh(['restaurant_order_items'], () => {
+    if (orderId) void loadLines(orderId);
+  });
 
   useEffect(() => {
     if (!orderId) return;
@@ -368,13 +386,18 @@ export function FloorModule({
     // Un champ quantité vide vaut 1 — le serveur tape rarement la quantité.
     // lireMontant('') rend 0 (zéro est une quantité valide ailleurs), donc le
     // cas du champ vide doit être traité avant l'appel.
-    const n = qty.trim() === '' ? 1 : lireMontant(qty) ?? 1;
-    if (n <= 0) {
+    const n = qty.trim() === '' ? 1 : lireMontant(qty);
+    if (n === null || n <= 0) {
       // Jamais un retour muet : le serveur tape « 0 », clique sur
       // « Ajouter à la commande » et ne voit RIEN arriver — il croit à un
       // clic raté et recommence. C'est le même message que setLineQty(),
       // pour que les deux chemins parlent d'une seule voix.
       setError('La quantité doit être un nombre supérieur à zéro.');
+      return;
+    }
+    if (n > 1000) {
+      // Même borne que setLineQty : les deux chemins doivent s'accorder.
+      setError('Une ligne de commande ne peut pas dépasser 1 000 portions.');
       return;
     }
     // Un modificateur choisi (« double portion ») porte son supplément dans
@@ -418,16 +441,16 @@ export function FloorModule({
    * les lignes au moment de l'encaissement — c'est cette quantité qui est
    * facturée et qui décrémente les ingrédients.
    */
-  const setLineQty = async (line: OrderLine, raw: string) => {
-    if (!orderId) return;
+  const setLineQty = async (line: OrderLine, raw: string): Promise<boolean> => {
+    if (!orderId) return false;
     const n = lireMontant(raw);
     if (n === null || n <= 0) {
       setError('La quantité doit être un nombre supérieur à zéro.');
-      return;
+      return false;
     }
     if (n > 1000) {
       setError('Une ligne de commande ne peut pas dépasser 1 000 portions.');
-      return;
+      return false;
     }
     setBusy(true);
     setError('');
@@ -436,8 +459,9 @@ export function FloorModule({
       .update({ quantity: n })
       .eq('id', line.id);
     setBusy(false);
-    if (err) { setError(err.message); return; }
+    if (err) { setError(err.message); return false; }
     await Promise.all([loadLines(orderId), loadTables()]);
+    return true;
   };
 
   const cycleLine = async (line: OrderLine) => {
@@ -733,7 +757,7 @@ export function FloorModule({
     return (
       <div className="space-y-4">
         {error && (
-          <p className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{error}</p>
+          <p role="alert" className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{error}</p>
         )}
         <EmptyState
           icon={UtensilsCrossed}
@@ -761,7 +785,7 @@ export function FloorModule({
   return (
     <div className="space-y-4">
       {error && (
-        <p className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{error}</p>
+        <p role="alert" className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{error}</p>
       )}
 
       {/* La salle est installée : on doit pouvoir y ajouter une table, pas
@@ -792,7 +816,7 @@ export function FloorModule({
 
       {/* ── Addition encaissée ── */}
       {closed && (
-        <Card className="border-emerald-200 bg-emerald-50">
+        <Card className="border-emerald-200 bg-emerald-50" role="status">
           <CardContent className="p-4 space-y-1">
             <p className="text-sm font-semibold text-emerald-800 flex items-center gap-1.5">
               <CheckCircle2 className="h-4 w-4" /> Addition encaissée
@@ -1042,16 +1066,22 @@ export function FloorModule({
                       aria-label={`Quantité de ${l.name}`}
                       onBlur={(e) => {
                         const v = lireMontant(e.target.value);
-                        if (v !== null && v !== Number(l.quantity)) {
-                          void setLineQty(l, e.target.value);
-                        } else {
+                        // Champ vide, illisible, ou inchangé : on remet la
+                        // valeur courante. Sinon on tente l'écriture, et on
+                        // remet la valeur si la validation ou la base refuse —
+                        // le champ ne montre jamais un nombre rejeté.
+                        if (v === null || v === Number(l.quantity)) {
                           e.target.value = String(l.quantity);
+                          return;
                         }
+                        void setLineQty(l, e.target.value).then((ok) => {
+                          if (!ok) e.target.value = String(l.quantity);
+                        });
                       }}
                       className="w-16 text-right shrink-0"
                     />
                     <button
-                      onClick={() => removeLine(l)}
+                      onClick={() => setARetirer(l)}
                       aria-label={`Retirer ${l.name} de la commande`}
                       className="p-1 text-slate-400 hover:text-red-600 shrink-0"
                     >
@@ -1372,15 +1402,22 @@ export function FloorModule({
                         >
                           {m.name}
                           {Number(m.extra_price) > 0 && ` +${formatCFA(m.extra_price)}`}
+                          {m.is_required && <span className="ml-1 opacity-80">(obligatoire)</span>}
                         </button>
                       ))}
                     </div>
                   )}
 
+                  {modifiers.some((m) => m.is_required) && !modSelection && (
+                    <p className="text-xs text-amber-700">
+                      Choisissez l&apos;option obligatoire avant d&apos;ajouter le plat.
+                    </p>
+                  )}
+
                   <div className="flex items-center gap-2">
                     <Button
                       onClick={() => addLine(platChoisi)}
-                      disabled={busy}
+                      disabled={busy || (modifiers.some((m) => m.is_required) && !modSelection)}
                       className="bg-indigo-600 hover:bg-indigo-700 gap-2"
                     >
                       {busy
@@ -1415,6 +1452,16 @@ export function FloorModule({
           Touchez une table occupée pour ouvrir sa commande.
         </p>
       )}
+
+      <ConfirmDialog
+        open={!!aRetirer}
+        title="Retirer cet article ?"
+        message={<p>« {aRetirer?.name} » sera retiré de la commande.</p>}
+        confirmLabel="Retirer"
+        destructive
+        onConfirm={() => { const l = aRetirer; setARetirer(null); if (l) void removeLine(l); }}
+        onCancel={() => setARetirer(null)}
+      />
     </div>
   );
 }

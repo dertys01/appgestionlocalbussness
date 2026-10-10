@@ -251,7 +251,7 @@ export function RecipesModule() {
   return (
     <div className="space-y-4">
       {error && (
-        <p className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{error}</p>
+        <p role="alert" className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">{error}</p>
       )}
 
       {/* Choix du plat */}
