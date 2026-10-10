@@ -61,7 +61,12 @@ export function BarcodeScanner({ onScan, onClose, errorMessage }: BarcodeScanner
           () => { /* frame sans code, ignorer */ }
         );
 
-        startPromiseRef.current = start.then(() => { /* démarré */ });
+        startPromiseRef.current = start
+          .then(() => { /* démarré */ })
+          // Sans ce .catch, un démarrage refusé (caméra indisponible) laissait
+          // une promesse rejetée SANS gestionnaire : l'erreur remontait en
+          // « Uncaught (in promise) » alors qu'elle est déjà affichée à l'écran.
+          .catch(() => { /* déjà signalé par setCameraError */ });
 
         await start;
         if (disposed) {
