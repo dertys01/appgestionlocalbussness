@@ -74,7 +74,8 @@ const supabase = {
           : table === 'restaurant_orders'
             ? chaine(prises, table)
             : chaine({ id: 'x' }, table),
-  rpc: vi.fn(async (fn: string) => {
+  rpc: vi.fn(async (fn: string, _args?: unknown) => {
+    void _args; // le 2ᵉ argument typé permet aux tests de lire les paramètres
     rpcResultats.push(fn);
     if (fn === 'close_table_order') {
       return {
