@@ -323,7 +323,7 @@ export function DebtsModule() {
               <button
                 type="button"
                 onClick={() => relancer(c)}
-                className="shrink-0 inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#25D366] hover:bg-[#1ebe5d] text-white text-xs font-medium px-3 h-9"
+                className="shrink-0 inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#0f7a3d] hover:bg-[#0c6631] text-white text-xs font-medium px-3 h-9"
               >
                 <MessageCircle className="w-3.5 h-3.5" /> Relancer
               </button>
@@ -399,7 +399,7 @@ export function DebtsModule() {
                     <button
                       type="button"
                       onClick={() => relancer(d)}
-                      className="order-1 shrink-0 inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#25D366] hover:bg-[#1ebe5d] text-white text-xs font-medium px-3 h-11 sm:h-9"
+                      className="order-1 shrink-0 inline-flex items-center justify-center gap-1.5 rounded-lg bg-[#0f7a3d] hover:bg-[#0c6631] text-white text-xs font-medium px-3 h-11 sm:h-9"
                     >
                       <MessageCircle className="w-3.5 h-3.5" /> Relancer
                     </button>

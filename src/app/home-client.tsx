@@ -38,6 +38,7 @@ import { OrgLoadFailed } from '@/components/onboarding/OrgLoadFailed';
 import { OrgSetupRequired } from '@/components/onboarding/OrgSetupRequired';
 import { DashboardTab } from '@/components/dashboard/DashboardTab';
 import { Sidebar } from '@/components/layout/Sidebar';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { useProducts } from '@/lib/hooks/useProducts';
 import { useToday } from '@/lib/hooks/useToday';
@@ -336,6 +337,9 @@ export default function HomePage() {
             </p>
           )}
 
+          {/* Frontière d'erreur : un module qui plante ne doit pas emporter
+              tout le tableau de bord — le reste de la caisse reste utilisable. */}
+          <ErrorBoundary zone={tab}>
           {/* ── Dashboard ── */}
           {tab === 'dashboard' && (
             <DashboardTab
@@ -455,6 +459,7 @@ export default function HomePage() {
               <SettingsModule />
             </div>
           )}
+          </ErrorBoundary>
         </div>
       </main>
 

@@ -89,7 +89,10 @@ function Appels({ compact = false }: { compact?: boolean }) {
         href={WHATSAPP_SALES}
         target="_blank"
         rel="noopener noreferrer"
-        className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#25D366] hover:bg-[#1ebe5d] text-white font-semibold px-6 h-12 transition-colors"
+        // Vert WhatsApp FONCÉ, pas le #25D366 de la marque : le blanc sur ce
+        // vert clair ne donne qu'un contraste de 1,98:1 (Lighthouse le relève).
+        // #0f7a3d monte à ~5,4:1 et reste reconnaissable.
+        className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#0f7a3d] hover:bg-[#0c6631] text-white font-semibold px-6 h-12 transition-colors"
       >
         <MessageCircle className="w-4 h-4" aria-hidden="true" />
         Parler sur WhatsApp

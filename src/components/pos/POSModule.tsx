@@ -1813,7 +1813,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
                 href={receipt?.waLink}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="flex items-center justify-center gap-2 rounded-xl bg-[#25D366] text-white font-semibold py-3 hover:bg-[#1ebe5d] transition-colors"
+                className="flex items-center justify-center gap-2 rounded-xl bg-[#0f7a3d] text-white font-semibold py-3 hover:bg-[#0c6631] transition-colors"
               >
                 <Share2 className="h-4 w-4" />
                 {receipt?.isCredit
