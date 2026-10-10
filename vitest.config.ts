@@ -35,6 +35,9 @@ export default defineConfig({
         'src/instrumentation.ts',
         'src/instrumentation-client.ts',
         'src/types/**',
+        // Contrats de types purs (interfaces uniquement, aucune instruction
+        // exécutable) : v8 les compte à 0 % alors qu'il n'y a rien à exécuter.
+        'src/lib/payments/types.ts',
       ],
       // Plancher mesuré au moment de la mise en place (45.8 % lignes / 74.9 %
       // branches / 58.7 % fonctions), posé un peu en dessous. Il n'augmente

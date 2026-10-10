@@ -251,6 +251,100 @@ describe('POST /api/invitations/accept', () => {
     expect(res.status).toBe(200);
     expect((await res.json()).email).toBe('m@b.c');
   });
+
+  it('rate limit dédié dépassé → 429 (avec Retry-After)', async () => {
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'srk';
+    h.client = fakeClient({ rpc: { bump_rate_limit: { data: true, error: null } } });
+    const { POST } = await import('@/app/api/invitations/accept/route');
+    const res = await POST(post('/api/invitations/accept', { token, name: 'Marie', password: 'secret1' }));
+    expect(res.status).toBe(429);
+    expect(res.headers.get('Retry-After')).toBe('3600');
+  });
+
+  it('compte déjà existant retrouvé par la liste → 200 (mot de passe jamais réécrit)', async () => {
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'srk';
+    h.client = fakeClient({
+      from: {
+        employee_invitations: {
+          data: { email: 'm@b.c', accepted_at: null, expires_at: '2099-01-01T00:00:00Z', owner_id: 'o1' },
+          error: null,
+        },
+      },
+      createUser: () => ({ data: null, error: { message: 'User already registered' } }),
+      listUsers: () => ({ data: { users: [{ id: 'existant-1', email: 'M@B.C' }] }, error: null }),
+      rpc: { redeem_invitation: { data: [{ member_id: 'existant-1' }], error: null } },
+    });
+    const { POST } = await import('@/app/api/invitations/accept/route');
+    const res = await POST(post('/api/invitations/accept', { token, name: 'Marie', password: 'secret1' }));
+    expect(res.status).toBe(200);
+  });
+
+  it('compte déjà existant introuvable dans la liste → 409', async () => {
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'srk';
+    h.client = fakeClient({
+      from: {
+        employee_invitations: {
+          data: { email: 'm@b.c', accepted_at: null, expires_at: '2099-01-01T00:00:00Z', owner_id: 'o1' },
+          error: null,
+        },
+      },
+      createUser: () => ({ data: null, error: { message: 'User already registered' } }),
+      listUsers: () => ({ data: { users: [] }, error: null }),
+    });
+    const { POST } = await import('@/app/api/invitations/accept/route');
+    const res = await POST(post('/api/invitations/accept', { token, name: 'Marie', password: 'secret1' }));
+    expect(res.status).toBe(409);
+  });
+
+  it('échec de création non lié à un doublon → 503', async () => {
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'srk';
+    h.client = fakeClient({
+      from: {
+        employee_invitations: {
+          data: { email: 'm@b.c', accepted_at: null, expires_at: '2099-01-01T00:00:00Z', owner_id: 'o1' },
+          error: null,
+        },
+      },
+      createUser: () => ({ data: null, error: { message: 'Database error checking email' } }),
+    });
+    const { POST } = await import('@/app/api/invitations/accept/route');
+    const res = await POST(post('/api/invitations/accept', { token, name: 'Marie', password: 'secret1' }));
+    expect(res.status).toBe(503);
+  });
+
+  it('redeem : lien déjà utilisé → 410 (compte créé nettoyé)', async () => {
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'srk';
+    h.client = fakeClient({
+      from: {
+        employee_invitations: {
+          data: { email: 'm@b.c', accepted_at: null, expires_at: '2099-01-01T00:00:00Z', owner_id: 'o1' },
+          error: null,
+        },
+      },
+      createUser: () => ({ data: { user: { id: 'membre-1' } }, error: null }),
+      rpc: { redeem_invitation: { data: null, error: { message: "L'invitation a déjà été utilisée" } } },
+    });
+    const { POST } = await import('@/app/api/invitations/accept/route');
+    const res = await POST(post('/api/invitations/accept', { token, name: 'Marie', password: 'secret1' }));
+    expect(res.status).toBe(410);
+  });
+
+  it('redeem : le compte possède déjà sa propre boutique → 409', async () => {
+    process.env.SUPABASE_SERVICE_ROLE_KEY = 'srk';
+    h.client = fakeClient({
+      from: {
+        employee_invitations: {
+          data: { email: 'm@b.c', accepted_at: null, expires_at: '2099-01-01T00:00:00Z', owner_id: 'o1' },
+          error: null,
+        },
+      },
+      createUser: () => ({ data: { user: { id: 'membre-1' } }, error: null }),
+      rpc: { redeem_invitation: { data: null, error: { message: 'Ce compte possède déjà sa propre boutique' } } },
+    });
+    const { POST } = await import('@/app/api/invitations/accept/route');
+    const res = await POST(post('/api/invitations/accept', { token, name: 'Marie', password: 'secret1' }));
+    expect(res.status).toBe(409);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────
@@ -545,6 +639,50 @@ describe('POST /api/payments/order', () => {
     const { POST } = await import('@/app/api/payments/order/route');
     const res = await POST(post('/api/payments/order', { plan: 'pro', mois: 1 }, { authorization: 'Bearer j' }));
     expect(res.status).toBe(503);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+describe('GET /api/payments/order', () => {
+  const patron = (from: Record<string, Rep> = {}) => fakeClient({
+    getUser: () => ({ data: { user: { id: 'u1' } }, error: null }),
+    rpc: { get_business_owner_id: { data: 'u1', error: null } },
+    from,
+  });
+  const ref = 'a'.repeat(36);
+
+  it('sans session → 401', async () => {
+    h.client = fakeClient({ getUser: () => ({ data: { user: null }, error: null }) });
+    const { GET } = await import('@/app/api/payments/order/route');
+    const res = await GET(get(`/api/payments/order?ref=${ref}`));
+    expect(res.status).toBe(401);
+  });
+
+  it('référence invalide → 400', async () => {
+    h.client = patron();
+    const { GET } = await import('@/app/api/payments/order/route');
+    const res = await GET(get('/api/payments/order?ref=pas-une-ref', { authorization: 'Bearer j' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('commande introuvable → 404', async () => {
+    h.client = patron({ payment_orders: { data: null, error: null } });
+    const { GET } = await import('@/app/api/payments/order/route');
+    const res = await GET(get(`/api/payments/order?ref=${ref}`, { authorization: 'Bearer j' }));
+    expect(res.status).toBe(404);
+  });
+
+  it('patron → 200 avec l’état de la commande', async () => {
+    h.client = patron({
+      payment_orders: {
+        data: { reference: ref, plan: 'pro', period_months: 3, amount: 20000, status: 'pending' },
+        error: null,
+      },
+    });
+    const { GET } = await import('@/app/api/payments/order/route');
+    const res = await GET(get(`/api/payments/order?ref=${ref}`, { authorization: 'Bearer j' }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).status).toBe('pending');
   });
 });
 
