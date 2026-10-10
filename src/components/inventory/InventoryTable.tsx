@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import {
   Table,
   TableBody,
@@ -82,6 +83,8 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onImport, o
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Produit en attente de confirmation d'archivage (voir ConfirmDialog).
+  const [aArchiver, setAArchiver] = useState<Product | null>(null);
   const [deleteError, setDeleteError] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const PAGE_SIZE = 20;
@@ -138,12 +141,12 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onImport, o
    * archive_product() refuse proprement si le produit a un historique de
    * ventes, et le journal d'activité trace l'opération.
    */
-  const handleArchive = async (product: Product) => {
-    if (!window.confirm(
-      `Archiver "${product.name}" ?\n\n` +
-      `Il disparaîtra de la caisse et de l'inventaire.\n` +
-      `Si le produit a déjà été vendu, l'archivage sera refusé pour préserver l'historique.`
-    )) return;
+  const handleArchive = (product: Product) => setAArchiver(product);
+
+  const confirmerArchive = async () => {
+    const product = aArchiver;
+    if (!product) return;
+    setAArchiver(null);
 
     setDeletingId(product.id);
     setDeleteError('');
@@ -428,6 +431,21 @@ export function InventoryTable({ products, onEdit, onRestock, onAdd, onImport, o
           </div>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!aArchiver}
+        title="Archiver ce produit ?"
+        message={
+          <>
+            <p>« {aArchiver?.name} » disparaîtra de la caisse et de l&apos;inventaire.</p>
+            <p>Si le produit a déjà été vendu, l&apos;archivage sera refusé pour préserver l&apos;historique.</p>
+          </>
+        }
+        confirmLabel="Archiver"
+        destructive
+        onConfirm={confirmerArchive}
+        onCancel={() => setAArchiver(null)}
+      />
     </div>
   );
 }

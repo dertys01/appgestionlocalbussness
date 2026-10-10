@@ -19,6 +19,7 @@ import {
   type BusinessType,
   type OnboardingStep,
 } from '@/lib/onboarding';
+import { lireMontant } from '@/lib/utils/nombres';
 
 /** Où l'écran de félicitations envoie le patron. */
 export type OnboardingExit = 'debts' | 'add-product' | 'dashboard';
@@ -111,8 +112,8 @@ export function OnboardingWizard({ onProductsChanged, onGoToCash, onFinish }: On
   const ajouterMonProduit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!ownerId) return;
-    const prixVente = parseFloat(prix.replace(',', '.'));
-    const stock = parseFloat(quantite.replace(',', '.'));
+    const prixVente = lireMontant(prix) ?? 0;
+    const stock = lireMontant(quantite) ?? 0;
     if (!nom.trim() || !(prixVente > 0)) { setError('Indiquez le nom et le prix de vente.'); return; }
     // Sans stock, la caisse refuse la vente : mieux vaut le dire ici qu'à
     // l'écran suivant, sur un « Stock insuffisant » incompréhensible.

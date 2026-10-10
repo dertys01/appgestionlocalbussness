@@ -7,12 +7,14 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
 import { EmptyState } from '@/components/ui/empty-state';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { PeriodPicker } from '@/components/ui/PeriodPicker';
 import { PLAN_LIMITS } from '@/lib/utils/plans';
 import { rangeFromDays, todayISO, type DateRange } from '@/lib/utils/period';
+import { lireMontant } from '@/lib/utils/nombres';
 import { formatCFA } from '@/lib/utils/currency';
 import { readablePlanError } from '@/lib/utils/planErrors';
 import { logActivity } from '@/lib/utils/activity';
@@ -70,6 +72,8 @@ export function ExpensesModule() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState('');
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  // Dépense en attente de confirmation de suppression (voir ConfirmDialog).
+  const [aSupprimer, setASupprimer] = useState<Expense | null>(null);
   // Pagination de la liste des charges : voir le rendu.
   const [shownExpenses, setShownExpenses] = useState(50);
 
@@ -198,9 +202,13 @@ export function ExpensesModule() {
     e.preventDefault();
     setFormError('');
 
-    const value = parseFloat(amount);
+    // lireMontant, et non parseFloat : « 50.000 » (le séparateur de milliers
+    // usuel ici) se lisait 50 avec parseFloat — une charge à 50 F au lieu de
+    // 50 000 F. Le reste du dépôt lit les montants par lireMontant ; ce champ
+    // était le dernier à faire autrement.
+    const value = lireMontant(amount);
     if (!label.trim()) { setFormError('Décrivez la dépense.'); return; }
-    if (!Number.isFinite(value) || value <= 0) { setFormError('Montant invalide.'); return; }
+    if (value === null || value <= 0) { setFormError('Montant invalide.'); return; }
     if (!category) { setFormError('Choisissez une catégorie.'); return; }
 
     setSaving(true);
@@ -243,8 +251,12 @@ export function ExpensesModule() {
     }
   };
 
-  const handleDelete = async (expense: Expense) => {
-    if (!window.confirm(`Supprimer la dépense « ${expense.label} » ?`)) return;
+  const handleDelete = (expense: Expense) => setASupprimer(expense);
+
+  const confirmerSuppression = async () => {
+    const expense = aSupprimer;
+    if (!expense) return;
+    setASupprimer(null);
     setDeletingId(expense.id);
     try {
       const { error: err } = await supabase.from('expenses').delete().eq('id', expense.id);
@@ -560,6 +572,16 @@ export function ExpensesModule() {
         puis vos charges sur la période choisie. Il ne comprend ni les salaires implicites
         ni l&apos;amortissement du stock resté en rayon.
       </p>
+
+      <ConfirmDialog
+        open={!!aSupprimer}
+        title="Supprimer cette dépense ?"
+        message={<p>« {aSupprimer?.label} » sera définitivement supprimée.</p>}
+        confirmLabel="Supprimer"
+        destructive
+        onConfirm={confirmerSuppression}
+        onCancel={() => setASupprimer(null)}
+      />
     </div>
   );
 }

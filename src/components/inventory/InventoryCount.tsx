@@ -9,6 +9,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { BarcodeScanner } from '@/components/scanner/BarcodeScanner';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { logActivity } from '@/lib/utils/activity';
+import { lireMontant } from '@/lib/utils/nombres';
 import type { Product } from '@/types';
 
 interface InventoryCountProps {
@@ -67,7 +68,7 @@ export function InventoryCount({ products, onComplete }: InventoryCountProps) {
     setEntries((prev) =>
       prev.map((e) =>
         e.product.id === productId
-          ? { ...e, counted: value === '' ? '' : Math.max(0, Number(value.replace(',', '.')) || 0) }
+          ? { ...e, counted: value === '' ? '' : Math.max(0, lireMontant(value) ?? 0) }
           : e
       )
     );
@@ -83,9 +84,12 @@ export function InventoryCount({ products, onComplete }: InventoryCountProps) {
     setShowScanner(false);
     const found = entries.find((e) => e.product.sku === sku);
     if (found) {
+      setError('');
       setSearch(found.product.name);
     } else {
-      alert(`Aucun produit trouvé pour le SKU : ${sku}`);
+      // Message inline, jamais un alert() bloquant : le reste de l'app
+      // n'utilise pas de popup natif.
+      setError(`Aucun produit trouvé pour le SKU : ${sku}`);
     }
   };
 

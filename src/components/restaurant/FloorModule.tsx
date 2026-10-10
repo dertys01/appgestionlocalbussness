@@ -393,8 +393,8 @@ export function FloorModule({
    */
   const setLineQty = async (line: OrderLine, raw: string) => {
     if (!orderId) return;
-    const n = Number(String(raw).replace(',', '.'));
-    if (!Number.isFinite(n) || n <= 0) {
+    const n = lireMontant(raw);
+    if (n === null || n <= 0) {
       setError('La quantité doit être un nombre supérieur à zéro.');
       return;
     }
@@ -994,8 +994,8 @@ export function FloorModule({
                       disabled={busy}
                       aria-label={`Quantité de ${l.name}`}
                       onBlur={(e) => {
-                        const v = Number(String(e.target.value).replace(',', '.'));
-                        if (Number.isFinite(v) && v !== Number(l.quantity)) {
+                        const v = lireMontant(e.target.value);
+                        if (v !== null && v !== Number(l.quantity)) {
                           void setLineQty(l, e.target.value);
                         } else {
                           e.target.value = String(l.quantity);

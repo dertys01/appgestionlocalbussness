@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { logActivity } from '@/lib/utils/activity';
 import { formatCFA } from '@/lib/utils/currency';
+import { lireMontant } from '@/lib/utils/nombres';
 import type { Product } from '@/types';
 
 interface RestockModalProps {
@@ -24,8 +25,8 @@ interface RestockModalProps {
  * « 1,5 », le modal répondait « Quantité invalide » sans jamais le dire.
  */
 const parseQty = (raw: string): number => {
-  const n = Number(String(raw).trim().replace(',', '.'));
-  return Number.isFinite(n) ? n : NaN;
+  const n = lireMontant(raw);
+  return n === null ? NaN : n;
 };
 
 export function RestockModal({ product, initialQty, onClose, onSaved }: RestockModalProps) {

@@ -8,9 +8,9 @@ import { Button } from '@/components/ui/button';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 
 // ── Page de connexion / inscription ──
-export function LoginPage() {
+export function LoginPage({ initialMode = 'login' }: { initialMode?: 'login' | 'register' | 'forgot' } = {}) {
   const { supabase } = useSupabase();
-  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>('login');
+  const [mode, setMode] = useState<'login' | 'register' | 'forgot'>(initialMode);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [businessName, setBusinessName] = useState('');

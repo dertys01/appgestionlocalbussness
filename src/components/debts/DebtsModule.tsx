@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
 import { formatCFA } from '@/lib/utils/currency';
+import { lireMontant } from '@/lib/utils/nombres';
 import { readablePlanError } from '@/lib/utils/planErrors';
 import { whatsappNumber } from '@/lib/utils/phone';
 import { isFeatureAllowed } from '@/lib/utils/plans';
@@ -162,8 +163,8 @@ export function DebtsModule() {
 
   const pay = async (debt: Debt) => {
     const raw = (amounts[debt.debt_id] ?? '').trim();
-    const montant = Number(String(raw).replace(',', '.'));
-    if (!Number.isFinite(montant) || montant <= 0) {
+    const montant = lireMontant(raw);
+    if (montant === null || montant <= 0) {
       setError('Saisissez le montant encaissé.');
       return;
     }

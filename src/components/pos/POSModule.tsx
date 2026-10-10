@@ -23,6 +23,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { formatCFA, formatQty } from '@/lib/utils/currency';
 import { rechercher } from '@/lib/utils/productSearch';
+import { lireMontant } from '@/lib/utils/nombres';
 import { generateWhatsAppReceiptLink } from '@/lib/utils/whatsapp';
 import { logActivity } from '@/lib/utils/activity';
 import { printReceipt } from '@/lib/utils/print';
@@ -700,7 +701,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
   );
 
   /** Ce que le client a réellement posé sur le comptoir. */
-  const donne = Number(String(amountGiven).replace(',', '.'));
+  const donne = lireMontant(String(amountGiven)) ?? 0;
 
   // ── Crédit client ──
   // Une vente à crédit exige un nom ET un téléphone : sans numéro, la dette
@@ -709,10 +710,10 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
   const creditNeedsPhone = paymentMethod === 'credit' && !clientPhone.trim();
 
   // ── Acompte ──
-  // Nombre tolérant : virgule ou point, c'est un clavier de téléphone.
-  const advanceValue = Number(String(advance).replace(',', '.'));
-  const advanceOk = !advance.trim() || (Number.isFinite(advanceValue) && advanceValue >= 0);
-  const advanceAmount = advanceOk ? Math.min(advanceValue || 0, 1e12) : 0;
+  // lireMontant : virgule ou point, et « 5.000 » lu comme cinq mille.
+  const advanceBrut = lireMontant(advance);
+  const advanceOk = !advance.trim() || (advanceBrut !== null && advanceBrut >= 0);
+  const advanceAmount = advanceOk ? Math.min(advanceBrut ?? 0, 1e12) : 0;
   // Un acompte supérieur au prix n'est pas un acompte, c'est un trop-perçu : le
   // serveur le refuse, et le signaler ici évite une erreur rouge après coup.
   const advanceTooHigh = paymentMethod === 'credit' && advanceAmount > total;
@@ -766,8 +767,8 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
   const setLineQty = useCallback((productId: string, raw: string) => {
     setCart((prev) => prev.map((i) => {
       if (i.product.id !== productId) return i;
-      const n = Number(String(raw).replace(',', '.'));
-      if (!Number.isFinite(n) || n <= 0) return i;
+      const n = lireMontant(raw);
+      if (n === null || n <= 0) return i;
       return { ...i, quantity: Math.min(n, 1000000) };
     }));
   }, []);
@@ -777,8 +778,8 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
       if (i.product.id !== productId) return i;
       // Vide = retour au prix catalogue, pas un prix à zéro.
       if (raw.trim() === '') return { ...i, unitPrice: null };
-      const n = Number(raw.replace(',', '.'));
-      if (!Number.isFinite(n) || n <= 0) return i;
+      const n = lireMontant(raw);
+      if (n === null || n <= 0) return i;
       return { ...i, unitPrice: n };
     }));
   }, []);
@@ -908,7 +909,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         },
         clientPhone.trim() || undefined
       );
-      const given = parseFloat(String(amountGiven).replace(',', '.')) || 0;
+      const given = lireMontant(String(amountGiven)) ?? 0;
       setReceipt({
         saleId: refVente,
         invoiceNumber: null,
@@ -996,7 +997,7 @@ export function POSModule({ products, onSaleComplete, addToCartRequest, onAddToC
         clientPhone.trim() || undefined
       );
 
-      const given = parseFloat(String(amountGiven).replace(',', '.')) || 0;
+      const given = lireMontant(String(amountGiven)) ?? 0;
       setReceipt({
         saleId,
         invoiceNumber,
