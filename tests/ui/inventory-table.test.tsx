@@ -14,7 +14,7 @@ const h = vi.hoisted(() => {
   const rpc = vi.fn(async () => ({ data: null, error: null }));
   const getUser = vi.fn(async () => ({ data: { user: { id: 'u1', email: 'a@b.c' } }, error: null }));
   const supabase = { rpc, auth: { getUser } };
-  const exportMod = { toCSV: vi.fn((_rows: unknown[], _cols: unknown) => 'csv'), downloadCSV: vi.fn() };
+  const exportMod = { toCSV: vi.fn((rows: unknown[]) => `csv:${rows.length}`), downloadCSV: vi.fn() };
   const retirer = vi.fn(async () => ({ supprimes: 0, archives: 0 }));
   return { role, rpc, getUser, supabase, exportMod, retirer };
 });
