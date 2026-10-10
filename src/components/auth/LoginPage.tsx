@@ -137,17 +137,19 @@ export function LoginPage({ initialMode = 'login' }: { initialMode?: 'login' | '
       }
 
       if (json.error) {
-        // Compte créé mais login auto échoué → rediriger vers login
-        setInfo(json.error);
+        // Compte créé mais login auto échoué → rediriger vers login.
+        // switchMode remet error/info à zéro : le message doit être posé APRÈS,
+        // sinon il est effacé aussitôt et l'utilisateur ne voit rien.
         switchMode('login');
+        setError(json.error);
         return;
       }
 
       // res.ok mais pas de jeton : compte créé, session non ouverte. Sans ce
       // garde, setSession recevait undefined et restait silencieusement muet.
       if (!json.access_token || !json.refresh_token) {
-        setError('Compte créé, mais la session n\'a pas pu être ouverte. Connectez-vous.');
         switchMode('login');
+        setError('Compte créé, mais la session n\'a pas pu être ouverte. Connectez-vous.');
         return;
       }
 

@@ -284,6 +284,10 @@ describe('POST /api/payments/callback/[provider] — fail-closed', () => {
 // ─────────────────────────────────────────────────────────────
 describe('PATCH /api/employees/[id]', () => {
   const ctx = { params: Promise.resolve({ id: 'membre-1' }) };
+  const patron = () => fakeClient({
+    getUser: () => ({ data: { user: { id: 'u1' } }, error: null }),
+    rpc: { get_business_owner_id: { data: 'u1', error: null } },
+  });
 
   it('sans session → 401', async () => {
     h.client = fakeClient({ getUser: () => ({ data: { user: null }, error: null }) });
@@ -300,6 +304,97 @@ describe('PATCH /api/employees/[id]', () => {
       ctx,
     );
     expect(res.status).toBe(400);
+  });
+
+  it('appelant qui n’est pas le patron → 403', async () => {
+    h.client = fakeClient({
+      getUser: () => ({ data: { user: { id: 'u1' } }, error: null }),
+      rpc: { get_business_owner_id: { data: 'owner-9', error: null } },
+    });
+    const { PATCH } = await import('@/app/api/employees/[id]/route');
+    const res = await PATCH(post('/api/employees/membre-1', { role: 'manager' }, { authorization: 'Bearer j' }), ctx);
+    expect(res.status).toBe(403);
+  });
+
+  it('membre hors de l’équipe (P0002) → 404', async () => {
+    h.client = fakeClient({
+      getUser: () => ({ data: { user: { id: 'u1' } }, error: null }),
+      rpc: {
+        get_business_owner_id: { data: 'u1', error: null },
+        business_members_set_role: { data: null, error: { message: 'introuvable', code: 'P0002' } },
+      },
+    });
+    const { PATCH } = await import('@/app/api/employees/[id]/route');
+    const res = await PATCH(post('/api/employees/membre-1', { role: 'manager' }, { authorization: 'Bearer j' }), ctx);
+    expect(res.status).toBe(404);
+  });
+
+  it('refus métier (22023) → 400 avec le message', async () => {
+    h.client = fakeClient({
+      getUser: () => ({ data: { user: { id: 'u1' } }, error: null }),
+      rpc: {
+        get_business_owner_id: { data: 'u1', error: null },
+        business_members_set_role: { data: null, error: { message: 'Dernier manager', code: '22023' } },
+      },
+    });
+    const { PATCH } = await import('@/app/api/employees/[id]/route');
+    const res = await PATCH(post('/api/employees/membre-1', { role: 'employee' }, { authorization: 'Bearer j' }), ctx);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe('Dernier manager');
+  });
+
+  it('patron, rôle valide → 200', async () => {
+    h.client = patron();
+    const { PATCH } = await import('@/app/api/employees/[id]/route');
+    const res = await PATCH(post('/api/employees/membre-1', { role: 'manager' }, { authorization: 'Bearer j' }), ctx);
+    expect(res.status).toBe(200);
+    expect((await res.json()).success).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+describe('DELETE /api/employees/[id]', () => {
+  const ctx = { params: Promise.resolve({ id: 'membre-1' }) };
+
+  it('sans session → 401', async () => {
+    h.client = fakeClient({ getUser: () => ({ data: { user: null }, error: null }) });
+    const { DELETE } = await import('@/app/api/employees/[id]/route');
+    const res = await DELETE(get('/api/employees/membre-1'), ctx);
+    expect(res.status).toBe(401);
+  });
+
+  it('appelant qui n’est pas le patron → 403', async () => {
+    h.client = fakeClient({
+      getUser: () => ({ data: { user: { id: 'u1' } }, error: null }),
+      rpc: { get_business_owner_id: { data: 'owner-9', error: null } },
+    });
+    const { DELETE } = await import('@/app/api/employees/[id]/route');
+    const res = await DELETE(get('/api/employees/membre-1', { authorization: 'Bearer j' }), ctx);
+    expect(res.status).toBe(403);
+  });
+
+  it('membre hors de l’équipe (P0002) → 404', async () => {
+    h.client = fakeClient({
+      getUser: () => ({ data: { user: { id: 'u1' } }, error: null }),
+      rpc: {
+        get_business_owner_id: { data: 'u1', error: null },
+        business_members_remove: { data: null, error: { message: 'introuvable', code: 'P0002' } },
+      },
+    });
+    const { DELETE } = await import('@/app/api/employees/[id]/route');
+    const res = await DELETE(get('/api/employees/membre-1', { authorization: 'Bearer j' }), ctx);
+    expect(res.status).toBe(404);
+  });
+
+  it('patron → 200 (retrait du lien seulement)', async () => {
+    h.client = fakeClient({
+      getUser: () => ({ data: { user: { id: 'u1' } }, error: null }),
+      rpc: { get_business_owner_id: { data: 'u1', error: null } },
+    });
+    const { DELETE } = await import('@/app/api/employees/[id]/route');
+    const res = await DELETE(get('/api/employees/membre-1', { authorization: 'Bearer j' }), ctx);
+    expect(res.status).toBe(200);
+    expect((await res.json()).success).toBe(true);
   });
 });
 
