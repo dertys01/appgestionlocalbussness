@@ -609,6 +609,58 @@ describe('POST /api/stripe/webhook', () => {
     expect(res.status).toBe(200);
     expect((await res.json()).received).toBe(true);
   });
+
+  it('journalisation atomique indisponible : repli sur « déjà traité »', async () => {
+    stripeMock.constructEvent.mockReturnValue({
+      id: 'evt_3', type: 'customer.subscription.deleted',
+      data: { object: { metadata: { org_id: 'o1' } } },
+    });
+    h.client = fakeClient({
+      rpc: { claim_webhook_event: { data: null, error: { message: 'function claim_webhook_event does not exist' } } },
+      from: { webhook_events: { data: { status: 'processed' }, error: null } },
+    });
+    const { POST } = await import('@/app/api/stripe/webhook/route');
+    const res = await POST(post('/api/stripe/webhook', { id: 'evt_3' }, { 'stripe-signature': 'ok' }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).duplicate).toBe(true);
+  });
+
+  it('annulation : customer.subscription.deleted → 200', async () => {
+    stripeMock.constructEvent.mockReturnValue({
+      id: 'evt_4', type: 'customer.subscription.deleted',
+      data: { object: { metadata: { org_id: 'o1' } } },
+    });
+    h.client = fakeClient({ rpc: { claim_webhook_event: { data: true, error: null } } });
+    const { POST } = await import('@/app/api/stripe/webhook/route');
+    const res = await POST(post('/api/stripe/webhook', { id: 'evt_4' }, { 'stripe-signature': 'ok' }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).received).toBe(true);
+  });
+
+  it('checkout sans abonnement : rien à activer, 200', async () => {
+    stripeMock.constructEvent.mockReturnValue({
+      id: 'evt_5', type: 'checkout.session.completed',
+      data: { object: { metadata: { org_id: 'o1' }, subscription: null } },
+    });
+    h.client = fakeClient({ rpc: { claim_webhook_event: { data: true, error: null } } });
+    const { POST } = await import('@/app/api/stripe/webhook/route');
+    const res = await POST(post('/api/stripe/webhook', { id: 'evt_5' }, { 'stripe-signature': 'ok' }));
+    expect(res.status).toBe(200);
+  });
+
+  it('échec d’écriture : 500 (un paiement ne reste pas en Free en silence)', async () => {
+    stripeMock.constructEvent.mockReturnValue({
+      id: 'evt_6', type: 'customer.subscription.deleted',
+      data: { object: { metadata: { org_id: 'o1' } } },
+    });
+    h.client = fakeClient({
+      rpc: { claim_webhook_event: { data: true, error: null } },
+      from: { subscriptions: { data: null, error: { message: 'boom' } }, webhook_events: { data: null, error: null } },
+    });
+    const { POST } = await import('@/app/api/stripe/webhook/route');
+    const res = await POST(post('/api/stripe/webhook', { id: 'evt_6' }, { 'stripe-signature': 'ok' }));
+    expect(res.status).toBe(500);
+  });
 });
 
 // ─────────────────────────────────────────────────────────────

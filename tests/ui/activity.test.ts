@@ -38,4 +38,19 @@ describe('logActivity', () => {
     ).resolves.toBeUndefined();
     silence.mockRestore();
   });
+
+  it('utilise l’email comme nom quand actorName est absent', async () => {
+    h.insert.mockReturnValue({ error: null });
+    await logActivity({ ownerId: 'o1', actorId: 'u1', actorEmail: 'a@b.c', action: 'sale', description: 'Vente' });
+    expect(h.insert).toHaveBeenCalledWith(expect.objectContaining({ actor_name: 'a@b.c' }));
+  });
+
+  it('déclenche la purge échantillonnée sans lever', async () => {
+    h.insert.mockReturnValue({ error: null });
+    const rnd = vi.spyOn(Math, 'random').mockReturnValue(0); // force la purge
+    await expect(
+      logActivity({ ownerId: 'o1', actorId: 'u1', actorEmail: 'a@b.c', action: 'sale', description: 'Vente' })
+    ).resolves.toBeUndefined();
+    rnd.mockRestore();
+  });
 });
