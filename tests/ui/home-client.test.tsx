@@ -237,4 +237,14 @@ describe('home-client', () => {
     fireEvent.click(screen.getByRole('button', { name: 'import' }));
     expect(screen.getByText('MOD:Import')).toBeInTheDocument();
   });
+
+  it('le sélecteur Journal/Historique expose son état', () => {
+    render(<HomePage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Ventes' }));
+
+    expect(screen.getByRole('tab', { name: 'Journal' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('tab', { name: 'Historique' }));
+    expect(screen.getByRole('tab', { name: 'Historique' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('MOD:Historique')).toBeInTheDocument();
+  });
 });

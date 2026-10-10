@@ -22,8 +22,9 @@ describe('ReportsTab', () => {
 
   it('marque l’onglet actif pour l’accessibilité', () => {
     render(<ReportsTab view="expenses" onView={() => {}} />);
-    expect(screen.getByRole('button', { name: 'Charges' })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: 'Ventes' })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('tab', { name: 'Charges' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'Ventes' })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('tablist', { name: 'Vue des rapports' })).toBeInTheDocument();
     expect(screen.getByText('VUE-CHARGES')).toBeInTheDocument();
   });
 
@@ -31,9 +32,9 @@ describe('ReportsTab', () => {
     const onView = vi.fn();
     render(<ReportsTab view="profit" onView={onView} />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Charges' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Charges' }));
     expect(onView).toHaveBeenCalledWith('expenses');
-    fireEvent.click(screen.getByRole('button', { name: 'Ventes' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Ventes' }));
     expect(onView).toHaveBeenCalledWith('sales');
   });
 });

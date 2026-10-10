@@ -295,10 +295,11 @@ export function TeamModule() {
   return (
     <div className="space-y-4">
       {/* Tabs */}
-      <div className="flex gap-2">
+      <div className="flex gap-2" role="tablist" aria-label="Équipe et journal">
         <button
           onClick={() => setPanel('team')}
-          aria-pressed={panel === 'team'}
+          role="tab"
+          aria-selected={panel === 'team'}
           className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
             panel === 'team' ? 'bg-indigo-600 text-white' : 'border border-slate-200 text-slate-500 hover:bg-slate-50'
           }`}
@@ -307,7 +308,8 @@ export function TeamModule() {
         </button>
         <button
           onClick={() => setPanel('logs')}
-          aria-pressed={panel === 'logs'}
+          role="tab"
+          aria-selected={panel === 'logs'}
           className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
             panel === 'logs' ? 'bg-indigo-600 text-white' : 'border border-slate-200 text-slate-500 hover:bg-slate-50'
           }`}

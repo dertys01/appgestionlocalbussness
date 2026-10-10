@@ -110,7 +110,7 @@ describe('SettingsModule — facturation', () => {
   it('ouvre Stripe Checkout pour passer au plan supérieur', async () => {
     h.state.plan = 'starter';
     render(<SettingsModule />);
-    fireEvent.click(screen.getByRole('button', { name: /Abonnement/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /Abonnement/ }));
 
     fireEvent.click(await screen.findByRole('button', { name: /Passer/ }));
     await waitFor(() => expect(window.location.href).toBe('https://stripe/x'));
@@ -121,7 +121,7 @@ describe('SettingsModule — facturation', () => {
     h.state.plan = 'starter';
     h.state.fetch.mockImplementation(async () => json({ error: 'Stripe indisponible' }, false, 500));
     render(<SettingsModule />);
-    fireEvent.click(screen.getByRole('button', { name: /Abonnement/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /Abonnement/ }));
 
     fireEvent.click(await screen.findByRole('button', { name: /Passer/ }));
     await waitFor(() => expect(screen.getByText('Stripe indisponible')).toBeInTheDocument());
@@ -130,7 +130,7 @@ describe('SettingsModule — facturation', () => {
   it('ouvre le portail Stripe quand un plan est payant', async () => {
     h.state.plan = 'pro';
     render(<SettingsModule />);
-    fireEvent.click(screen.getByRole('button', { name: /Abonnement/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /Abonnement/ }));
 
     fireEvent.click(await screen.findByRole('button', { name: /Gérer/ }));
     await waitFor(() => expect(h.state.fetch).toHaveBeenCalledWith('/api/stripe/portal', expect.objectContaining({ method: 'POST' })));
@@ -138,7 +138,7 @@ describe('SettingsModule — facturation', () => {
 
   it('ouvre une page de paiement Mobile Money', async () => {
     render(<SettingsModule />);
-    fireEvent.click(screen.getByRole('button', { name: /Abonnement/ }));
+    fireEvent.click(screen.getByRole('tab', { name: /Abonnement/ }));
 
     fireEvent.click(await screen.findByRole('button', { name: /^Starter/ }));
     await waitFor(() => expect(window.location.href).toBe('https://pay/x'));

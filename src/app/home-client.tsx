@@ -393,9 +393,11 @@ export default function HomePage() {
                 <h2 className="text-xl font-bold text-slate-800">
                   {salesView === 'journal' ? 'Journal du jour' : 'Historique des ventes'}
                 </h2>
-                <div className="ml-auto flex rounded-lg bg-slate-100 p-0.5 text-sm">
+                <div className="ml-auto flex rounded-lg bg-slate-100 p-0.5 text-sm" role="tablist" aria-label="Vue des ventes">
                   <button
+                    role="tab"
                     onClick={() => setSalesView('journal')}
+                    aria-selected={salesView === 'journal'}
                     className={`px-3 py-1 rounded-md font-medium transition-colors ${
                       salesView === 'journal' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'
                     }`}
@@ -403,7 +405,9 @@ export default function HomePage() {
                     Journal
                   </button>
                   <button
+                    role="tab"
                     onClick={() => setSalesView('historique')}
+                    aria-selected={salesView === 'historique'}
                     className={`px-3 py-1 rounded-md font-medium transition-colors ${
                       salesView === 'historique' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-600'
                     }`}
