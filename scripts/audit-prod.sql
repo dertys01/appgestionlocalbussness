@@ -10,7 +10,7 @@
 --    MANQUANTE    = fonction absente de la base
 --    EN PLUS      = fonction présente en base mais pas dans le dépôt
 --
---  53 fonctions · ordre des sections = APPLY_MIGRATIONS.sql
+--  56 fonctions · ordre des sections = APPLY_MIGRATIONS.sql
 -- ============================================================================
 WITH expect(sig, brut_md5, code_md5) AS (
   VALUES
@@ -25,6 +25,7 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('business_members_remove(uuid)', '5f36ed6ff400cc61947a140820c5730f', '3fdd9d32586d3d98153089078ce2dd94'),
     ('business_members_set_role(uuid,text)', '89a1cd9f06512fb862d59d3a5da9a19b', '89f32a91dcf97b1cae903be3cb2c0c68'),
     ('can_manage_products()', '7c1b153eba2bc02e61338c6b4becb01e', '475b14d5a81518d7f37aa3849484189d'),
+    ('cancel_purchase_order(uuid)', 'cda9bc77c7b128799ada7dece149d688', '60b8ef867a7d04936fa7608ec0ba8c8f'),
     ('check_employee_limit()', '828a3a5f9922e321d185623e33fc04fb', 'f904113a6081292e40040c09e64daab8'),
     ('check_product_limit()', 'd64eeeeff7e006665fc411182193e1b9', '832d753ae1e76152276f0732c2897b51'),
     ('check_product_supplier_tenant()', 'a67a791a03cdd317a211be3c870759e6', '03adf983a5186d2d128430f334e6237f'),
@@ -32,6 +33,7 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('close_beta_program()', '28a8854e2d5e4e0ebf74288bfa0a0cae', '5a82cf9f604a045ca4f163abc3cd1650'),
     ('close_cash_session(numeric,text)', 'd1e5c3e2147d0ed81ee5961cd765a92a', '5d4188a21f7075822623e4399cfb9b50'),
     ('close_table_order(uuid,text,numeric,integer,text,text,numeric)', '0203a702c3229e4d060d929cfb7e1285', '3954e9994a8ec5e873973912f02ebd0a'),
+    ('create_purchase_order(uuid,jsonb,text)', '0ecdb36e9b685dae5820226869f2200c', '0bd09e22a9287cd7afd90f08f406f4d7'),
     ('create_sale(jsonb,text,text,text,text)', 'd57c23eaebf5d820bb157f57a6a3f65d', '6e48909dfa5123a80d60795dbbc118dc'),
     ('current_org_plan()', 'ca233084cdc9d653a98bd164a4eae2ac', 'db407b6e27b88cf7f4a0e454971fd30a'),
     ('dettes_a_relancer()', '7a77668c91d18e50b57f655efd059296', '8394e999b5a1b5ece8bf510fb16e8c5c'),
@@ -53,6 +55,7 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('product_cost(uuid,integer)', 'd33441e87e3ffd248893a7024af5ff0e', '0f48633b1895a064c9aaa646118ade47'),
     ('purge_accepted_invitations(uuid,integer)', 'ddeff8d4c129880458a3b22c50c17fc9', '463d9c590e8166ae26d1309daf44b4f8'),
     ('purge_rate_limits()', '4b7a9b9d63f02a306a83ab8f5e29aac7', '809045c7d82f9d32e142716d707faf44'),
+    ('receive_purchase_order(uuid)', 'a4e3ca9ed524c7b3dba4e5bf6225efaf', '0f872caa0fb27c144077be015245d544'),
     ('record_credit_sale(jsonb,text,text,text,numeric,text,text)', '648df951e01d4c3bf70acd4056df1498', '2e54595a4070ba57a0a42c4bbbd36a5b'),
     ('redeem_invitation(text,uuid,text)', '62597d5a8ef7b127a90c4354397b735e', '152bbebdabb4071781f1003954618caf'),
     ('require_feature(text)', '8e95a1aba9ea44b186021f6c44cad186', '58f6b3d5be92afdc51ce430688c49882'),

@@ -126,6 +126,8 @@ const ORDER = [
   'migration_hardening.sql',
   // Sessions de caisse : fond de caisse, clôture, écart espèces.
   'migration_cash_sessions.sql',
+  // Bons de commande fournisseur : création, réception (entrée en stock), annulation.
+  'migration_purchase_orders.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -5763,6 +5765,41 @@ console.log('\n▸ Sessions de caisse');
   await canWrite('40i. insertion directe refusée',
     `INSERT INTO cash_sessions (user_id, opened_by, opening_float)
      VALUES ('${PATRON}', '${PATRON}', 1)`, false, PATRON);
+}
+
+// ═══ 41. Bons de commande fournisseur ═══════════════════════
+console.log('\n▸ Bons de commande fournisseur');
+{
+  const PO = 'aaaaaaaa-0000-0000-0000-0000000000dd';
+  const F  = 'bbbbbbbb-0000-0000-0000-0000000000dd';
+  await q(`INSERT INTO products (id, user_id, name, sku, price_buy, price_sell, stock_qty, min_stock_level)
+           VALUES ('${PO}', '${PATRON}', 'Test commande', 'CMD', 100, 1000, 3, 1)`);
+  await q(`INSERT INTO suppliers (id, user_id, name) VALUES ('${F}', '${PATRON}', 'Grossiste Test')`);
+  await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+
+  const oid = (await q(
+    `SELECT create_purchase_order('${F}',
+       '[{"product_id":"${PO}","quantity":10,"unit_cost":80}]'::jsonb, 'Commande test') AS id`
+  )).rows[0].id;
+  check('41a. commande créée', !!oid);
+  check('41b. statut initial « ordered »',
+    (await q(`SELECT status FROM purchase_orders WHERE id='${oid}'`)).rows[0].status === 'ordered');
+  check('41c. le stock NE bouge PAS à la création', (await stock(PO)) === 3, `stock ${await stock(PO)}`);
+
+  await q(`SELECT receive_purchase_order('${oid}')`);
+  check('41d. réception : stock +10 (3 → 13)', (await stock(PO)) === 13, `stock ${await stock(PO)}`);
+  check('41e. statut « received »',
+    (await q(`SELECT status FROM purchase_orders WHERE id='${oid}'`)).rows[0].status === 'received');
+  check('41f. journal de stock écrit (restock)',
+    (await count(`SELECT count(*) FROM stock_logs WHERE reference_id='${oid}' AND movement_type='restock'`)) === 1);
+
+  let double = '';
+  try { await q(`SELECT receive_purchase_order('${oid}')`); } catch (ex) { double = ex.message; }
+  check('41g. double réception refusée', /plus en attente/i.test(double), double);
+
+  await canRead('41h. employé lit les commandes', `SELECT count(*) FROM purchase_orders`, true, EMPLOYE);
+  await canWrite('41i. insertion directe refusée',
+    `INSERT INTO purchase_orders (user_id, status) VALUES ('${PATRON}', 'ordered')`, false, PATRON);
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);

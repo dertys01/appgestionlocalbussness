@@ -2,6 +2,7 @@
 
 import { InventoryTable } from '@/components/inventory/InventoryTable';
 import { InventoryCount } from '@/components/inventory/InventoryCount';
+import { PurchaseOrdersModule } from '@/components/purchases/PurchaseOrdersModule';
 import type { Product } from '@/types';
 
 interface InventoryTabProps {
@@ -47,6 +48,7 @@ export function InventoryTab({
       ) : (
         <InventoryTable products={products} onEdit={onEdit} onRestock={onRestock} onAdd={onAdd} onImport={onImport} onRefresh={onRefresh} />
       )}
+      <PurchaseOrdersModule products={products} />
     </div>
   );
 }
