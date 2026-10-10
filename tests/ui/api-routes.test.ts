@@ -480,3 +480,60 @@ describe('POST /api/stripe/portal', () => {
     expect((await res.json()).url).toBe('https://billing.stripe.com/y');
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+describe('GET /api/health', () => {
+  const ORIG = {
+    url: process.env.NEXT_PUBLIC_SUPABASE_URL,
+    anon: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  };
+
+  afterEach(() => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = ORIG.url;
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = ORIG.anon;
+    vi.unstubAllGlobals();
+  });
+
+  it('configuration absente → 503', async () => {
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const { GET } = await import('@/app/api/health/route');
+    const res = await GET();
+    expect(res.status).toBe(503);
+    expect((await res.json()).raison).toBe('configuration');
+  });
+
+  it('base joignable (200 sur une table) → 200 { ok: true }', async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://proj.supabase.co';
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'sb_publishable_x';
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200 })));
+    const { GET } = await import('@/app/api/health/route');
+    const res = await GET();
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, db: true });
+  });
+
+  /**
+   * Le bug : depuis les clés `sb_publishable_…`, la racine `/rest/v1/` répond
+   * 401 et non 400. L'ancienne sonde ne l'acceptait pas et déclarait la base
+   * injoignable alors qu'elle répondait. Un 401 est désormais une panne (clé
+   * refusée), pas un signe de vie.
+   */
+  it('clé refusée (401) → 503', async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://proj.supabase.co';
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'mauvaise';
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401 })));
+    const { GET } = await import('@/app/api/health/route');
+    const res = await GET();
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ ok: false, db: false });
+  });
+
+  it('panne réseau → 503', async () => {
+    process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://proj.supabase.co';
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = 'sb_publishable_x';
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('réseau'); }));
+    const { GET } = await import('@/app/api/health/route');
+    const res = await GET();
+    expect(res.status).toBe(503);
+  });
+});

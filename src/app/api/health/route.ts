@@ -10,6 +10,12 @@ import { NextResponse } from 'next/server';
  * Le ping base est un appel REST léger (3 s de délai maximum) : on ne veut pas
  * qu'une base lente fasse traîner la sonde, ni qu'une sonde bloque une
  * fonction.
+ *
+ * On interroge une table réelle (`products`, une ligne) plutôt que la racine
+ * `/rest/v1/` : un 200 prouve les trois maillons — PostgREST joignable, clé
+ * acceptée, table lisible. La racine ne suffisait plus : depuis les clés
+ * `sb_publishable_…`, elle répond 401 (et non 400), ce qui faisait passer une
+ * base saine pour injoignable.
  */
 export async function GET() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -23,15 +29,15 @@ export async function GET() {
   try {
     const ctrl = new AbortController();
     const minuteur = setTimeout(() => ctrl.abort(), 3000);
-    const res = await fetch(`${url}/rest/v1/`, {
+    const res = await fetch(`${url}/rest/v1/products?select=id&limit=1`, {
       headers: { apikey: anon },
       signal: ctrl.signal,
       cache: 'no-store',
     });
     clearTimeout(minuteur);
-    // 200 = OK ; 400 = l'API répond (requête vide invalide) — les deux prouvent
-    // que PostgREST est joignable.
-    db = res.ok || res.status === 400;
+    // 200 = PostgREST joignable ET clé acceptée. Un 401 (clé invalide) ou un
+    // 5xx est une panne pour le commerce : on ne le masque pas.
+    db = res.ok;
   } catch {
     db = false;
   }
