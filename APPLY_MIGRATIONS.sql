@@ -9642,7 +9642,7 @@ DECLARE
   t text;
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
-    FOREACH t IN ARRAY ARRAY['products', 'sales', 'customer_debts', 'restaurant_orders', 'restaurant_order_items'] LOOP
+    FOREACH t IN ARRAY ARRAY['products', 'sales', 'customer_debts', 'restaurant_orders', 'restaurant_order_items', 'restaurant_reservations'] LOOP
       IF to_regclass('public.' || t) IS NOT NULL
          AND NOT EXISTS (
            SELECT 1 FROM pg_publication_tables

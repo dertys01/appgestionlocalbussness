@@ -113,6 +113,19 @@ describe('printKitchenTicket', () => {
     expect(html).not.toContain('<script>');
   });
 
+  it('rend « À emporter » sans table, et la référence de commande', async () => {
+    const c = capturer();
+    printKitchenTicket({ ...ticket, orderId: 'abcdef12-3456', tableName: null, zone: null });
+    await new Promise((r) => setTimeout(r, 0));
+    c.restore();
+
+    const html = c.blobs.filter((b) => b !== '__blob__').join('');
+    expect(html).toContain('À emporter');
+    expect(html).not.toContain('Table 3');
+    // La référence courte est imprimée (le champ existait sans être rendu).
+    expect(html).toContain('n° abcdef');
+  });
+
   it('signale une fenêtre bloquée au lieu de marquer la commande partie', () => {
     // Le cas réel : un téléphone où l'utilisateur a bloqué les fenêtres. La
     // fonction doit RENDRE FALSE — l'appelant garde alors la commande « à

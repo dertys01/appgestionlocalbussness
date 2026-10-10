@@ -613,7 +613,6 @@ export function FloorModule({
    * tous les cas, et le montant facturé est lu dans les lignes de commande. Le
    * caissier fait le geste, pas le chiffre d'affaires.
    */
-  const peutEncaisser = true;
 
   /**
    * Qui règle la carte du jour ? Le patron et les managers.
@@ -988,7 +987,7 @@ export function FloorModule({
         </div>
       )}
 
-      {peutEncaisser && orderId === null && (
+      {orderId === null && (
         <button
           onClick={openTakeaway}
           disabled={busy}
@@ -1236,24 +1235,17 @@ export function FloorModule({
                     </div>
                   )}
 
-                  {peutEncaisser ? (
-                    <Button
-                      onClick={closeOrder}
-                      disabled={closing}
-                      className="bg-emerald-700 hover:bg-emerald-800 gap-2"
-                    >
-                      {closing
-                        ? <><Loader2 className="h-4 w-4 animate-spin" /> Encaissement…</>
-                        : <><CheckCircle2 className="h-4 w-4" /> {payment === 'credit' ? 'Céder à crédit' : 'Encaisser'} {formatCFA(totalLignes)}</>}
-                    </Button>
-                  ) : (
-                    /* Ne devrait pas arriver : tout membre de l'équipe encaisse.
-                        Le message reste, pour qu'une régression future se voie
-                        au lieu de disparaître en silence. */
-                    <p className="text-xs text-slate-500">
-                      Demandez au patron de solder l&apos;addition.
-                    </p>
-                  )}
+                  {/* Tout membre de l'équipe encaisse (voir la décision
+                      documentée plus haut) : plus de branche « seul le patron ». */}
+                  <Button
+                    onClick={closeOrder}
+                    disabled={closing}
+                    className="bg-emerald-700 hover:bg-emerald-800 gap-2"
+                  >
+                    {closing
+                      ? <><Loader2 className="h-4 w-4 animate-spin" /> Encaissement…</>
+                      : <><CheckCircle2 className="h-4 w-4" /> {payment === 'credit' ? 'Céder à crédit' : 'Encaisser'} {formatCFA(totalLignes)}</>}
+                  </Button>
                 </div>
               </div>
             )}

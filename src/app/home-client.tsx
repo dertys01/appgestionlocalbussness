@@ -25,6 +25,7 @@ import { ReportsTab } from '@/components/reports/ReportsTab';
 import { ForecastModule } from '@/components/forecast/ForecastModule';
 import { FloorModule } from '@/components/restaurant/FloorModule';
 import { RecipesModule } from '@/components/restaurant/RecipesModule';
+import { ReservationsModule } from '@/components/restaurant/ReservationsModule';
 import { TeamModule } from '@/components/team/TeamModule';
 import { ProductForm } from '@/components/products/ProductForm';
 import { RestockModal } from '@/components/products/RestockModal';
@@ -438,6 +439,7 @@ export default function HomePage() {
               {/* La salle ne vend rien : le stock n'est touché qu'à la clôture
                   (Sprint 14), donc aucun rafraîchissement des produits ici. */}
               <FloorModule products={products} onChanged={fetchProducts} />
+              <ReservationsModule />
             </div>
           )}
 

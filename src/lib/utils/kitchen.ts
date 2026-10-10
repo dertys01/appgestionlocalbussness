@@ -81,6 +81,10 @@ export function printKitchenTicket(ticket: KitchenTicket): boolean {
           ticket.zone ? ` (${escapeHtml(ticket.zone)})` : ''
         }</div>`
       : `<div class="bold">À emporter</div>`,
+    // Référence courte : rapproche le papier d'une commande à l'écran quand
+    // plusieurs tickets circulent en cuisine (le champ existait mais n'était
+    // jamais imprimé).
+    `<div class="label">n° ${escapeHtml(ticket.orderId.slice(0, 6))}</div>`,
     heure ? `<div class="label">ouvert à ${escapeHtml(heure)}</div>` : '',
     `<div class="label">${escapeHtml(ticket.items.length)} ligne(s)</div>`,
     `</div><div class="divider"></div>`,

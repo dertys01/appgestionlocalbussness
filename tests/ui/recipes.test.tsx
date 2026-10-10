@@ -9,7 +9,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
  * L'écriture passe par add_recipe_ingredient(), pas par un INSERT direct.
  */
 
-const { plats, ingredients, rpc, differes } = vi.hoisted(() => {
+const { plats, ingredients, rpc, differes, acteur } = vi.hoisted(() => {
   const plats: unknown[] = [];
   const ingredients: unknown[] = [];
   const rpc = vi.fn(async () => ({ data: null, error: null }));
@@ -20,7 +20,9 @@ const { plats, ingredients, rpc, differes } = vi.hoisted(() => {
     actif: false,
     files: [] as Array<{ dish: string; finir: (v: unknown) => void }>,
   };
-  return { plats, ingredients, rpc, differes };
+  // Rôle mutable : permet de tester le chemin « simple caissier » (lecture seule).
+  const acteur = { canManage: true };
+  return { plats, ingredients, rpc, differes, acteur };
 });
 
 const chaine = (donnees: unknown) => {
@@ -69,7 +71,7 @@ vi.mock('@/components/providers/SupabaseProvider', () => ({
     ownerId: 'org-1',
     actorName: 'Recette',
     user: { id: 'u1', email: 'a@b.c' },
-    canManageProducts: true,
+    canManageProducts: acteur.canManage,
     isEmployee: false,
     org: { domain: 'restaurant' },
   }),
@@ -289,6 +291,31 @@ describe('RecipesModule — le coût de revient d\'un plat', () => {
     } finally {
       differes.actif = false;
       differes.files.length = 0;
+    }
+  });
+
+  /**
+   * Chemin « simple caissier » : la recette se consulte, elle ne se modifie pas.
+   *
+   * Le coût de revient reste affiché (c'est une information de service), mais
+   * la gestion des options — qui écrit en base — disparaît. Le rôle vivait
+   * dans le code sans test : une régression qui rouvrirait l'écriture à un
+   * caissier serait passée inaperçue.
+   */
+  it("cache la gestion des options à un simple caissier (lecture seule)", async () => {
+    acteur.canManage = false;
+    definirPlats(PLAT);
+    try {
+      render(<RecipesModule />);
+      await waitFor(() => expect(screen.getByLabelText(/Plat à composer/i)).toBeInTheDocument());
+      fireEvent.change(screen.getByLabelText(/Plat à composer/i), { target: { value: 'p1' } });
+
+      // Le calcul reste : le caissier a le droit de savoir ce que coûte le plat.
+      await waitFor(() => expect(screen.getByText('165 F')).toBeInTheDocument());
+      // La carte d'écriture, elle, n'existe pas.
+      expect(screen.queryByText(/Options de Poulet braisé/i)).toBeNull();
+    } finally {
+      acteur.canManage = true;
     }
   });
 });
