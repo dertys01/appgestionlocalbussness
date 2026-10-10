@@ -10,7 +10,7 @@
 --    MANQUANTE    = fonction absente de la base
 --    EN PLUS      = fonction présente en base mais pas dans le dépôt
 --
---  51 fonctions · ordre des sections = APPLY_MIGRATIONS.sql
+--  53 fonctions · ordre des sections = APPLY_MIGRATIONS.sql
 -- ============================================================================
 WITH expect(sig, brut_md5, code_md5) AS (
   VALUES
@@ -30,6 +30,7 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('check_product_supplier_tenant()', 'a67a791a03cdd317a211be3c870759e6', '03adf983a5186d2d128430f334e6237f'),
     ('claim_webhook_event(text,text,text)', '40a1a3cbee1bf96bae5f60debca639fa', '0c164db9340e69ec622cd45bae135cb4'),
     ('close_beta_program()', '28a8854e2d5e4e0ebf74288bfa0a0cae', '5a82cf9f604a045ca4f163abc3cd1650'),
+    ('close_cash_session(numeric,text)', 'd1e5c3e2147d0ed81ee5961cd765a92a', '5d4188a21f7075822623e4399cfb9b50'),
     ('close_table_order(uuid,text,numeric,integer,text,text,numeric)', '0203a702c3229e4d060d929cfb7e1285', '3954e9994a8ec5e873973912f02ebd0a'),
     ('create_sale(jsonb,text,text,text,text)', 'd57c23eaebf5d820bb157f57a6a3f65d', '6e48909dfa5123a80d60795dbbc118dc'),
     ('current_org_plan()', 'ca233084cdc9d653a98bd164a4eae2ac', 'db407b6e27b88cf7f4a0e454971fd30a'),
@@ -46,6 +47,7 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('get_units_sold_since(integer)', '8f74000cae984ddf44cf1a6a78ffe3e2', '6b45edfae71cd3b4be3816ad3c959550'),
     ('marquer_relance(uuid)', '17d82722d6179dd487dd1ab67d258948', '3fd61fb19fa1f0010e87d02ad48706b5'),
     ('normalize_phone(text)', '560e755f78d2debe862a2814cddae112', '3f8addb8c5e4fbf0ace0ccbceeeda9cc'),
+    ('open_cash_session(numeric)', '996128475c5cda3f3db339c96d3b7f82', 'd7c91c30eda660e8de44c21795ff6cb3'),
     ('organizations_reject_plan_change()', '9ee6f5d51d38737a7dc107f3f92caf88', 'feb8216cb154d6953576fe38198dc44a'),
     ('pay_customer_debt(uuid,numeric,text,text)', 'c2464b9cb0a7397a2a09d56032533efe', '1c514fcfadaf0642d540b8318727872c'),
     ('product_cost(uuid,integer)', 'd33441e87e3ffd248893a7024af5ff0e', '0f48633b1895a064c9aaa646118ade47'),

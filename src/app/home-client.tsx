@@ -37,6 +37,7 @@ import { normalizeOnboardingStep } from '@/lib/onboarding';
 import { OrgLoadFailed } from '@/components/onboarding/OrgLoadFailed';
 import { OrgSetupRequired } from '@/components/onboarding/OrgSetupRequired';
 import { DashboardTab } from '@/components/dashboard/DashboardTab';
+import { CashSessionCard } from '@/components/cash/CashSessionCard';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { useSupabase } from '@/components/providers/SupabaseProvider';
@@ -342,17 +343,20 @@ export default function HomePage() {
           <ErrorBoundary zone={tab}>
           {/* ── Dashboard ── */}
           {tab === 'dashboard' && (
-            <DashboardTab
-              products={products}
-              loadingProducts={loadingProducts}
-              canManageProducts={canManageProducts}
-              onNewSale={() => setTab('pos')}
-              onAddProduct={openAdd}
-              onRestock={openRestock}
-              today={today}
-              todayError={todayError}
-              onOpenDebts={modulesActifs.includes('debts') ? () => setTab('debts') : undefined}
-            />
+            <div className="space-y-4">
+              <DashboardTab
+                products={products}
+                loadingProducts={loadingProducts}
+                canManageProducts={canManageProducts}
+                onNewSale={() => setTab('pos')}
+                onAddProduct={openAdd}
+                onRestock={openRestock}
+                today={today}
+                todayError={todayError}
+                onOpenDebts={modulesActifs.includes('debts') ? () => setTab('debts') : undefined}
+              />
+              <CashSessionCard />
+            </div>
           )}
 
           {tab === 'pos' && (

@@ -124,6 +124,8 @@ const ORDER = [
   // Durcissement (S-4) : anon/authenticated ne peuvent plus créer d'objets
   // dans le schéma public.
   'migration_hardening.sql',
+  // Sessions de caisse : fond de caisse, clôture, écart espèces.
+  'migration_cash_sessions.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -5714,6 +5716,53 @@ console.log('\n▸ Relances automatiques (rappel programmé, Starter+)');
   check('39d. en authenticated : quota retiré → insertion repasse (fail-open)',
     passe39d, detail39d);
   await e(`RESET ROLE`);
+}
+
+// ═══ 40. Sessions de caisse ═════════════════════════════════
+console.log('\n▸ Sessions de caisse');
+{
+  const CS = 'aaaaaaaa-0000-0000-0000-0000000000cc';
+  await q(`INSERT INTO products (id, user_id, name, sku, price_buy, price_sell, stock_qty, min_stock_level)
+           VALUES ('${CS}', '${PATRON}', 'Test caisse', 'CAISSE', 100, 1000, 50, 1)`);
+
+  await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
+
+  // 40a. Ouverture. `SELECT * FROM f()` (et non `SELECT (f()).*`) : dans
+  // PGlite, la seconde forme évalue la fonction une fois PAR COLONNE, donc la
+  // 2ᵉ évaluation voit déjà la caisse ouverte. PostgREST, lui, utilise la
+  // première forme — c'est donc celle-ci qui reflète le vrai appel client.
+  const ouv = (await q(`SELECT * FROM open_cash_session(5000)`)).rows[0];
+  check('40a. ouverture : fond 5000, caisse ouverte',
+    Number(ouv.opening_float) === 5000 && ouv.closed_at === null, JSON.stringify(ouv));
+
+  // 40b. Une seconde caisse ouverte est refusée (un seul tiroir par boutique).
+  let double = '';
+  try { await q(`SELECT open_cash_session(1000)`); } catch (ex) { double = ex.message; }
+  check('40b. une seconde caisse ouverte est refusée', /déjà ouverte/i.test(double), double);
+
+  // 40c-40e. Vente espèces de 2 × 1000 = 2000, puis clôture à 7000.
+  await q(`SELECT create_sale('[{"product_id":"${CS}","quantity":2}]'::jsonb, 'cash')`);
+  const fer = (await q(`SELECT * FROM close_cash_session(7000)`)).rows[0];
+  check('40c. attendu = fond (5000) + espèces (2000)', Number(fer.expected_cash) === 7000, `attendu ${fer.expected_cash}`);
+  check('40d. écart nul quand le compté correspond', Number(fer.difference) === 0, `écart ${fer.difference}`);
+  check('40e. la caisse est fermée', fer.closed_at !== null);
+
+  // 40f. Re-clôturer est refusé : plus aucune caisse ouverte.
+  let reclose = '';
+  try { await q(`SELECT close_cash_session(7000)`); } catch (ex) { reclose = ex.message; }
+  check('40f. re-clôture refusée', /Aucune caisse ouverte/i.test(reclose), reclose);
+
+  // 40g. Un écart est bien signé : fond 1000 + 1000 vendus, compté 1900 → −100.
+  await q(`SELECT open_cash_session(1000)`);
+  await q(`SELECT create_sale('[{"product_id":"${CS}","quantity":1}]'::jsonb, 'cash')`);
+  const fer2 = (await q(`SELECT * FROM close_cash_session(1900)`)).rows[0];
+  check('40g. écart négatif détecté', Number(fer2.difference) === -100, `écart ${fer2.difference}`);
+
+  // 40h-40i. RLS : l'employé lit la caisse, mais aucune écriture directe.
+  await canRead('40h. employé lit la caisse', `SELECT count(*) FROM cash_sessions`, true, EMPLOYE);
+  await canWrite('40i. insertion directe refusée',
+    `INSERT INTO cash_sessions (user_id, opened_by, opening_float)
+     VALUES ('${PATRON}', '${PATRON}', 1)`, false, PATRON);
 }
 
 console.log(`\n${failures === 0 ? '✅' : '❌'} ${failures} échec(s)`);
