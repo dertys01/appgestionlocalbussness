@@ -537,3 +537,40 @@ describe('GET /api/health', () => {
     expect(res.status).toBe(503);
   });
 });
+
+// ─────────────────────────────────────────────────────────────
+describe('GET /api/employees', () => {
+  it('sans session → 401', async () => {
+    h.client = fakeClient({ getUser: () => ({ data: { user: null }, error: null }) });
+    const { GET } = await import('@/app/api/employees/route');
+    const res = await GET(get('/api/employees'));
+    expect(res.status).toBe(401);
+  });
+
+  it('un employé (pas le patron) → 403', async () => {
+    h.client = fakeClient({
+      getUser: () => ({ data: { user: { id: 'u1' } }, error: null }),
+      rpc: { get_business_owner_id: { data: 'owner-9', error: null } },
+    });
+    const { GET } = await import('@/app/api/employees/route');
+    const res = await GET(get('/api/employees', { authorization: 'Bearer j' }));
+    expect(res.status).toBe(403);
+  });
+
+  it('le patron → 200 avec ses membres', async () => {
+    h.client = fakeClient({
+      getUser: () => ({ data: { user: { id: 'u1' } }, error: null }),
+      rpc: { get_business_owner_id: { data: 'u1', error: null } },
+      from: {
+        business_members: {
+          data: [{ id: 'm1', member_id: 'u2', member_name: 'Marie', role: 'employee', created_at: '' }],
+          error: null,
+        },
+      },
+    });
+    const { GET } = await import('@/app/api/employees/route');
+    const res = await GET(get('/api/employees', { authorization: 'Bearer j' }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).members[0].member_name).toBe('Marie');
+  });
+});
