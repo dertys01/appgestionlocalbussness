@@ -46,7 +46,7 @@ vi.mock('stripe', () => ({
 // ── Faux client Supabase ────────────────────────────────────
 // Builder thenable : chaque maillon (select/eq/…) renvoie le builder, et
 // `maybeSingle`/`single`/`await` renvoient le résultat configuré.
-type Rep = { data: unknown; error: { message: string; code?: string } | null };
+type Rep = { data: unknown; error: { message: string; code?: string } | null; count?: number };
 
 function builder(result: Rep): Record<string, unknown> {
   const b: Record<string, unknown> = {};
@@ -393,6 +393,81 @@ describe('DELETE /api/employees/[id]', () => {
     });
     const { DELETE } = await import('@/app/api/employees/[id]/route');
     const res = await DELETE(get('/api/employees/membre-1', { authorization: 'Bearer j' }), ctx);
+    expect(res.status).toBe(200);
+    expect((await res.json()).success).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+describe('/api/invitations', () => {
+  const patron = (from: Record<string, Rep> = {}) => fakeClient({
+    getUser: () => ({ data: { user: { id: 'u1' } }, error: null }),
+    rpc: { get_business_owner_id: { data: 'u1', error: null } },
+    from,
+  });
+  const org = (plan: string) => ({ organizations: { data: { plan, trial_ends_at: null, plan_valid_until: null }, error: null } });
+
+  it('GET sans session → 401', async () => {
+    h.client = fakeClient({ getUser: () => ({ data: { user: null }, error: null }) });
+    const { GET } = await import('@/app/api/invitations/route');
+    const res = await GET(get('/api/invitations'));
+    expect(res.status).toBe(401);
+  });
+
+  it('GET patron → 200 avec ses invitations', async () => {
+    h.client = patron({
+      employee_invitations: { data: [{ id: 'i1', email: 'a@b.c', role: 'employee', created_at: '', expires_at: '' }], error: null },
+    });
+    const { GET } = await import('@/app/api/invitations/route');
+    const res = await GET(get('/api/invitations', { authorization: 'Bearer j' }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).invitations[0].email).toBe('a@b.c');
+  });
+
+  it('POST email invalide → 400', async () => {
+    h.client = patron();
+    const { POST } = await import('@/app/api/invitations/route');
+    const res = await POST(post('/api/invitations', { email: 'pas-un-email' }, { authorization: 'Bearer j' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('POST réutilise un lien en attente pour la même adresse', async () => {
+    h.client = patron({
+      employee_invitations: { data: { id: 'i1', email: 'a@b.c', token: 'hash', expires_at: '2099-01-01T00:00:00Z' }, error: null },
+    });
+    const { POST } = await import('@/app/api/invitations/route');
+    const res = await POST(post('/api/invitations', { email: 'employe@boutique.com' }, { authorization: 'Bearer j' }));
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.reused).toBe(true);
+    expect(body.url).toContain('/invitation/');
+  });
+
+  it('POST refuse au-delà de 20 invitations en attente → 429', async () => {
+    h.client = patron({ employee_invitations: { data: null, error: null, count: 20 } });
+    const { POST } = await import('@/app/api/invitations/route');
+    const res = await POST(post('/api/invitations', { email: 'nouveau@boutique.com' }, { authorization: 'Bearer j' }));
+    expect(res.status).toBe(429);
+  });
+
+  it('POST refuse au-delà du quota du plan → 403', async () => {
+    h.client = patron(org('free')); // plan gratuit : 0 employé
+    const { POST } = await import('@/app/api/invitations/route');
+    const res = await POST(post('/api/invitations', { email: 'nouveau@boutique.com' }, { authorization: 'Bearer j' }));
+    expect(res.status).toBe(403);
+  });
+
+  it('DELETE sans identifiant → 400', async () => {
+    h.client = patron();
+    const { DELETE } = await import('@/app/api/invitations/route');
+    const res = await DELETE(get('/api/invitations', { authorization: 'Bearer j' }));
+    expect(res.status).toBe(400);
+  });
+
+  it('DELETE patron → 200', async () => {
+    h.client = patron();
+    const { DELETE } = await import('@/app/api/invitations/route');
+    const res = await DELETE(get('/api/invitations?id=i1', { authorization: 'Bearer j' }));
     expect(res.status).toBe(200);
     expect((await res.json()).success).toBe(true);
   });
