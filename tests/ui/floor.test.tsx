@@ -184,6 +184,9 @@ beforeEach(() => {
   updates.length = 0;
   inserts.length = 0;
   prises.length = 0;
+  // Les appels RPC s'accumulaient d'un test à l'autre : un `find` renvoyait un
+  // appel d'un test précédent. On vide, comme pour les inserts.
+  supabase.rpc.mockClear();
   vi.mocked(printKitchenTicket).mockClear();
 });
 
@@ -733,5 +736,43 @@ fireEvent.click(screen.getAllByText('Poulet braisé')[0]);
     await waitFor(() => expect(screen.getByText(/au moins un jour/i)).toBeInTheDocument());
 
     (produits[0] as unknown as { menu_days: number[] | null }).menu_days = null;
+  });
+
+  it('cède une addition à crédit avec le téléphone du client', async () => {
+    definirSalle(table({ order_id: 'cmd-9', status: 'open' }));
+    definirCommande(plat);
+    render(<FloorModule products={produits} />);
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Table 1'));
+    // Le panneau et ses lignes arrivent en asynchrone : on attend le bouton
+    // d'encaissement (rendu seulement quand les lignes sont là).
+    await screen.findByRole('button', { name: /Encaisser/ });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Crédit' }));
+    fireEvent.change(screen.getByLabelText('Téléphone du client (crédit)'), { target: { value: '97000000' } });
+    fireEvent.click(screen.getByRole('button', { name: /Céder à crédit/i }));
+
+    await waitFor(() => {
+      const appel = supabase.rpc.mock.calls.find(([fn]) => fn === 'close_table_order');
+      expect(appel?.[1]).toEqual(expect.objectContaining({
+        p_payment_method: 'credit',
+        p_client_phone: '97000000',
+      }));
+    });
+  });
+
+  it('refuse de céder à crédit sans téléphone (rien n\'est écrit)', async () => {
+    definirSalle(table({ order_id: 'cmd-9', status: 'open' }));
+    definirCommande(plat);
+    render(<FloorModule products={produits} />);
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Table 1'));
+    await screen.findByRole('button', { name: /Encaisser/ });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Crédit' }));
+    fireEvent.click(screen.getByRole('button', { name: /Céder à crédit/i }));
+
+    await waitFor(() => expect(screen.getByText(/numéro de téléphone est requis/i)).toBeInTheDocument());
+    expect(supabase.rpc.mock.calls.some(([fn]) => fn === 'close_table_order')).toBe(false);
   });
 });

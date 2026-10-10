@@ -235,7 +235,13 @@ export function FloorModule({
     setTables((plan.data ?? []) as TableRow[]);
     // Une erreur sur la seconde lecture ne doit pas masquer le plan déjà reçu :
     // on la signale et on laisse la liste vide au pire.
-    if (emporter.error) { setError(emporter.error.message); return; }
+    if (emporter.error) {
+      // On vide la liste : garder des tuiles « à emporter » périmées sous un
+      // bandeau d'erreur laissait le serveur reprendre une commande fantôme.
+      setError(emporter.error.message);
+      setPrises([]);
+      return;
+    }
     setPrises(
       Array.isArray(emporter.data) ? (emporter.data as TakeawayRow[]) : []
     );
@@ -583,7 +589,11 @@ export function FloorModule({
   // chacun est donc purement visuelle, et c'est le total qu'on encaisse.
   const [splitCount, setSplitCount] = useState(1);
   const [splitOpen, setSplitOpen] = useState(false);
-  const [payment, setPayment] = useState<'cash' | 'momo'>('cash');
+  const [payment, setPayment] = useState<'cash' | 'momo' | 'credit'>('cash');
+  // Crédit de table (Sprint 16) : le téléphone est obligatoire (la dette doit
+  // être rattachable), l'acompte est ce qui est versé à la clôture.
+  const [creditPhone, setCreditPhone] = useState('');
+  const [creditAdvance, setCreditAdvance] = useState('');
   // Pourboire laissé sur la table. Il est enregistré mais HORS du chiffre
   // d'affaires : c'est une manne, pas une recette.
   const [tip, setTip] = useState(0);
@@ -618,6 +628,13 @@ export function FloorModule({
 
   const closeOrder = async () => {
     if (!orderId) return;
+    // Une addition à crédit exige un numéro : sans lui, la dette n'est
+    // rattachable à personne. On le dit avant d'appeler, comme le serveur.
+    if (payment === 'credit' && !creditPhone.trim()) {
+      setError('Un numéro de téléphone est requis pour une addition à crédit.');
+      return;
+    }
+    const avance = payment === 'credit' ? (lireMontant(creditAdvance) ?? 0) : 0;
     setClosing(true);
     setError('');
     const { data, error: err } = await db.rpc('close_table_order', {
@@ -625,10 +642,8 @@ export function FloorModule({
       p_payment_method: payment,
       p_split_count: splitCount,
       p_tip: tip,
-      // Une addition à crédit exige un numéro : close_table_order() le refuse
-      // sans, sinon la dette ne serait rattachable à personne. L'écran ne
-      // l'expose pas encore — c'est une brique du Sprint 16.
-      p_client_phone: null,
+      p_client_phone: payment === 'credit' ? creditPhone.trim() : null,
+      p_amount_paid: avance,
     });
     setClosing(false);
     if (err) { setError(err.message); return; }
@@ -659,6 +674,8 @@ export function FloorModule({
     // (choix de l'autre table). La commande précédente les a consommés.
     setSplitCount(2);
     setPayment('cash');
+    setCreditPhone('');
+    setCreditAdvance('');
     await loadTables();
   };
 
@@ -825,6 +842,7 @@ export function FloorModule({
               {formatCFA(closed.total)}
               {closed.invoice ? ` · facture ${closed.invoice}` : ''}
               {closed.perShare !== closed.total ? ` · ${formatCFA(closed.perShare)} par part` : ''}
+              {closed.paid < closed.total ? ` · ${formatCFA(closed.paid)} versés, ${formatCFA(closed.total - closed.paid)} à recouvrer` : ''}
               {closed.tip > 0 ? ` · pourboire ${formatCFA(closed.tip)} (hors CA)` : ''}
             </p>
             <button
@@ -1132,7 +1150,7 @@ export function FloorModule({
                         <button
                           onClick={() => setSplitCount((n) => Math.max(2, n - 1))}
                           aria-label="Moins de parts"
-                          className="h-7 w-7 rounded-lg border border-slate-200 text-slate-600"
+                          className="h-11 w-11 rounded-lg border border-slate-200 text-slate-600"
                         >
                           −
                         </button>
@@ -1140,7 +1158,7 @@ export function FloorModule({
                         <button
                           onClick={() => setSplitCount((n) => Math.min(20, n + 1))}
                           aria-label="Plus de parts"
-                          className="h-7 w-7 rounded-lg border border-slate-200 text-slate-600"
+                          className="h-11 w-11 rounded-lg border border-slate-200 text-slate-600"
                         >
                           +
                         </button>
@@ -1183,7 +1201,7 @@ export function FloorModule({
 
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="flex rounded-lg border border-slate-200 overflow-hidden">
-                    {(['cash', 'momo'] as const).map((m) => (
+                    {(['cash', 'momo', 'credit'] as const).map((m) => (
                       <button
                         key={m}
                         onClick={() => setPayment(m)}
@@ -1192,10 +1210,31 @@ export function FloorModule({
                           payment === m ? 'bg-indigo-600 text-white' : 'bg-white text-slate-600'
                         }`}
                       >
-                        {m === 'cash' ? 'Espèces' : 'Mobile Money'}
+                        {m === 'cash' ? 'Espèces' : m === 'momo' ? 'Mobile Money' : 'Crédit'}
                       </button>
                     ))}
                   </div>
+
+                  {payment === 'credit' && (
+                    <div className="w-full flex flex-col sm:flex-row gap-2">
+                      <Input
+                        value={creditPhone}
+                        onChange={(e) => setCreditPhone(e.target.value)}
+                        inputMode="tel"
+                        placeholder="Téléphone du client (obligatoire)"
+                        aria-label="Téléphone du client (crédit)"
+                        className="flex-1"
+                      />
+                      <Input
+                        value={creditAdvance}
+                        onChange={(e) => setCreditAdvance(e.target.value)}
+                        inputMode="decimal"
+                        placeholder="Acompte versé (F)"
+                        aria-label="Acompte versé"
+                        className="sm:w-48"
+                      />
+                    </div>
+                  )}
 
                   {peutEncaisser ? (
                     <Button
@@ -1205,7 +1244,7 @@ export function FloorModule({
                     >
                       {closing
                         ? <><Loader2 className="h-4 w-4 animate-spin" /> Encaissement…</>
-                        : <><CheckCircle2 className="h-4 w-4" /> Encaisser {formatCFA(totalLignes)}</>}
+                        : <><CheckCircle2 className="h-4 w-4" /> {payment === 'credit' ? 'Céder à crédit' : 'Encaisser'} {formatCFA(totalLignes)}</>}
                     </Button>
                   ) : (
                     /* Ne devrait pas arriver : tout membre de l'équipe encaisse.
