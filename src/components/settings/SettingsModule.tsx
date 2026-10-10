@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Save, Loader2, CreditCard, Zap, CheckCircle, ExternalLink, Building2, Globe, Smartphone, CalendarClock, X } from 'lucide-react';
+import { Save, Loader2, CreditCard, Zap, CheckCircle, ExternalLink, Building2, Globe, Smartphone, CalendarClock, X, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
@@ -15,6 +15,7 @@ import { formatCFA } from '@/lib/utils/currency';
 import { normalizeDomain, normalizeUiMode, DOMAIN_LABELS, DOMAIN_DESCRIPTIONS, type Domain, type UiMode } from '@/lib/modules';
 import { ifuValide } from '@/lib/mecef/gate';
 import { useLiaisonMecef } from '@/lib/hooks/useLiaisonMecef';
+import { construireSauvegarde, telechargerSauvegarde } from '@/lib/utils/sauvegarde';
 import type { Plan } from '@/types';
 
 /**
@@ -42,10 +43,25 @@ const PLANS: { id: Plan; features: string[] }[] = [
 ];
 
 export function SettingsModule() {
-  const { supabase, org, plan, refreshOrg, user } = useSupabase();
+  const { supabase, org, plan, refreshOrg, user, isEmployee } = useSupabase();
   const [tab, setTab] = useState<'org' | 'billing'>('org');
   /** Verrou de délivrance des factures : IFU + connexion e-MECeF. */
   const connexionMecef = useLiaisonMecef();
+
+  // Sauvegarde complète des données (propriétaire uniquement).
+  const [sauvegardeEnCours, setSauvegardeEnCours] = useState(false);
+  const [sauvegardeErreur, setSauvegardeErreur] = useState('');
+  const sauvegarder = async () => {
+    setSauvegardeEnCours(true);
+    setSauvegardeErreur('');
+    try {
+      telechargerSauvegarde(await construireSauvegarde(supabase));
+    } catch (e) {
+      setSauvegardeErreur(e instanceof Error ? e.message : 'Sauvegarde impossible.');
+    } finally {
+      setSauvegardeEnCours(false);
+    }
+  };
 
   // Org form
   const [orgName, setOrgName] = useState(org?.name ?? '');
@@ -456,6 +472,26 @@ export function SettingsModule() {
               )}
             </CardContent>
           </Card>
+
+          {/* Sauvegarde : export complet des données de la boutique. Réservé au
+              propriétaire — un employé n'a pas à sortir tout le carnet. */}
+          {!isEmployee && (
+            <Card className="border-slate-200">
+              <CardContent className="p-5 space-y-3">
+                <h3 className="font-semibold text-slate-800 text-sm">Sauvegarde de vos données</h3>
+                <p className="text-xs text-slate-500">
+                  Téléchargez toutes vos données — produits, ventes, dettes, charges, fournisseurs —
+                  dans un seul fichier. À conserver hors de l&apos;application.
+                </p>
+                <Button variant="outline" onClick={sauvegarder} disabled={sauvegardeEnCours} className="gap-2">
+                  {sauvegardeEnCours
+                    ? <><Loader2 className="h-4 w-4 animate-spin" /> Préparation…</>
+                    : <><Download className="h-4 w-4" /> Télécharger la sauvegarde</>}
+                </Button>
+                {sauvegardeErreur && <p className="text-xs text-red-600">{sauvegardeErreur}</p>}
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
 
