@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell, Legend,
@@ -40,8 +40,12 @@ export function ReportsModule() {
   const [loading, setLoading] = useState(false);
   const [period, setPeriod] = useState<DateRange>(() => rangeFromDays(7));
   const [error, setError] = useState('');
+  // Numéro de la dernière requête : un changement rapide de période ne doit pas
+  // laisser une réponse ancienne écraser une plus récente.
+  const requestIdRef = useRef(0);
 
   const fetchSales = async () => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError('');
 
@@ -64,17 +68,19 @@ export function ReportsModule() {
       if (syn.error) throw new Error(syn.error.message);
       if (topRes.error) throw new Error(topRes.error.message);
 
+      if (requestId !== requestIdRef.current) return;
       setSummary((syn.data as SummaryDay[]) ?? []);
       setTopProducts(
         ((topRes.data ?? []) as { product_name: string; qty: number }[])
           .map((r) => ({ name: r.product_name, qty: Number(r.qty) }))
       );
     } catch (e) {
+      if (requestId !== requestIdRef.current) return;
       setError((e as Error).message);
       setSummary([]);
       setTopProducts([]);
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) setLoading(false);
     }
   };
 

@@ -8,7 +8,7 @@ import { construireSauvegarde } from '@/lib/utils/sauvegarde';
  * requête ; sans pagination, un commerce actif exporterait 1 000 ventes sur
  * 12 000, en silence. Ce test l'exerce au-delà de la limite.
  */
-function faux(pages: Record<string, unknown[][]>) {
+function faux(pages: Record<string, unknown[]>) {
   return {
     from(table: string) {
       let debut = 0;

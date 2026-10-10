@@ -76,9 +76,13 @@ export function ExpensesModule() {
   const [aSupprimer, setASupprimer] = useState<Expense | null>(null);
   // Pagination de la liste des charges : voir le rendu.
   const [shownExpenses, setShownExpenses] = useState(50);
+  // Numéro de la dernière requête : un changement rapide de période ne doit pas
+  // laisser une réponse ancienne écraser une plus récente.
+  const requestIdRef = useRef(0);
 
   const load = useCallback(async () => {
     if (!user) return;
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     setError('');
 
@@ -111,6 +115,7 @@ export function ExpensesModule() {
       if (expRes.error) throw new Error(expRes.error.message);
       if (catRes.error) throw new Error(catRes.error.message);
 
+      if (requestId !== requestIdRef.current) return;
       setFlowError(flowRes.error ? readablePlanError(flowRes.error.message) : '');
       setFlow(flowRes.error ? [] : ((flowRes.data as CashFlowDay[]) ?? []));
       setExpenses((expRes.data as Expense[]) ?? []);
@@ -119,11 +124,12 @@ export function ExpensesModule() {
       setCategories(cats);
       if (cats.length > 0) setCategory((prev) => prev || cats[0].name);
     } catch (e) {
+      if (requestId !== requestIdRef.current) return;
       setError((e as Error).message);
       setFlow([]);
       setExpenses([]);
     } finally {
-      setLoading(false);
+      if (requestId === requestIdRef.current) setLoading(false);
     }
   }, [supabase, period, user]);
 
