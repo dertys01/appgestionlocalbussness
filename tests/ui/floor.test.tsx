@@ -684,4 +684,54 @@ fireEvent.click(screen.getAllByText('Poulet braisé')[0]);
     fireEvent.click(screen.getByRole('button', { name: /Ajouter à la commande/i }));
     await waitFor(() => expect(inserts.filter((i) => 'product_id' in i)).toHaveLength(0));
   });
+
+  it('une commande à emporter reste possible sans table configurée', async () => {
+    definirSalle();
+    render(<FloorModule products={produits} />);
+    await waitFor(() => expect(screen.getByText(/Aucune table configurée/i)).toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /Commande à emporter/i })).toBeInTheDocument();
+  });
+
+  it('le plat armé ne survit pas au changement de table', async () => {
+    definirSalle(
+      table({ id: 't1', name: 'Table 1', order_id: 'cmd-1', status: 'open', opened_at: new Date().toISOString() }),
+      table({ id: 't2', name: 'Table 2', order_id: 'cmd-2', status: 'open', opened_at: new Date().toISOString() }),
+    );
+    render(<FloorModule products={produits} />);
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Table 1'));
+    fireEvent.click(screen.getAllByText('Poulet braisé')[0]);
+    await waitFor(() => expect(screen.getByRole('button', { name: /Ajouter à la commande/i })).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Fermer le panneau/i }));
+    fireEvent.click(screen.getByText('Table 2'));
+
+    // Le plat choisi pour Table 1 ne doit pas être armé pour Table 2.
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /Ajouter à la commande/i })).not.toBeInTheDocument(),
+    );
+  });
+
+  it('refuse de retirer le dernier jour de service (pas de bascule « tous les jours »)', async () => {
+    definirSalle(table({ id: 't1', name: 'Table 1', order_id: 'cmd-1', status: 'open', opened_at: new Date().toISOString() }));
+    // Le plat n'est servi QUE le jour courant — c'est ce qui le rend visible
+    // dans la carte du jour (sinon, un autre jour, il est masqué : correct).
+    const labels = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam'];
+    const aujourdHui = new Date().getDay();
+    (produits[0] as unknown as { menu_days: number[] | null }).menu_days = [aujourdHui];
+    render(<FloorModule products={produits} />);
+    await waitFor(() => expect(screen.getByText('Table 1')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Table 1'));
+    fireEvent.click(screen.getAllByText('Poulet braisé')[0]);
+    await waitFor(() => expect(screen.getByRole('button', { name: /Ajouter à la commande/i })).toBeInTheDocument());
+
+    // Décocher le seul jour coché doit être refusé, jamais transformé en
+    // « tous les jours ».
+    fireEvent.click(screen.getByRole('button', { name: labels[aujourdHui] }));
+    await waitFor(() => expect(screen.getByText(/au moins un jour/i)).toBeInTheDocument());
+
+    (produits[0] as unknown as { menu_days: number[] | null }).menu_days = null;
+  });
 });

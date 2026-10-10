@@ -6028,8 +6028,9 @@ $$;
 REVOKE ALL ON FUNCTION close_table_order(uuid, text, numeric, int, text, text, numeric) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION close_table_order(uuid, text, numeric, int, text, text, numeric) TO authenticated;
 
--- La version à 6 arguments reste valide : PostgREST résout par nombre
--- d'arguments, et un appel ancien ne doit pas casser.
+-- La version à 6 arguments est RETIRÉE : PostgREST résout par NOMBRE
+-- d'arguments, et deux signatures proches créeraient une ambiguïté silencieuse
+-- (« function close_table_order(...) is not unique »). Seule la 7-arg reste.
 DROP FUNCTION IF EXISTS close_table_order(uuid, text, numeric, int, text, text);
 
 COMMENT ON FUNCTION close_table_order(uuid, text, numeric, int, text, text, numeric) IS
@@ -6337,9 +6338,9 @@ COMMENT ON FUNCTION get_sales_summary(date, date, text) IS
 -- L'acompte gagne p_advance_method. Il était écrit en « cash » par défaut —
 -- un moyen déduit, jamais choisi : l'argent réellement reçu à la vente peut
 -- être en espèces comme en MoMo, et sa part de caisse doit suivre le vrai
--- geste du client. Le défaut reste « cash » : close_table_order() appelle
--- avec cinq arguments positionnels, et l'acompte d'une table n'a pas de
--- moyen enregistré en base.
+-- geste du client. Le défaut reste « cash » : un appel qui ne précise pas
+-- p_advance_method (l'acompte d'une table n'a pas de moyen enregistré en base)
+-- reçoit « cash ».
 --
 -- DROP de l'ancienne arité AVANT la nouvelle : CREATE OR REPLACE crée une
 -- surcharge au lieu de remplacer, et PostgREST continuerait à servir la
@@ -10312,3 +10313,58 @@ COMMENT ON FUNCTION return_sale(uuid, jsonb, text) IS
   'Retour d''une vente comptoir : remet le stock, réduit amount_received du '
   'montant rendu (donc le CA et le tiroir), trace l''avoir. Refuse une vente '
   'à crédit et un retour supérieur à ce qui reste dû.';
+
+-- ============================================================
+--  ⬇ migration_restaurant_price_trace.sql
+-- ============================================================
+
+-- ============================================================
+-- migration_restaurant_price_trace.sql — prix catalogue figé sur la ligne de salle
+-- À exécuter APRÈS migration_restaurant_finitions.sql
+-- ============================================================
+--
+-- POURQUOI : `restaurant_order_items.unit_price` est écrit par le client (RLS
+-- FOR ALL pour tout membre de l'équipe), et `close_table_order()` facture CE
+-- prix. Un caissier pouvait donc insérer une ligne à 1 F et faire encaisser
+-- 1 F — la recette prétendait le contraire, la base ne l'empêchait pas.
+--
+-- La parade est celle du comptoir (migration_price_override.sql) : le prix
+-- catalogue est FIGÉ sur la ligne au moment de l'insertion, dans `list_price`.
+-- Une concession reste possible — un patron peut offrir un plat — mais elle
+-- devient VISIBLE (unit_price < list_price), au lieu de disparaître.
+--
+-- On n'interdit PAS unit_price < list_price : bloquer empêcherait d'offrir un
+-- plat, comme bloquer la vente à perte empêcherait de solder un stock. C'est la
+-- traçabilité qui protège, pas le verrou.
+--
+-- Rejouable : IF NOT EXISTS / DROP TRIGGER IF EXISTS / CREATE OR REPLACE.
+-- ============================================================
+
+ALTER TABLE restaurant_order_items
+  ADD COLUMN IF NOT EXISTS list_price numeric(12,2);
+
+COMMENT ON COLUMN restaurant_order_items.list_price IS
+  'Prix catalogue du produit, figé à l''insertion de la ligne. Rendu visible '
+  'quand unit_price lui est inférieur : la concession reste traçable.';
+
+CREATE OR REPLACE FUNCTION restaurant_order_items_set_list_price()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  SELECT p.price_sell INTO NEW.list_price
+    FROM products p
+   WHERE p.id = NEW.product_id;
+  RETURN NEW;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION restaurant_order_items_set_list_price() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION restaurant_order_items_set_list_price() TO authenticated, service_role;
+
+DROP TRIGGER IF EXISTS restaurant_order_items_list_price ON restaurant_order_items;
+CREATE TRIGGER restaurant_order_items_list_price
+  BEFORE INSERT ON restaurant_order_items
+  FOR EACH ROW EXECUTE FUNCTION restaurant_order_items_set_list_price();

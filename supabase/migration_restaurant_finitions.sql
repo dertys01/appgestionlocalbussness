@@ -328,8 +328,9 @@ $$;
 REVOKE ALL ON FUNCTION close_table_order(uuid, text, numeric, int, text, text, numeric) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION close_table_order(uuid, text, numeric, int, text, text, numeric) TO authenticated;
 
--- La version à 6 arguments reste valide : PostgREST résout par nombre
--- d'arguments, et un appel ancien ne doit pas casser.
+-- La version à 6 arguments est RETIRÉE : PostgREST résout par NOMBRE
+-- d'arguments, et deux signatures proches créeraient une ambiguïté silencieuse
+-- (« function close_table_order(...) is not unique »). Seule la 7-arg reste.
 DROP FUNCTION IF EXISTS close_table_order(uuid, text, numeric, int, text, text);
 
 COMMENT ON FUNCTION close_table_order(uuid, text, numeric, int, text, text, numeric) IS

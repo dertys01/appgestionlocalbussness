@@ -10,7 +10,7 @@
 --    MANQUANTE    = fonction absente de la base
 --    EN PLUS      = fonction présente en base mais pas dans le dépôt
 --
---  57 fonctions · ordre des sections = APPLY_MIGRATIONS.sql
+--  58 fonctions · ordre des sections = APPLY_MIGRATIONS.sql
 -- ============================================================================
 WITH expect(sig, brut_md5, code_md5) AS (
   VALUES
@@ -59,6 +59,7 @@ WITH expect(sig, brut_md5, code_md5) AS (
     ('record_credit_sale(jsonb,text,text,text,numeric,text,text)', '648df951e01d4c3bf70acd4056df1498', '2e54595a4070ba57a0a42c4bbbd36a5b'),
     ('redeem_invitation(text,uuid,text)', '62597d5a8ef7b127a90c4354397b735e', '152bbebdabb4071781f1003954618caf'),
     ('require_feature(text)', '8e95a1aba9ea44b186021f6c44cad186', '58f6b3d5be92afdc51ce430688c49882'),
+    ('restaurant_order_items_set_list_price()', '7790f8ba6376664fd331e7e29bbb728b', '6f0ffc98a7f8ed543ee9b61c45001e89'),
     ('restore_product(uuid)', 'a31eb65d699703f77adefa8827201769', '5a50f0cf4574e3016236455cd81ffa27'),
     ('return_sale(uuid,jsonb,text)', '6e0b862e73992e29b610fdce5ec15dec', '57f32fd9d89323098b7b1cfe7d99fd1f'),
     ('revoke_all_beta()', 'bef8042ef6262d0e9e84f43c66c76af6', '3e7a05ccee825530eba9ddf348668145'),

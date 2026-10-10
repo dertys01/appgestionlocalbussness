@@ -154,7 +154,13 @@ Ce que le geste **ne déplace pas** :
 - la vente est écrite avec `user_id =` le propriétaire, jamais l'identifiant du
   caissier (test 24j3) ;
 - le montant facturé est lu dans les **lignes de commande**, jamais reçu du
-  client : un caissier ne peut pas faire encaisser 100 F (test 24i) ;
+  client à la clôture : ce qui part en caisse est la somme des lignes, pas un
+  chiffre envoyé au moment de solder ;
+- une ligne peut porter un prix **inférieur** au catalogue (offrir un plat),
+  mais le prix catalogue est **figé dans `list_price`** à l'insertion
+  (`migration_restaurant_price_trace.sql`) : la concession reste traçable. La
+  protection est la traçabilité, pas un verrou — même choix qu'au comptoir,
+  où bloquer la vente à perte empêcherait de solder un stock ;
 - l'isolation prime sur le rôle — un patron d'une autre boutique reste dehors
   (tests 24j5-24j6).
 

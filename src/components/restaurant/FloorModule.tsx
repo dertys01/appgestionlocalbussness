@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   UtensilsCrossed, Loader2, Plus, Users, Clock, CheckCircle2, PackageX, ChefHat, X,
 } from 'lucide-react';
@@ -146,6 +146,9 @@ export function FloorModule({
   const [ouverte, setOuverte] = useState<{ tableId: string; nom: string; client: string | null } | null>(null);
   const [lines, setLines] = useState<OrderLine[]>([]);
   const [linesLoading, setLinesLoading] = useState(false);
+  // Numéro de la dernière requête de lignes : ouvrir Table A puis Table B sans
+  // attendre ne doit pas laisser A écraser B (ou lever le spinner de B).
+  const linesReqRef = useRef(0);
 
   // Saisie
   const [clientName, setClientName] = useState('');
@@ -179,6 +182,22 @@ export function FloorModule({
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const db = supabase as any;
 
+  /**
+   * Remet la saisie d'ajout à zéro (plat, option, quantité, note, recherche).
+   *
+   * Sans cela, le plat sélectionné pour une table restait ARMÉ quand on passait
+   * à une autre : un seul tap l'ajoutait à la mauvaise commande. Le même vidage
+   * sert à la fermeture du panneau et à l'ouverture d'une table/commande.
+   */
+  const viderSaisie = () => {
+    setPlatChoisi(null);
+    setModSelection('');
+    setModifiers([]);
+    setQty('');
+    setNote('');
+    setSearch('');
+  };
+
   const loadTables = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -211,12 +230,16 @@ export function FloorModule({
   }, [db]);
 
   const loadLines = useCallback(async (id: string) => {
+    const req = ++linesReqRef.current;
     setLinesLoading(true);
     const { data, error: err } = await db
       .from('restaurant_order_items')
       .select('id, product_id, quantity, unit_price, extra_price, modifier, note, status, product:products(name)')
       .eq('order_id', id)
       .order('created_at');
+    // Une réponse d'une table déjà quittée est ignorée : sinon ses lignes
+    // s'affichaient sous la mauvaise table.
+    if (req !== linesReqRef.current) return;
     setLinesLoading(false);
     if (err) { setError(err.message); return; }
     setLines(
@@ -231,6 +254,7 @@ export function FloorModule({
   // lignes de modificateurs pour en proposer trois : on charge à la demande.
   useEffect(() => {
     const plat = platChoisi;
+    let annule = false;
     const t = setTimeout(async () => {
       if (!plat) { setModifiers([]); return; }
       const { data } = await db
@@ -238,9 +262,12 @@ export function FloorModule({
         .select('id, product_id, name, extra_price, is_required')
         .eq('product_id', plat.id)
         .order('name');
+      // Le plat a changé pendant la requête : on n'affiche pas les options du
+      // précédent sous le titre du suivant.
+      if (annule) return;
       setModifiers((data ?? []) as Modifier[]);
     }, 0);
-    return () => clearTimeout(t);
+    return () => { annule = true; clearTimeout(t); };
   }, [platChoisi, db]);
 
   // Les effets encapsulent l'appel async plutôt que d'appeler loadTables()
@@ -414,12 +441,16 @@ export function FloorModule({
   };
 
   const cycleLine = async (line: OrderLine) => {
-    if (!orderId) return;
+    // `busy` empêche deux taps rapides de calculer tous les deux depuis l'ancien
+    // statut (new → sent deux fois) : la transition vers « servi » serait perdue.
+    if (!orderId || busy) return;
+    setBusy(true);
     const suivant = line.status === 'new' ? 'sent' : line.status === 'sent' ? 'served' : 'new';
     const { error: err } = await db
       .from('restaurant_order_items')
       .update({ status: suivant })
       .eq('id', line.id);
+    setBusy(false);
     if (err) { setError(err.message); return; }
     await loadLines(orderId);
   };
@@ -599,6 +630,11 @@ export function FloorModule({
     setOuverte(null);
     setLines([]);
     setSplitOpen(false);
+    // Le partage et le moyen de paiement ne doivent pas survivre à la table :
+    // sinon l'addition SUIVANTE partait en 3 parts (jamais demandé) et en MoMo
+    // (choix de l'autre table). La commande précédente les a consommés.
+    setSplitCount(2);
+    setPayment('cash');
     await loadTables();
   };
 
@@ -709,6 +745,15 @@ export function FloorModule({
           }
         />
         {formulaireTable(false)}
+        {/* Une salle vide n'empêche pas une commande à emporter : sans ce
+            bouton, un restaurant sans table ne pouvait rien créer du tout. */}
+        <button
+          onClick={openTakeaway}
+          disabled={busy}
+          className="w-full rounded-xl border-2 border-dashed border-slate-300 py-2.5 text-sm font-medium text-slate-500 hover:border-indigo-300 hover:text-indigo-600 transition-colors disabled:opacity-60"
+        >
+          + Commande à emporter
+        </button>
       </div>
     );
   }
@@ -780,9 +825,10 @@ export function FloorModule({
                 key={t.id}
                 onClick={() => {
                   // Chaque table repart d'une carte complète : la recherche de la
-                  // table précédente ne doit pas filtrer celle-ci (voir l'état
-                  // `search`).
-                  setSearch('');
+                  // table précédente ne doit pas filtrer celle-ci, et le plat
+                  // armé pour l'autre table ne doit pas y être ajouté d'un tap.
+                  viderSaisie();
+                  setClosed(null);
                   if (libre) { void openOrder(t.id); return; }
                   setOuverte({ tableId: t.id, nom: t.name, client: t.customer_name });
                   setOrderId(t.order_id);
@@ -848,7 +894,8 @@ export function FloorModule({
                   onClick={() => {
                     // Même geste qu'une tuile de table : carte complète, puis
                     // on rouvre LA commande, sans en créer une seconde.
-                    setSearch('');
+                    viderSaisie();
+                    setClosed(null);
                     setOuverte({ tableId: '', nom: 'À emporter', client: p.customer_name });
                     setOrderId(p.id);
                   }}
@@ -921,7 +968,7 @@ export function FloorModule({
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => { setOrderId(null); setOuverte(null); setLines([]); }}
+                onClick={() => { setOrderId(null); setOuverte(null); setLines([]); viderSaisie(); }}
               >
                 Fermer le panneau
               </Button>
@@ -1162,7 +1209,14 @@ export function FloorModule({
                   onClick={async () => {
                     const base = jours ?? JOURS.map((x) => x.valeur);
                     const suivant = actif ? base.filter((d) => d !== j.valeur) : [...base, j.valeur];
-                    const value = suivant.length === 0 || suivant.length === 7 ? null : suivant;
+                    // Retirer le DERNIER jour ne doit pas tout cocher : `null`
+                    // veut dire « tous les jours ». On refuse plutôt que de
+                    // transformer « seulement le vendredi » en « tous les jours ».
+                    if (suivant.length === 0) {
+                      setError('Un plat doit être servi au moins un jour. Laissez au moins un jour coché.');
+                      return;
+                    }
+                    const value = suivant.length === 7 ? null : suivant;
                     // Écriture optimiste, mais AVEC retour arrière. Sans lui,
                     // un échec (réseau, policy) laissait l'écran dire que la
                     // carte avait changé alors que la base n'avait rien pris :

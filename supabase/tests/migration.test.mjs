@@ -130,6 +130,8 @@ const ORDER = [
   'migration_purchase_orders.sql',
   // Retours / avoirs : vente comptoir remboursée, stock remis, avoir tracé.
   'migration_returns.sql',
+  // Traçabilité du prix en salle : list_price figé à l'insertion de la ligne.
+  'migration_restaurant_price_trace.sql',
 ];
 
 // schema.sql et migration_team.sql sont appliqués deux fois, à la fin : sur une
@@ -3155,6 +3157,16 @@ await q(`SELECT set_config('request.jwt.claim.sub', '${PATRON}', false)`);
 await canWrite('23g. un caissier ajoute un plat à une commande',
   `INSERT INTO restaurant_order_items (order_id, product_id, quantity, unit_price)
    VALUES ('${O2}', '${P1}', 1, 7000)`, true, SERVEUR);
+{
+  // 23g2. Le prix catalogue est FIGÉ sur la ligne (list_price) : une concession
+  // (unit_price < list_price) devient traçable, comme au comptoir. Sans ce
+  // figeage, un caissier pouvait insérer une ligne à 1 F sans laisser de trace.
+  const li = (await q(`SELECT unit_price, list_price FROM restaurant_order_items
+                        WHERE order_id='${O2}' AND product_id='${P1}' ORDER BY created_at DESC LIMIT 1`)).rows[0];
+  const cat = Number((await q(`SELECT price_sell FROM products WHERE id='${P1}'`)).rows[0].price_sell);
+  check('23g2. list_price = prix catalogue figé à l\'insertion',
+    Number(li?.list_price) === cat, `list_price ${li?.list_price} vs catalogue ${cat}`);
+}
 {
   await canWrite('23h. un caissier ne clôture pas la commande à la main',
     `UPDATE restaurant_orders SET status='closed', closed_at=now() WHERE id='${O2}'`, false, SERVEUR);

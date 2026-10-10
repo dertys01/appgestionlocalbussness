@@ -174,9 +174,9 @@ COMMENT ON FUNCTION get_sales_summary(date, date, text) IS
 -- L'acompte gagne p_advance_method. Il était écrit en « cash » par défaut —
 -- un moyen déduit, jamais choisi : l'argent réellement reçu à la vente peut
 -- être en espèces comme en MoMo, et sa part de caisse doit suivre le vrai
--- geste du client. Le défaut reste « cash » : close_table_order() appelle
--- avec cinq arguments positionnels, et l'acompte d'une table n'a pas de
--- moyen enregistré en base.
+-- geste du client. Le défaut reste « cash » : un appel qui ne précise pas
+-- p_advance_method (l'acompte d'une table n'a pas de moyen enregistré en base)
+-- reçoit « cash ».
 --
 -- DROP de l'ancienne arité AVANT la nouvelle : CREATE OR REPLACE crée une
 -- surcharge au lieu de remplacer, et PostgREST continuerait à servir la
