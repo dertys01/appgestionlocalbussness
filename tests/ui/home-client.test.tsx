@@ -45,13 +45,14 @@ vi.mock('@/lib/offline/queue', () => ({ lireFile: async () => h.state.file }));
 
 vi.mock('@/components/ErrorBoundary', () => ({ ErrorBoundary: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 vi.mock('@/components/layout/Sidebar', () => ({
-  Sidebar: ({ items, onTab }: { items: Array<{ key: string; label: string; locked?: boolean; badge?: number }>; onTab: (k: string) => void }) => {
+  Sidebar: ({ items, onTab, onScan }: { items: Array<{ key: string; label: string; locked?: boolean; badge?: number }>; onTab: (k: string) => void; onScan: () => void }) => {
     h.state.navItems = items;
     return (
       <nav>
         {items.map((i) => (
           <button key={i.key} onClick={() => onTab(i.key)}>{i.label}</button>
         ))}
+        <button onClick={onScan}>Scanner</button>
       </nav>
     );
   },
@@ -65,8 +66,8 @@ vi.mock('@/components/ui/dialog', () => ({
 
 vi.mock('@/components/marketing/LandingPage', () => ({ LandingPage: () => <div>MOD:LandingPage</div> }));
 vi.mock('@/components/dashboard/DashboardTab', () => ({ DashboardTab: () => <div>MOD:Dashboard</div> }));
-vi.mock('@/components/pos/POSModule', () => ({ POSModule: () => <div>MOD:POS</div> }));
-vi.mock('@/components/inventory/InventoryTab', () => ({ InventoryTab: () => <div>MOD:Inventaire</div> }));
+vi.mock('@/components/pos/POSModule', () => ({ POSModule: ({ addToCartRequest }: { addToCartRequest?: { productId: string } | null }) => <div>MOD:POS{addToCartRequest ? `:${addToCartRequest.productId}` : ''}</div> }));
+vi.mock('@/components/inventory/InventoryTab', () => ({ InventoryTab: ({ onAdd, onImport }: { onAdd: () => void; onImport: () => void }) => <div>MOD:Inventaire<button onClick={onAdd}>add</button><button onClick={onImport}>import</button></div> }));
 vi.mock('@/components/sales/DailyJournal', () => ({ DailyJournal: () => <div>MOD:Journal</div> }));
 vi.mock('@/components/sales/SalesHistory', () => ({ SalesHistory: () => <div>MOD:Historique</div> }));
 vi.mock('@/components/debts/DebtsModule', () => ({ DebtsModule: () => <div>MOD:Dettes</div> }));
@@ -81,7 +82,9 @@ vi.mock('@/components/cash/CashSessionCard', () => ({ CashSessionCard: () => <di
 vi.mock('@/components/products/ProductForm', () => ({ ProductForm: () => <div>MOD:FormProduit</div> }));
 vi.mock('@/components/products/RestockModal', () => ({ RestockModal: () => <div>MOD:Reappro</div> }));
 vi.mock('@/components/inventory/ProductImportModal', () => ({ ProductImportModal: () => <div>MOD:Import</div> }));
-vi.mock('@/components/scanner/BarcodeScanner', () => ({ BarcodeScanner: () => <div>MOD:Scanner</div> }));
+vi.mock('@/components/scanner/BarcodeScanner', () => ({ BarcodeScanner: ({ onScan, errorMessage }: { onScan: (s: string) => void; errorMessage?: string }) => (
+  <div>MOD:Scanner<button onClick={() => onScan('RIZ-1')}>scan-riz</button><button onClick={() => onScan('INCONNU')}>scan-x</button>{errorMessage && <span>{errorMessage}</span>}</div>
+) }));
 vi.mock('@/components/onboarding/OnboardingWizard', () => ({ OnboardingWizard: () => <div>MOD:Assistant</div> }));
 vi.mock('@/components/onboarding/GuidedCash', () => ({ GuidedCash: () => <div>MOD:CaisseGuidee</div> }));
 vi.mock('@/components/onboarding/OrgLoadFailed', () => ({ OrgLoadFailed: () => <div>MOD:OrgLoadFailed</div> }));
@@ -200,5 +203,38 @@ describe('home-client', () => {
       const dettes = h.state.navItems.find((i) => i.key === 'debts');
       expect(dettes?.badge).toBe(2);
     });
+  });
+
+  it('scanne un produit connu : l’ajoute au panier de la caisse', () => {
+    h.state.products = [{ id: 'p1', name: 'Riz', sku: 'RIZ-1' }];
+    render(<HomePage />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Scanner' }));
+    fireEvent.click(screen.getByRole('button', { name: 'scan-riz' }));
+
+    // La caisse s'ouvre avec la demande d'ajout portant le produit.
+    expect(screen.getByText('MOD:POS:p1')).toBeInTheDocument();
+  });
+
+  it('code-barres inconnu : message dans le scanner', () => {
+    render(<HomePage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Scanner' }));
+    fireEvent.click(screen.getByRole('button', { name: 'scan-x' }));
+
+    expect(screen.getByText(/Aucun produit trouvé pour le code-barres : INCONNU/)).toBeInTheDocument();
+  });
+
+  it('ouvre le formulaire produit depuis l’inventaire', () => {
+    render(<HomePage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Stock' }));
+    fireEvent.click(screen.getByRole('button', { name: 'add' }));
+    expect(screen.getByText('MOD:FormProduit')).toBeInTheDocument();
+  });
+
+  it('ouvre l’import depuis l’inventaire', () => {
+    render(<HomePage />);
+    fireEvent.click(screen.getByRole('button', { name: 'Stock' }));
+    fireEvent.click(screen.getByRole('button', { name: 'import' }));
+    expect(screen.getByText('MOD:Import')).toBeInTheDocument();
   });
 });
