@@ -121,6 +121,13 @@ function readableSaleError(message: string): string {
  *
  * `onAjouter` doit être stable (useCallback), sinon la mémoïsation ne sert à
  * rien.
+ *
+ * `content-visibility: auto` + `contain-intrinsic-size` : le navigateur saute
+ * la mise en page et la peinture des cartes hors écran — le gain réel d'une
+ * liste virtualisée — SANS retirer les nœuds du DOM. C'est volontaire : un
+ * virtualiseur JavaScript ne rendrait rien dans un environnement sans moteur
+ * de mise en page (tests jsdom), et la caisse serait invérifiable. Ici, le
+ * catalogue de 200+ références défile sans coût, et les tests voient tout.
  */
 const CarteProduit = memo(function CarteProduit({
   produit, quantite, vendable, estPlat, onAjouter,
@@ -135,7 +142,7 @@ const CarteProduit = memo(function CarteProduit({
     <button
       onClick={() => onAjouter(produit)}
       aria-disabled={!vendable || undefined}
-      className={`group relative flex flex-col text-left rounded-xl border p-3 shadow-sm transition-all ${
+      className={`group relative flex flex-col text-left rounded-xl border p-3 shadow-sm transition-all [content-visibility:auto] [contain-intrinsic-size:130px] ${
         vendable
           ? 'border-slate-200 bg-white hover:border-indigo-400 hover:shadow-md active:scale-95'
           : 'border-slate-200 bg-slate-50 cursor-not-allowed'
@@ -177,7 +184,7 @@ const LigneProduit = memo(function LigneProduit({
     <button
       onClick={() => onAjouter(produit)}
       aria-disabled={!vendable || undefined}
-      className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors ${
+      className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors [content-visibility:auto] [contain-intrinsic-size:56px] ${
         vendable ? 'hover:bg-indigo-50/40 active:bg-indigo-50' : 'bg-slate-50/60 cursor-not-allowed'
       }`}
     >
